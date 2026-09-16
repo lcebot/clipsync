@@ -236,7 +236,8 @@ public class MainActivity extends AppCompatActivity {
         }
         boolean connected = "connected".equals(s.state);
         boolean busy = "connecting".equals(s.state);
-        int color = MaterialColors.getColor(statusDot, connected ? com.google.android.material.R.attr.colorPrimary
+        // non-transitive R classes: colorPrimary is declared by appcompat, the M3 tokens by material
+        int color = MaterialColors.getColor(statusDot, connected ? androidx.appcompat.R.attr.colorPrimary
                 : busy ? com.google.android.material.R.attr.colorTertiary : com.google.android.material.R.attr.colorOutline);
         statusDot.setBackgroundTintList(ColorStateList.valueOf(color));
         statusHalo.setBackgroundTintList(ColorStateList.valueOf(color));
