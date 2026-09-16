@@ -51,6 +51,11 @@ public final class Connection implements AutoCloseable {
     private static volatile String mdnsCachedName;
     private static volatile long mdnsCachedAt;
 
+    /** Drop the cached LAN address (configuration changed). */
+    public static void forgetMdns() {
+        mdnsCached = null;
+    }
+
     private final Socket socket;
     private final DataInputStream in;
     private final OutputStream out;
