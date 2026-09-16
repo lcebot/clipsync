@@ -26,11 +26,18 @@ public final class Config {
     public final long keepMaxBytes;     // and oldest-first above this total (0 = unlimited)
     public final boolean mdns;          // LAN discovery as second path (default on)
     public final int mdnsTimeoutMs;     // how long one browse may take
-    public final int threads;           // parallel data connections per file transfer
+    public final int threads;           // parallel data connections per file transfer (1,2,4,8,16)
+    public final String filesDir;       // absolute path on internal storage where received files go
+    public final String relativePath;   // the same as a MediaStore RELATIVE_PATH ("Download/ClipSync")
+
+    public static final String DEFAULT_FILES_DIR = "/storage/emulated/0/Download/ClipSync";
+    public static final int[] THREAD_STEPS = {1, 2, 4, 8, 16};
 
     private Config(String host, int port, String pskHex, int maxBytes, long maxFileBytes, long maxFileBytesLocal,
-                   int keepHours, long keepMaxBytes, boolean mdns, int mdnsTimeoutMs, int threads) {
+                   int keepHours, long keepMaxBytes, boolean mdns, int mdnsTimeoutMs, int threads, String filesDir) {
         this.threads = threads;
+        this.filesDir = filesDir;
+        this.relativePath = relativePathOf(filesDir);
         this.host = host;
         this.port = port;
         this.pskHex = pskHex;
@@ -67,6 +74,7 @@ public final class Config {
         p.setProperty("mdns", BuildConfig.MDNS ? "true" : "false");
         p.setProperty("mdns_timeout_ms", "4000");
         p.setProperty("threads", "8");
+        p.setProperty("files_dir", DEFAULT_FILES_DIR);
         File f = new File(ctx.getFilesDir(), FILE);
         if (f.exists()) {
             try (FileInputStream in = new FileInputStream(f)) {
@@ -93,15 +101,43 @@ public final class Config {
         String m = p.getProperty("mdns", "true").trim().toLowerCase();
         boolean mdns = m.equals("true") || m.equals("1") || m.equals("yes") || m.equals("on");
         if (host.isEmpty() && !mdns) throw new IllegalArgumentException("host is empty and mDNS is off: nothing to connect to");
-        int threads = parseInt(p.getProperty("threads", "8"), "streams");
-        if (threads < 1 || threads > 32) throw new IllegalArgumentException("streams must be 1-32");
+        int threads = snapThreads(parseInt(p.getProperty("threads", "8"), "streams"));
+        String filesDir = p.getProperty("files_dir", DEFAULT_FILES_DIR).trim();
+        relativePathOf(filesDir);                                          // validates, throws
         return new Config(host, port, pskHex,
                 parseInt(p.getProperty("max_bytes", "1048576"), "max_bytes"),
                 parseLong(p.getProperty("max_file_bytes", "10485760"), "max_file_bytes"),
                 parseLong(p.getProperty("max_file_bytes_local", "104857600"), "max_file_bytes_local"),
                 parseInt(p.getProperty("keep_hours", "2"), "keep_hours"),
                 (long) parseInt(p.getProperty("keep_max_mb", "256"), "keep_max_mb") * 1024 * 1024,
-                mdns, timeout, threads);
+                mdns, timeout, threads, filesDir);
+    }
+
+    /** Nearest of 1, 2, 4, 8, 16. */
+    public static int snapThreads(int n) {
+        int best = THREAD_STEPS[0];
+        for (int s : THREAD_STEPS) if (Math.abs(s - n) < Math.abs(best - n)) best = s;
+        return best;
+    }
+
+    /**
+     * "/storage/emulated/0/Download/ClipSync" -> "Download/ClipSync". MediaStore can only create
+     * files for us under the well-known top-level folders; for arbitrary content that means
+     * Download/ or Documents/ (Pictures/, Movies/, Music/ reject non-matching MIME types).
+     */
+    public static String relativePathOf(String abs) {
+        String root = android.os.Environment.getExternalStorageDirectory().getPath();
+        String s = abs.replace('\\', '/').trim();
+        while (s.endsWith("/")) s = s.substring(0, s.length() - 1);
+        for (String prefix : new String[]{root + "/", "/sdcard/", "/storage/emulated/0/", "/storage/self/primary/"}) {
+            if (s.startsWith(prefix)) { s = s.substring(prefix.length()); break; }
+        }
+        if (s.startsWith("/")) throw new IllegalArgumentException("path must be on internal storage (" + root + "/…)");
+        if (s.isEmpty() || s.contains("..")) throw new IllegalArgumentException("path must name a folder under Download/ or Documents/");
+        String top = s.contains("/") ? s.substring(0, s.indexOf('/')) : s;
+        if (!top.equals("Download") && !top.equals("Documents"))
+            throw new IllegalArgumentException("path must be under Download/ or Documents/");
+        return s;
     }
 
     /**
@@ -109,15 +145,22 @@ public final class Config {
      * Sizes come from the UI in KB (text) and MB (file / keep) and are stored in bytes / MB.
      */
     public static Config save(Context ctx, String host, String port, String pskHex, boolean mdns, String mdnsTimeoutMs,
-                              String threads, String textKb, String fileMb, String fileMbLocal, String keepHours,
-                              String keepMb) throws IOException {
+                              int threads, String textKb, String fileMb, String fileMbLocal, String filesDir,
+                              String keepHours, String keepMb) throws IOException {
         Properties p = raw(ctx);
         p.setProperty("host", host.trim());
         p.setProperty("port", port.trim());
         p.setProperty("psk", pskHex.trim().toLowerCase());
         p.setProperty("mdns", mdns ? "true" : "false");
         p.setProperty("mdns_timeout_ms", mdnsTimeoutMs.trim());
-        p.setProperty("threads", threads.trim());
+        p.setProperty("threads", String.valueOf(snapThreads(threads)));
+        if (filesDir.trim().isEmpty()) filesDir = DEFAULT_FILES_DIR;
+        try {
+            relativePathOf(filesDir);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("path: " + e.getMessage());
+        }
+        p.setProperty("files_dir", filesDir.trim());
         int kb = parseInt(textKb, "text limit"), mb = parseInt(fileMb, "file limit"), mbLocal = parseInt(fileMbLocal, "LAN file limit");
         if (kb < 1 || kb > 65536) throw new IllegalArgumentException("text limit must be 1-65536 KB");
         if (mb < 1 || mb > 4096) throw new IllegalArgumentException("file limit must be 1-4096 MB");

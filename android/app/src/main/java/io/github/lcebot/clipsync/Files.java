@@ -45,7 +45,6 @@ import java.util.Locale;
 public final class Files {
     private Files() {}
 
-    public static final String FOLDER = "Download/ClipSync";
     private static final int CHUNK = Connection.CHUNK;
 
     /** A file we can send: where it is, what it is called, and its size + SHA-256. */
@@ -238,14 +237,20 @@ public final class Files {
             }
         }
 
-        /** Start a new transfer: create the pending row and pre-size it. */
-        public static Partial create(Context ctx, String name, String mime, long size, String sha, long seq) throws Exception {
+        /**
+         * Start a new transfer: create the pending row under {@code relativePath} ("Download/ClipSync",
+         * "Documents/…") and pre-size it. The generic Files collection accepts any MIME type there.
+         */
+        public static Partial create(Context ctx, String relativePath, String name, String mime, long size, String sha, long seq) throws Exception {
             ContentValues v = new ContentValues();
             v.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
             v.put(MediaStore.MediaColumns.MIME_TYPE, mime);
-            v.put(MediaStore.MediaColumns.RELATIVE_PATH, FOLDER);
+            v.put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath);
             v.put(MediaStore.MediaColumns.IS_PENDING, 1);
-            Uri uri = ctx.getContentResolver().insert(MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), v);
+            Uri coll = relativePath.startsWith("Download")
+                    ? MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                    : MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY);
+            Uri uri = ctx.getContentResolver().insert(coll, v);
             if (uri == null) throw new IOException("MediaStore insert failed");
             Partial p = new Partial(ctx, uri, name, mime, size, sha, seq, mapFile(ctx, sha));
             p.openChannel();

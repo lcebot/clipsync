@@ -6,6 +6,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- lets the app ask to be exempted from battery optimisation (system confirmation dialog) -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
         android:label="@string/app_name"
@@ -25,19 +27,27 @@
             </intent-filter>
         </activity>
 
-        <!-- specialUse: no 6h/24h cap (unlike dataSync on Android 15) -->
+        <!-- specialUse: no 6h/24h cap (unlike dataSync on Android 15).
+             Own process (":sync"): swiping the UI task away or a ROM killing the main process
+             does not touch the sync; stopWithTask=false for the same reason. -->
         <service
             android:name=".SyncService"
             android:exported="true"
+            android:process=":sync"
+            android:stopWithTask="false"
             android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="clipboard sync with PC" />
         </service>
 
+        <!-- also the "auto-start enabled" switch: Stop in the app disables this component, Apply
+             re-enables it; the system_server watchdog (xposed.Entry) only restarts the service
+             while it is enabled -->
         <receiver
             android:name=".BootReceiver"
-            android:exported="true">
+            android:exported="true"
+            android:process=":sync">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
