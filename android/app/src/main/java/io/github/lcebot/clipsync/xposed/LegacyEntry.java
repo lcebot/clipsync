@@ -3,7 +3,6 @@ package io.github.lcebot.clipsync.xposed;
 import android.util.Log;
 
 import java.lang.reflect.Constructor;
-import java.lang.reflect.Member;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
@@ -19,46 +18,12 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
  * is empty, no xposedmodule meta-data); the active entry is {@link Entry} (libxposed API 102).
  * To switch back: put this class name into assets/xposed_init and restore the meta-data
  * (xposedmodule, xposedminversion 93, xposedscope = @array/xposedscope, i.e. "android").
- * The logic lives in {@link Common}; this class only installs the hooks.
- *
- * <p>system_server is AOT-compiled and the small private methods we hook
- * ({@code clipboardAccessAllowed}, {@code setPrimaryClipInternalLocked}) get inlined into their
- * callers, where a hook on the callee never runs. LSPosed exposes
- * {@code XposedBridge.deoptimizeMethod(Member)} for exactly this; it is called reflectively on
- * every method of the classes involved before hooking (small classes, one-off cost).
+ * The logic lives in {@link Common}; this class only installs the hooks (no deoptimization).
  */
 public class LegacyEntry implements IXposedHookLoadPackage {
 
-    private static Method deopt;        // XposedBridge.deoptimizeMethod(Member), LSPosed-specific
-
-    private static int deoptAll(Class<?> c) {
-        if (deopt == null) {
-            try {
-                deopt = XposedBridge.class.getDeclaredMethod("deoptimizeMethod", Member.class);
-                deopt.setAccessible(true);
-            } catch (Throwable t) {
-                return -1;                                       // framework without deoptimize support
-            }
-        }
-        int n = 0;
-        for (Method m : c.getDeclaredMethods()) {
-            if (Modifier.isAbstract(m.getModifiers()) || Modifier.isNative(m.getModifiers())) continue;
-            try { deopt.invoke(null, m); n++; } catch (Throwable ignored) { }
-        }
-        for (Constructor<?> k : c.getDeclaredConstructors()) {
-            try { deopt.invoke(null, k); n++; } catch (Throwable ignored) { }
-        }
-        return n;
-    }
-
-    private static int deoptNamed(Class<?> c, String prefix) {
-        if (deopt == null && deoptAll(Object.class) < 0) return -1;
-        int n = 0;
-        for (Method m : c.getDeclaredMethods()) {
-            if (!m.getName().startsWith(prefix)) continue;
-            try { deopt.invoke(null, m); n++; } catch (Throwable ignored) { }
-        }
-        return n;
+    private static boolean stringAt(Method m, int i) {
+        return m.getParameterCount() > i && m.getParameterTypes()[i] == String.class;
     }
 
     @Override
@@ -71,12 +36,10 @@ public class LegacyEntry implements IXposedHookLoadPackage {
         // ---- clipboard: background access + no toast + push every change to SyncService
         try {
             Class<?> svc = cl.loadClass(Common.CLIP_SVC);
-            int d = deoptAll(svc);
-            for (Class<?> inner : svc.getDeclaredClasses()) d += Math.max(0, deoptAll(inner));   // ClipboardImpl (binder stub)
-            hooked.add("deopt ClipboardService ×" + d);
             for (Method m : svc.getDeclaredMethods()) {
                 switch (m.getName()) {
                     case "clipboardAccessAllowed" -> {
+                        if (!stringAt(m, 1)) continue;
                         XposedBridge.hookMethod(m, new XC_MethodHook() {
                             @Override
                             protected void beforeHookedMethod(MethodHookParam p) {
@@ -86,6 +49,7 @@ public class LegacyEntry implements IXposedHookLoadPackage {
                         hooked.add("clipboardAccessAllowed");
                     }
                     case "showAccessNotificationLocked" -> {
+                        if (!stringAt(m, 0)) continue;
                         final Object skip = m.getReturnType() == boolean.class ? Boolean.FALSE : null;   // boolean on 15
                         XposedBridge.hookMethod(m, new XC_MethodHook() {
                             @Override
@@ -115,10 +79,6 @@ public class LegacyEntry implements IXposedHookLoadPackage {
         // ---- keep-alive: exempt our ProcessRecord from the freezer; refuse setProcessFrozen for our uid
         try {
             Class<?> pr = cl.loadClass("com.android.server.am.ProcessRecord");
-            try {
-                deoptNamed(cl.loadClass("com.android.server.am.ProcessList"), "newProcessRecord");   // the constructor's caller
-            } catch (Throwable ignored) {
-            }
             for (Constructor<?> c : pr.getDeclaredConstructors()) {
                 XposedBridge.hookMethod(c, new XC_MethodHook() {
                     @Override
@@ -150,8 +110,6 @@ public class LegacyEntry implements IXposedHookLoadPackage {
         int died = 0;
         try {
             Class<?> ams = cl.loadClass("com.android.server.am.ActivityManagerService");
-            deoptNamed(ams, "appDiedLocked");
-            deoptNamed(ams, "handleAppDiedLocked");
             for (Method m : ams.getDeclaredMethods()) {
                 String n = m.getName();
                 if (!(n.equals("handleAppDiedLocked") || n.equals("appDiedLocked")) || m.getParameterCount() < 1
