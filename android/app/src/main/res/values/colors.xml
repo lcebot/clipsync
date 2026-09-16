@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Launcher icon background for launchers without themed icons: a Material tonal blue
+         (primary-40 of the baseline M3 palette) behind the white glyph. -->
+    <color name="ic_launcher_background">#FF4A5C92</color>
+</resources>

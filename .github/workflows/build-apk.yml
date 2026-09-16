@@ -1,0 +1,76 @@
+# Builds the Android module APK. Repo layout: android/ (Gradle project), windows/ (Python daemon).
+#
+# Secrets (Settings > Secrets and variables > Actions):
+#   CLIPSYNC_HOST  - your PC's DDNS hostname
+#   CLIPSYNC_PSK   - 64 hex chars, same as windows/clipsync.ini
+#   CLIPSYNC_PORT  - optional, default 47521
+# Forks without secrets still build; the APK then reads /data/data/io.github.lcebot.clipsync/files/clipsync.conf at runtime.
+#
+# Output: workflow artifact "clipsync-apk"; on tags v* it is also attached to a GitHub Release.
+name: build-apk
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+    paths: ["android/**", ".github/workflows/build-apk.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # ubuntu-latest ships the Android SDK at $ANDROID_HOME with licenses accepted;
+      # AGP downloads platform 35 / build-tools itself. (android-actions/setup-android@v3
+      # fails on current images trying to install the removed 'tools' package.)
+      - name: install SDK components
+        run: |
+          SDKMANAGER=$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager | tail -n1)
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0" >/dev/null
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      # Secrets win; otherwise a committed android/clipsync.properties (private repos) is used as-is.
+      - name: write clipsync.properties from secrets
+        env:
+          HOST: ${{ secrets.CLIPSYNC_HOST }}
+          PORT: ${{ secrets.CLIPSYNC_PORT }}
+          PSK: ${{ secrets.CLIPSYNC_PSK }}
+        run: |
+          if [ -n "$PSK" ]; then
+            printf 'host=%s\nport=%s\npsk=%s\n' "$HOST" "${PORT:-47521}" "$PSK" > clipsync.properties
+            echo "using secrets"
+          elif [ -f clipsync.properties ]; then
+            echo "using committed clipsync.properties"
+          else
+            echo "no config: APK will need /data/data/io.github.lcebot.clipsync/files/clipsync.conf at runtime"
+          fi
+
+      - name: build
+        run: gradle assembleDebug --no-daemon
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clipsync-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: android/app/build/outputs/apk/debug/app-debug.apk

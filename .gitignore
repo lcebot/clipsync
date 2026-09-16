@@ -1,0 +1,11 @@
+android/clipsync.properties
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+windows/clipsync.ini
+windows/clipsync.log
+windows/install-state.json
+windows/received/
+__pycache__/

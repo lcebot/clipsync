@@ -1,0 +1,4 @@
+cryptography>=42
+zeroconf>=0.132
+# optional: lets received images be pasted as pictures (CF_DIB) and screenshots be sent as PNG
+pillow>=10
