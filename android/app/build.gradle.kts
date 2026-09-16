@@ -1,3 +1,4 @@
+import java.security.KeyStore
 import java.util.Properties
 
 plugins {
@@ -11,9 +12,9 @@ val props = Properties().apply {
 
 // Release signing, PKCS12. Locally: android/keystore.properties (gitignored) with storeFile /
 // storePassword and optionally keyAlias / keyPassword; storeFile is absolute, or relative to
-// android/ — the keystore itself belongs outside the repository. On CI the
-// same values arrive as environment variables. With neither, assembleRelease still runs and
-// produces an unsigned APK — which simply cannot be installed.
+// android/ — the keystore itself belongs outside the repository. On CI the same values arrive as
+// environment variables. With neither, assembleRelease still runs and produces an unsigned APK —
+// which simply cannot be installed.
 val keystoreProps = Properties().apply {
     val f = rootProject.file("keystore.properties")
     if (f.exists()) f.inputStream().use { load(it) }
@@ -26,7 +27,7 @@ val keystorePassword = signingValue("storePassword", "KEYSTORE_PASSWORD")
 // friendly name, which isn't always what you expect and can't be inspected without keytool. With no
 // alias configured, read the store's only alias instead of making anyone guess.
 val keystoreAlias = signingValue("keyAlias", "KEY_ALIAS") ?: keystoreFile?.takeIf { it.isFile }?.let { f ->
-    java.security.KeyStore.getInstance("PKCS12").run {
+    KeyStore.getInstance("PKCS12").run {
         f.inputStream().use { load(it, keystorePassword?.toCharArray()) }
         aliases().toList().firstOrNull()
     }
