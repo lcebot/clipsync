@@ -392,6 +392,8 @@ public class SyncService extends Service {
     // ---- files: OFFER (hash) -> WANT {ranges} / HAVE / SKIP -> chunks over parallel data connections ----
     /** Files we have offered and may be asked for (bounded; nothing is held in memory, only URIs). */
     private final java.util.LinkedHashMap<String, Files.Ref> offered = new java.util.LinkedHashMap<>();
+    /** Files fully uploaded recently; a late re-WANT (lost stream on the PC side) is served from here. */
+    private final java.util.LinkedHashMap<String, Files.Ref> sent = new java.util.LinkedHashMap<>();
 
     private static JSONObject header(Files.Ref f) throws Exception {
         JSONObject hdr = new JSONObject();
@@ -527,24 +529,36 @@ public class SyncService extends Service {
     /** The PC wants (part of) a file we offered, or one we still have: push the requested chunks. */
     private void onWant(Connection c, JSONObject msg) throws Exception {
         String sha = msg.optString("sha256");
+        Transfer u = upload;
+        if (u != null && u.upload && u.sha256.equals(sha) && !u.isAborted()) {
+            Logger.i("want: " + sha.substring(0, 12) + " already uploading, ignored");
+            return;
+        }
+        // the offer stays in `offered` until HAVE / SKIP / ABORT or a newer clip: the PC may ask
+        // for (parts of) the same file again after a lost stream or a resume
         Files.Ref f;
-        synchronized (offered) { f = offered.remove(sha); }
+        synchronized (offered) { f = offered.get(sha); if (f == null) f = sent.get(sha); }
         if (f == null) {
-            Uri u = cache.get(sha);
-            if (u != null) f = Files.stat(this, u, cfg.maxFileAny());
+            Uri cachedUri = cache.get(sha);
+            if (cachedUri != null) f = Files.stat(this, cachedUri, cfg.maxFileAny());
         }
         if (f == null || !f.sha256.equals(sha)) {
             Logger.w("want: " + sha.substring(0, Math.min(12, sha.length())) + " not available any more");
             c.sendJson(Connection.T_ABORT, shaMsg(sha).put("reason", "not available any more"));
             return;
         }
-        Transfer u = upload;
-        if (u != null && !u.isAborted()) { u.abort(); }
+        if (u != null && !u.isAborted()) u.abort();          // a different file: the newer request wins
         final Files.Ref ref = f;
         Transfer t = Transfer.upload(this, cfg, c, f, rangesOf(msg.optJSONArray("ranges"), Connection.chunks(f.size)), (tr, complete) -> {
             if (upload == tr) upload = null;
-            if (!complete && !tr.isAborted()) {
-                synchronized (offered) { offered.put(ref.sha256, ref); }   // the PC will WANT the rest
+            if (complete) {
+                // done from our side: no longer "outstanding" (screen-off burst may end), but still
+                // servable should the PC ask again for a lost stream
+                synchronized (offered) {
+                    offered.remove(ref.sha256);
+                    sent.put(ref.sha256, ref);
+                    while (sent.size() > 8) sent.remove(sent.keySet().iterator().next());
+                }
             }
         });
         upload = t;

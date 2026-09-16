@@ -901,20 +901,28 @@ class SyncState:
             self._apply_remote(Item.from_path(path, pt.mime, pt.sha), pt.origin or ch)
         elif last and not self.is_aborted(pt.sha):
             pt.keep()
-            origin = pt.origin
-            with self.lock:
-                alive = origin in self.clients
-            if alive and pt.retries < WANT_RETRIES:
-                pt.retries += 1
-                missing = pt.missing()
-                log.info("%s incomplete (%s), asking %s again for %d chunk(s)", pt.name, pt, origin.device,
-                         sum(b - a for a, b in missing))
-                try:
-                    origin.send_json(T_WANT, {"sha256": pt.sha, "ranges": missing})
-                except Exception:
-                    pass
-            else:
-                log.info("%s incomplete (%s); kept for resume", pt.name, pt)
+            # debounce: give the phone a moment to open its remaining streams before re-asking
+            threading.Timer(2.0, self._reask, args=(pt,)).start()
+
+    def _reask(self, pt: Partial):
+        with pt.lock:
+            busy = pt.streams > 0
+        if busy or pt.finalized or pt.complete() or self.is_aborted(pt.sha):
+            return
+        origin = pt.origin
+        with self.lock:
+            alive = origin in self.clients
+        if alive and pt.retries < WANT_RETRIES:
+            pt.retries += 1
+            missing = pt.missing()
+            log.info("%s incomplete (%s), asking %s again for %d chunk(s)", pt.name, pt, origin.device,
+                     sum(b - a for a, b in missing))
+            try:
+                origin.send_json(T_WANT, {"sha256": pt.sha, "ranges": missing})
+            except Exception:
+                pass
+        else:
+            log.info("%s incomplete (%s); kept for resume", pt.name, pt)
 
     # -- data connection: phone pulls chunks of a file we have --
     def serve_pull(self, sha: str, ranges, ch: SecureChannel):
@@ -1048,7 +1056,14 @@ def data_thread(ch: SecureChannel, hello: dict, state: SyncState):
     Several of these run in parallel for one file (the phone decides how many).
     """
     sha = str(hello.get("sha256", ""))
-    pt = None
+    # a data connection for a file we are receiving counts as a push stream from the moment it
+    # opens (not from its first CHUNK): otherwise a fast stream finishing before a slow one has
+    # sent anything looks like "all streams closed, file incomplete" and triggers a spurious WANT
+    pt = state.cache.partials.get(sha)
+    if pt is not None and not pt.finalized:
+        pt = state.on_push_open(sha, ch)
+    else:
+        pt = None
     clean = False
     try:
         while True:
