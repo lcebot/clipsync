@@ -1056,6 +1056,7 @@ def data_thread(ch: SecureChannel, hello: dict, state: SyncState):
             if typ == T_PULL:
                 m = json.loads(payload.decode("utf-8"))
                 state.serve_pull(sha, m.get("ranges") or [[0, 1 << 30]], ch)
+                clean = True                     # our END went out; the peer closing now is normal
             elif typ == T_CHUNK:
                 if pt is None:
                     pt = state.on_push_open(sha, ch)
@@ -1073,7 +1074,8 @@ def data_thread(ch: SecureChannel, hello: dict, state: SyncState):
             else:
                 log.warning("data connection: unexpected frame %d", typ)
     except Exception as e:
-        log.info("data connection from %s (%s) dropped: %s", ch.device, sha[:12], e)
+        if not clean:
+            log.info("data connection from %s (%s) dropped: %s", ch.device, sha[:12], e)
     finally:
         if pt is not None:
             state.on_push_close(pt, ch, clean)

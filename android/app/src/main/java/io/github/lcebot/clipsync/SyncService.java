@@ -128,8 +128,20 @@ public class SyncService extends Service {
                 + (cfg.mdns ? " + mdns" : ""));
     }
 
+    /** Clips pushed by the system_server hook (xposed.Entry): the ClipData rides in the intent. */
+    public static final String ACTION_CLIP = "io.github.lcebot.clipsync.CLIP";
+
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        // the hook uses plain startService(): no startForeground obligation, no notification churn
+        if (started && intent != null && ACTION_CLIP.equals(intent.getAction())) {
+            ClipData cd = intent.getClipData();
+            try {
+                if (cd != null) clipWorker.execute(() -> handleClip(cd, "push"));
+                else if (intent.getBooleanExtra("fetch", false)) clipWorker.execute(this::readLocalClip);   // clip too big for binder
+            } catch (java.util.concurrent.RejectedExecutionException ignored) {
+            }
+        }
         return START_STICKY;
     }
 
@@ -240,9 +252,34 @@ public class SyncService extends Service {
     };
 
     private void readLocalClip() {
+        ClipData cd;
         try {
-            ClipData cd = clipboard.getPrimaryClip();
-            if (cd == null || cd.getItemCount() == 0) return;
+            cd = clipboard.getPrimaryClip();
+        } catch (Throwable t) {
+            Logger.w("clipboard listener: getPrimaryClip failed", t);
+            return;
+        }
+        if (cd == null) {
+            Logger.i("clipboard listener fired but getPrimaryClip() returned null (access denied in background?)");
+            return;
+        }
+        handleClip(cd, "listener");
+    }
+
+    private long lastClipStamp = -1;
+
+    /** Common path for the in-app listener and for clips pushed by the system_server hook. */
+    private void handleClip(ClipData cd, String source) {
+        try {
+            if (cd.getItemCount() == 0) return;
+            // In the foreground both the listener and the hook deliver the same clip. The system
+            // stamps every clip; dropping the second delivery here saves a full re-read (and
+            // re-hash) of a possibly 100 MB file.
+            long stamp = cd.getDescription() != null ? cd.getDescription().getTimestamp() : 0;
+            synchronized (lock) {
+                if (stamp > 0 && stamp == lastClipStamp) return;
+                lastClipStamp = stamp;
+            }
             // A clip can carry several items and each item text and/or a URI. Prefer the first
             // item that is a readable file (image copied from gallery/browser, file from a file
             // manager); otherwise the first non-empty text. A URI we cannot read is not sent as
@@ -270,12 +307,16 @@ public class SyncService extends Service {
                     out = text;
                 }
             }
-            if (out == null) return;
+            if (out == null) {
+                Logger.i("clip (" + source + "): nothing usable in it");
+                return;
+            }
             String h = hashOf(out);
             synchronized (lock) {
                 if (h.equals(lastRemoteHash) || h.equals(lastSentHash)) return;   // echo / duplicate
                 pendingLocal = out;
             }
+            Logger.i("clip (" + source + "): " + (out instanceof Files.Ref ? out.toString() : "text " + ((String) out).length() + " chars"));
             // copying something new while a file is still moving: stop that transfer first
             abortTransfers(conn, "superseded by a newer clip on the phone", h);
             synchronized (offered) { offered.clear(); }

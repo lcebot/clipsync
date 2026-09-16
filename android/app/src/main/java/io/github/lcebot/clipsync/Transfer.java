@@ -136,14 +136,14 @@ public final class Transfer {
         JSONArray rs = new JSONArray();
         for (int idx : mine) rs.put(new JSONArray().put(idx).put(idx + 1));
         c.sendJson(Connection.T_PULL, new JSONObject().put("sha256", sha256).put("ranges", rs));
-        int expect = mine.size();
-        while (expect > 0) {
+        // read until the PC's END (not just until our chunks are in): closing earlier makes the
+        // PC's final send fail with a reset and log a spurious "connection forcibly closed"
+        while (true) {
             if (aborted.get()) return;
             Connection.Frame f = c.recv();
             if (f.type == Connection.T_CHUNK) {
                 int idx = ((f.payload[0] & 0xff) << 24) | ((f.payload[1] & 0xff) << 16) | ((f.payload[2] & 0xff) << 8) | (f.payload[3] & 0xff);
                 partial.write(idx, f.payload, 4, f.payload.length - 4);
-                expect--;
             } else if (f.type == Connection.T_END) {
                 return;
             } else if (f.type == Connection.T_ABORT) {

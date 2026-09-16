@@ -50,47 +50,77 @@ public class Entry extends XposedModule {
 
     private static final String SERVICE = PKG + ".SyncService";
     private static final String AUTOSTART = PKG + ".BootReceiver";      // enabled = auto-start wanted
-    private static final long WATCHDOG_MS = 20_000;
+    private static final long WATCHDOG_AFTER_DEATH_MS = 3_000;   // prompt reaction to a kill
+    // poll interval: a mere safety net when the death hook is in place, the primary mechanism otherwise
+    private static final long POLL_WITH_HOOK_MS = 60_000, POLL_WITHOUT_HOOK_MS = 15_000;
+    private static volatile long pollMs = POLL_WITHOUT_HOOK_MS;
 
     @Override
     public void onSystemServerStarting(@NonNull XposedModuleInterface.SystemServerStartingParam param) {
         installClipboard(param.getClassLoader());
         installKeepAlive(param.getClassLoader());
-        startWatchdog();
+        installWatchdog(param.getClassLoader());
     }
 
     // ------------------------------------------------------------------ watchdog (restart if killed)
     /**
      * system_server outlives everything, so it is the right place to notice that the sync service
-     * is gone — killed by a ROM, force-stopped, crashed — and bring it back.  Every 20 s (after the
-     * user is unlocked): if SyncService is not running and the app's BootReceiver component is
-     * enabled (Stop in the app disables it), clear the package's "stopped" state and start the
-     * service.  Nothing to hook, nothing on a hot path.
+     * is gone — killed by a ROM, force-stopped, crashed — and bring it back.  Event-driven: the
+     * process-death path (handleAppDiedLocked / appDiedLocked) schedules a check 3 s later when it
+     * is our process; a 5-minute poll is only the safety net.  A check starts the service if it is
+     * not running and the app's BootReceiver component is enabled (Stop in the app disables it),
+     * clearing the package's "stopped" state first.
      */
-    private void startWatchdog() {
-        Thread t = new Thread(() -> {
-            android.content.Context ctx = null;
-            while (true) {
-                try {
-                    Thread.sleep(WATCHDOG_MS);
-                    if (ctx == null) ctx = systemContext();
-                    if (ctx == null) continue;
-                    android.os.UserManager um = ctx.getSystemService(android.os.UserManager.class);
-                    if (um != null && !um.isUserUnlocked()) continue;          // app data still encrypted
-                    if (!autoStartWanted(ctx) || serviceRunning(ctx)) continue;
-                    unstop(ctx);
-                    android.content.Intent i = new android.content.Intent().setClassName(PKG, SERVICE);
-                    ctx.startForegroundService(i);
-                    Log.i(TAG, "watchdog: SyncService was not running, started it");
-                } catch (InterruptedException e) {
-                    return;
-                } catch (Throwable e) {
-                    Log.w(TAG, "watchdog: " + e);
-                }
+    private void installWatchdog(ClassLoader cl) {
+        try {
+            Class<?> ams = cl.loadClass("com.android.server.am.ActivityManagerService");
+            int n = 0;
+            for (Method m : ams.getDeclaredMethods()) {
+                String name = m.getName();
+                if (!(name.equals("handleAppDiedLocked") || name.equals("appDiedLocked")) || m.getParameterCount() < 1
+                        || !m.getParameterTypes()[0].getSimpleName().equals("ProcessRecord")) continue;
+                hook(m).setId("died")
+                        .setExceptionMode(ExceptionMode.PROTECTIVE)
+                        .intercept(chain -> {
+                            Object r = chain.proceed();
+                            if (isOurs(chain.getArg(0))) scheduleCheck(WATCHDOG_AFTER_DEATH_MS);
+                            return r;
+                        });
+                n++;
             }
-        }, "clipsync-watchdog");
-        t.setDaemon(true);
-        t.start();
+            pollMs = n > 0 ? POLL_WITH_HOOK_MS : POLL_WITHOUT_HOOK_MS;
+            Log.i(TAG, "watchdog: death hooks " + n + ", poll every " + pollMs / 1000 + " s");
+        } catch (Throwable t) {
+            Log.w(TAG, "watchdog: death hook failed: " + t);
+        }
+        scheduleCheck(pollMs);
+    }
+
+    private static final Runnable CHECK = new Runnable() {
+        @Override
+        public void run() {
+            try {
+                android.content.Context ctx = systemContext();
+                if (ctx != null) {
+                    android.os.UserManager um = ctx.getSystemService(android.os.UserManager.class);
+                    boolean unlocked = um == null || um.isUserUnlocked();          // app data still encrypted otherwise
+                    if (unlocked && autoStartWanted(ctx) && !serviceRunning(ctx)) {
+                        unstop(ctx);
+                        ctx.startForegroundService(new android.content.Intent().setClassName(PKG, SERVICE));
+                        Log.i(TAG, "watchdog: SyncService was not running, started it");
+                    }
+                }
+            } catch (Throwable e) {
+                Log.w(TAG, "watchdog: " + e);
+            }
+            handler().postDelayed(this, pollMs);
+        }
+    };
+
+    private static void scheduleCheck(long delayMs) {
+        android.os.Handler h = handler();
+        h.removeCallbacks(CHECK);
+        h.postDelayed(CHECK, delayMs);
     }
 
     private static android.content.Context systemContext() {
@@ -133,10 +163,79 @@ public class Entry extends XposedModule {
     }
 
     // ------------------------------------------------------------------ clipboard
+    public static final String ACTION_CLIP = PKG + ".CLIP";
+
+    /**
+     * Push path: every clipboard change goes through setPrimaryClipInternalLocked here in
+     * system_server, with the ClipData in hand. Instead of relying on the change listener being
+     * dispatched to a background app (it is not, on recent releases) and on getPrimaryClip()
+     * being allowed, hand the clip straight to SyncService via startForegroundService, with the
+     * clip attached to the intent so any content:// URIs in it come with a read grant.
+     * Done from a plain thread: outside ClipboardService's lock, and with system identity
+     * rather than the copying app's.
+     */
+    /** One long-lived worker for everything this module does asynchronously (no per-event threads). */
+    private static final android.os.HandlerThread WORKER = new android.os.HandlerThread("clipsync-hook", android.os.Process.THREAD_PRIORITY_BACKGROUND);
+    private static android.os.Handler handler() {
+        synchronized (WORKER) {
+            if (!WORKER.isAlive()) WORKER.start();
+        }
+        return new android.os.Handler(WORKER.getLooper());
+    }
+
+    private static void pushClip(android.content.ClipData clip) {
+        handler().post(() -> {
+            android.content.Context ctx = systemContext();
+            if (ctx == null) return;
+            android.content.Intent i = new android.content.Intent(ACTION_CLIP).setClassName(PKG, SERVICE);
+            i.setClipData(clip);
+            i.addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            try {
+                // plain startService: from system uid it is never subject to background limits, and
+                // a running service just gets onStartCommand — no startForeground round trip
+                ctx.startService(i);
+            } catch (Throwable e) {
+                // e.g. TransactionTooLarge for a huge text: send a bare trigger, the service reads
+                try {
+                    ctx.startService(new android.content.Intent(ACTION_CLIP).setClassName(PKG, SERVICE).putExtra("fetch", true));
+                } catch (Throwable e2) {
+                    Log.w(TAG, "clip push failed: " + e2);
+                }
+            }
+        });
+    }
+
     private void installClipboard(ClassLoader cl) {
         try {
             Class<?> svc = cl.loadClass(CLIP_SVC);
             List<String> hooked = new ArrayList<>();
+            // the outermost setter (13+: ...InternalLocked -> ...InternalNoClassifyLocked); older: only the first
+            Method setter = null;
+            for (Method m : svc.getDeclaredMethods()) {
+                if (m.getName().equals("setPrimaryClipInternalLocked")) { setter = m; break; }
+                if (m.getName().startsWith("setPrimaryClipInternal") && setter == null) setter = m;
+            }
+            if (setter != null) {
+                final int argc = setter.getParameterCount();
+                hook(setter).setId("push")
+                        .setExceptionMode(ExceptionMode.PROTECTIVE)
+                        .intercept(chain -> {
+                            Object r = chain.proceed();
+                            try {
+                                android.content.ClipData clip = null;
+                                boolean ours = false;
+                                for (int k = 0; k < argc; k++) {
+                                    Object a = chain.getArg(k);
+                                    if (a instanceof android.content.ClipData) clip = (android.content.ClipData) a;
+                                    else if (PKG.equals(a)) ours = true;           // sourcePackage: our own write
+                                }
+                                if (clip != null && !ours) pushClip(clip);
+                            } catch (Throwable ignored) {
+                            }
+                            return r;
+                        });
+                hooked.add(setter.getName() + " -> push");
+            }
             for (Method m : svc.getDeclaredMethods()) {
                 switch (m.getName()) {
                     case "clipboardAccessAllowed" -> {
