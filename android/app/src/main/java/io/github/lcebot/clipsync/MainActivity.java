@@ -64,7 +64,6 @@ public class MainActivity extends AppCompatActivity {
     private View title;
     private ViewGroup headerRow;
     private MaterialButton stopBtn, applyBtn;
-    private boolean headerCollapsed;
     // pages / log
     private View pageSettings, pageLog, batteryRow, batteryFix;
     private TextView log, batteryText;
@@ -303,7 +302,7 @@ public class MainActivity extends AppCompatActivity {
             float scale = 1f - 0.25f * f;                 // headline (28sp) -> ~title (21sp)
             title.setScaleX(scale);
             title.setScaleY(scale);
-            setHeaderCollapsed(f > 0.5f);
+            morphButtons(f);
         });
 
         pulse = ObjectAnimator.ofFloat(statusHalo, View.ALPHA, 0.45f, 0f);
@@ -313,25 +312,30 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private int btnMinWidth = -1;
+    private int stopTextColor, applyTextColor;
 
     /**
-     * Collapsed: the buttons become circles — no label, no minimum width, and horizontal padding
-     * chosen so that width == height (the M3 button shape is a full pill, so equal sides = circle).
+     * Continuous morph driven by the scroll fraction (like the title): the label is squeezed
+     * horizontally and faded out, paddings and minimum width shrink in step, until at f = 1 the
+     * button is 24dp icon + 2 × 8dp — as wide as it is tall, which on the full-pill M3 shape is
+     * a circle. No discrete jump anywhere.
      */
-    private void setHeaderCollapsed(boolean collapsed) {
-        if (collapsed == headerCollapsed) return;
-        headerCollapsed = collapsed;
-        if (btnMinWidth < 0) btnMinWidth = applyBtn.getMinWidth();
-        TransitionManager.beginDelayedTransition(headerRow, new TransitionSet()
-                .addTransition(new Fade()).addTransition(new ChangeBounds()).setDuration(180));
+    private void morphButtons(float f) {
+        if (btnMinWidth < 0) {
+            btnMinWidth = applyBtn.getMinWidth();
+            stopTextColor = stopBtn.getCurrentTextColor();
+            applyTextColor = applyBtn.getCurrentTextColor();
+        }
+        float t = Math.max(0f, Math.min(1f, (f - 0.15f) / 0.7f));     // morph between 15 % and 85 %
         for (MaterialButton b : new MaterialButton[]{stopBtn, applyBtn}) {
-            boolean isApply = b == applyBtn;
-            b.setText(collapsed ? "" : isApply ? "Apply" : "Stop");
-            b.setIconPadding(collapsed ? 0 : dp(8));
-            b.setMinWidth(collapsed ? 0 : btnMinWidth);
-            b.setMinimumWidth(collapsed ? 0 : btnMinWidth);
-            // 40dp tall button body: 24dp icon + 2 × 8dp = 40dp wide -> circle
-            int pad = collapsed ? dp(8) : dp(16);
+            int base = b == applyBtn ? applyTextColor : stopTextColor;
+            b.setTextScaleX(Math.max(0.001f, 1f - t));                 // 0 would be ignored by TextView
+            b.setTextColor(androidx.core.graphics.ColorUtils.setAlphaComponent(base, Math.round(255 * (1f - t))));
+            b.setIconPadding(Math.round(dp(8) * (1f - t)));
+            int mw = Math.round(btnMinWidth * (1f - t));
+            b.setMinWidth(mw);
+            b.setMinimumWidth(mw);
+            int pad = Math.round(dp(16) + (dp(8) - dp(16)) * t);
             b.setPadding(pad, b.getPaddingTop(), pad, b.getPaddingBottom());
         }
     }
@@ -429,9 +433,9 @@ public class MainActivity extends AppCompatActivity {
             lastPillContent = content;
             if (connected) { statusHalo.setVisibility(View.VISIBLE); if (!pulse.isRunning()) pulse.start(); }
             else { pulse.cancel(); statusHalo.setVisibility(View.INVISIBLE); }
-            setPillFolded(false);                      // any change unfolds …
+            setPillFolded(false);                      // any change unfolds; it folds again 10 s later
             ui.removeCallbacks(fold);
-            ui.postDelayed(fold, FOLD_AFTER_MS);       // … and it folds again 10 s later
+            ui.postDelayed(fold, FOLD_AFTER_MS);
         }
 
         // background-permission card
@@ -448,17 +452,26 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    /** Fold: text slides away horizontally, height unchanged, dot + halo stay. */
+    /**
+     * Fold: the card shrinks to an 84dp rounded square with the dot in the middle; unfold: the dot
+     * slides left and the text appears. Height never changes (fixed in the layout).
+     */
     private void setPillFolded(boolean folded) {
         if (folded == pillFolded) return;
         pillFolded = folded;
         TransitionManager.beginDelayedTransition(statusPill, new TransitionSet()
                 .addTransition(new ChangeBounds()).addTransition(new Fade()).setDuration(260));
         statusText.setVisibility(folded ? View.GONE : View.VISIBLE);
-        int start = dp(16), end = folded ? dp(16) : dp(18);
-        statusInner.setPadding(start, statusInner.getPaddingTop(), end, statusInner.getPaddingBottom());
-        // keep the pill's height: the text block is the tallest child, so pad the dot's row instead
-        statusInner.setMinimumHeight(folded ? statusInner.getHeight() : 0);
+        ViewGroup.LayoutParams lp = statusInner.getLayoutParams();
+        lp.width = folded ? dp(84) : ViewGroup.LayoutParams.WRAP_CONTENT;
+        statusInner.setLayoutParams(lp);
+        statusInner.setPadding(folded ? 0 : dp(20), 0, folded ? 0 : dp(20), 0);
+        ((android.widget.LinearLayout) statusInner).setGravity(folded
+                ? android.view.Gravity.CENTER : android.view.Gravity.CENTER_VERTICAL | android.view.Gravity.START);
+        if (!folded) {
+            ui.removeCallbacks(fold);                  // a manual unfold folds again after the same delay
+            ui.postDelayed(fold, FOLD_AFTER_MS);
+        }
     }
 
     // ------------------------------------------------------------------ apply
