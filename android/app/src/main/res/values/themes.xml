@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Material 3 Expressive (material 1.13+): expressive shapes / motion / type for every
+    <!-- Material 3 Expressive (material 1.14+): expressive shapes / motion / type for every
          component that takes its style from the theme; dynamic colour on Android 12+, day/night. -->
     <style name="Theme.ClipSync" parent="Theme.Material3Expressive.DynamicColors.DayNight">
         <item name="windowActionBar">false</item>
@@ -8,7 +8,7 @@
     </style>
 
     <!-- small group header above each block of settings -->
-    <style name="ClipSync.SectionTitle" parent="Widget.Material3.TextView">
+    <style name="ClipSync.SectionTitle" parent="android:Widget.TextView">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">wrap_content</item>
         <item name="android:layout_marginTop">12dp</item>
