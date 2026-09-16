@@ -1,4 +1,9 @@
 android/clipsync.properties
+android/keystore.properties
+*.jks
+*.p12
+*.pfx
+*.keystore
 android/.gradle/
 android/build/
 android/app/build/
