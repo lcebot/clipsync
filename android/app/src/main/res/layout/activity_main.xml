@@ -7,10 +7,15 @@
     android:orientation="vertical"
     android:fitsSystemWindows="true">
 
-    <!-- Overlay host. The actions and the status pill live HERE, not inside the CoordinatorLayout:
-         every time one of them re-lays out (fold/unfold, text -> icon morph) the request would
-         otherwise mark the CoordinatorLayout dirty, re-run the app bar behaviours and make the
-         collapsing title jump or flash. As siblings their layout pass never reaches it. -->
+    <!-- Overlay host for the status chip. It stays outside the CoordinatorLayout because it is
+         positioned by hand against the app bar's own offset (placeStatus), not by a Behavior.
+         The action FABs do NOT need this: they are Coordinator children, which is what
+         shrink()/extend() is built for, and they do not disturb the collapsing title.
+
+         Surface ladder, so the three chrome surfaces never read as one block:
+           log pane   surfaceContainerLow   (recedes behind the text)
+           nav bar    surfaceContainer      (M3 navigation bar default)
+           lifted bar surfaceContainerHigh  (sits above both) -->
     <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
@@ -28,6 +33,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 app:liftOnScroll="true"
+                app:liftOnScrollColor="?attr/colorSurfaceContainerHigh"
                 app:liftOnScrollTargetViewId="@+id/page_settings">
 
                 <com.google.android.material.appbar.CollapsingToolbarLayout
@@ -37,6 +43,7 @@
                     android:layout_height="?attr/collapsingToolbarLayoutMediumSize"
                     app:layout_scrollFlags="scroll|exitUntilCollapsed|snap"
                     app:titleCollapseMode="scale"
+                    app:contentScrim="?attr/colorSurfaceContainerHigh"
                     app:maxLines="1"
                     app:title="@string/app_name">
 
@@ -359,34 +366,13 @@
                 android:orientation="vertical"
                 android:visibility="gone">
 
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="horizontal"
-                    android:gravity="end"
-                    android:paddingHorizontal="8dp">
-
-                    <com.google.android.material.button.MaterialButton
-                        android:id="@+id/log_copy"
-                        style="?attr/borderlessButtonStyle"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="@string/log_copy" />
-
-                    <com.google.android.material.button.MaterialButton
-                        android:id="@+id/log_clear"
-                        style="?attr/borderlessButtonStyle"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="@string/log_clear" />
-                </LinearLayout>
-
+                <!-- Copy / Clear live in the FAB pair below, next to the CoordinatorLayout -->
                 <androidx.core.widget.NestedScrollView
                     android:id="@+id/log_scroll"
                     android:layout_width="match_parent"
                     android:layout_height="0dp"
                     android:layout_weight="1"
-                    android:background="?attr/colorSurfaceContainer"
+                    android:background="?attr/colorSurfaceContainerLow"
                     android:clipToPadding="false"
                     android:paddingBottom="80dp"
                     android:scrollbars="vertical">
@@ -409,13 +395,22 @@
                  Direct children of the CoordinatorLayout — the arrangement shrink()/extend() is
                  built for. Both are pinned to the bottom-end corner; Stop is slid left of Apply by
                  a translation that follows Apply's animated width (translation, so it costs no
-                 layout). Sizes come from the component's own motion specs. -->
+                 layout). Sizes come from the component's own motion specs.
+
+                 minWidth=0dp is required, not cosmetic: the extend target is computed as
+                 measuredWidth - collapsedPadding*2 + extendedPadding*2. When the default minWidth
+                 floors that measurement, the subtraction removes padding that was never in the
+                 measurement, so the animation overshoots and then snaps back to the settled
+                 wrap-content width at the end. extendStrategy is pinned to wrap_content so the
+                 target never depends on a remembered pre-shrink width. -->
             <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
                 android:id="@+id/apply"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_gravity="bottom|end"
                 android:layout_margin="16dp"
+                android:minWidth="0dp"
+                app:extendStrategy="wrap_content"
                 android:text="@string/action_apply"
                 android:textColor="@color/fab_fg_primary"
                 app:icon="@drawable/ic_restart"
@@ -428,18 +423,54 @@
                 android:layout_height="wrap_content"
                 android:layout_gravity="bottom|end"
                 android:layout_margin="16dp"
+                android:minWidth="0dp"
+                app:extendStrategy="wrap_content"
                 android:visibility="gone"
                 android:text="@string/action_stop"
                 android:textColor="@color/fab_fg_surface"
                 app:icon="@drawable/ic_stop"
                 app:iconTint="@color/fab_fg_surface"
                 app:backgroundTint="@color/fab_bg_surface" />
+
+            <!-- ===== actions: Log tab =====
+                 Same corner, same pairing and the same scroll-driven shrink/extend as the pair
+                 above; these two are always usable, so nothing here is ever hidden or disabled. -->
+            <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
+                android:id="@+id/log_copy"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="bottom|end"
+                android:layout_margin="16dp"
+                android:minWidth="0dp"
+                app:extendStrategy="wrap_content"
+                android:visibility="gone"
+                android:text="@string/log_copy"
+                android:textColor="@color/fab_fg_primary"
+                app:icon="@drawable/ic_copy"
+                app:iconTint="@color/fab_fg_primary"
+                app:backgroundTint="@color/fab_bg_primary" />
+
+            <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
+                android:id="@+id/log_clear"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="bottom|end"
+                android:layout_margin="16dp"
+                android:minWidth="0dp"
+                app:extendStrategy="wrap_content"
+                android:visibility="gone"
+                android:text="@string/log_clear"
+                android:textColor="@color/fab_fg_surface"
+                app:icon="@drawable/ic_clear"
+                app:iconTint="@color/fab_fg_surface"
+                app:backgroundTint="@color/fab_bg_surface" />
         </androidx.coordinatorlayout.widget.CoordinatorLayout>
 
         <!-- ===== connection status, top-right, sitting on the app bar =====
-             One line only — "Stopped" or the connection kind — plus the pulsing dot, so its size
-             never changes and nothing is ever ellipsised. Peer and address are one tap away
-             (dialog_status). Bounded rounded ripple: a borderless one would spill over the bar. -->
+             One line only — "Stopped" or the connection kind — plus the pulsing dot. The block
+             sizes to its text (the longest label, "DDNS (Internet)", is far narrower than the bar),
+             so nothing is ever ellipsised. Peer and address are one tap away (dialog_status).
+             Bounded rounded ripple: a borderless one would spill over the bar. -->
         <LinearLayout
             android:id="@+id/status_block"
             android:layout_width="wrap_content"
@@ -457,13 +488,13 @@
 
             <TextView
                 android:id="@+id/status_title"
-                android:layout_width="0dp"
-                android:layout_weight="1"
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:textAppearance="?attr/textAppearanceLabelLarge"
                 android:textColor="?attr/colorOnSurface"
                 android:gravity="end"
                 android:singleLine="true"
+                android:ellipsize="none"
                 android:text="@string/state_stopped" />
 
             <FrameLayout

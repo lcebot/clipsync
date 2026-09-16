@@ -61,7 +61,8 @@ public class MainActivity extends AppCompatActivity {
     private AppBarLayout appbar;
     private View coordinator;
     private BottomNavigationView nav;
-    private ExtendedFloatingActionButton stopFab, applyFab;
+    private ExtendedFloatingActionButton stopFab, applyFab;      // Settings tab
+    private ExtendedFloatingActionButton copyFab, clearFab;      // Log tab
     // pages / log
     private NestedScrollView pageSettings;
     private View pageLog, batteryRow, batteryFix;
@@ -78,7 +79,8 @@ public class MainActivity extends AppCompatActivity {
     private boolean serviceRunning, waitingForStop, waitingForStart;
     private boolean onLogTab, configValid;
     // mirrors of the FABs' own shown/hidden state, so we only drive show()/hide() on a real change
-    private boolean stopShown, applyShown = true;
+    private boolean stopShown, applyShown = true, logFabsShown;
+    private int applyIcon;                                  // 0 = never set, so the first pass applies
     private long waitingSince;
     private static final long WAIT_TIMEOUT_MS = 12_000;
 
@@ -144,6 +146,8 @@ public class MainActivity extends AppCompatActivity {
         nav = findViewById(R.id.nav);
         stopFab = findViewById(R.id.stop);
         applyFab = findViewById(R.id.apply);
+        copyFab = findViewById(R.id.log_copy);
+        clearFab = findViewById(R.id.log_clear);
         pageSettings = findViewById(R.id.page_settings);
         pageLog = findViewById(R.id.page_log);
         log = findViewById(R.id.log);
@@ -277,21 +281,19 @@ public class MainActivity extends AppCompatActivity {
             refreshActions();                          // greys Stop out until the service is gone
             snack(R.string.snack_stopped);
         });
-        // Stop rides to the left of Apply; following Apply's animated width by translation keeps it
-        // out of the layout pass entirely
-        applyFab.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) ->
-                stopFab.setTranslationX(-(applyFab.getWidth() + dp(12))));
-        // shrink to the icons while the settings page scrolls down, extend again on the way up —
-        // the component's own motion, now that the FABs sit directly in the CoordinatorLayout
-        pageSettings.setOnScrollChangeListener((NestedScrollView.OnScrollChangeListener) (v, x, y, ox, oy) -> {
-            if (y > oy + dp(4)) { stopFab.shrink(); applyFab.shrink(); }
-            else if (y < oy - dp(4) || y <= 0) { stopFab.extend(); applyFab.extend(); }
-        });
-        findViewById(R.id.log_clear).setOnClickListener(v -> { Logger.clear(); log.setText(""); });
-        findViewById(R.id.log_copy).setOnClickListener(v -> {
+        clearFab.setOnClickListener(v -> { Logger.clear(); log.setText(""); });
+        copyFab.setOnClickListener(v -> {
             getSystemService(ClipboardManager.class).setPrimaryClip(ClipData.newPlainText("clipsync log", log.getText()));
             snack(R.string.snack_log_copied);
         });
+        // The secondary FAB rides to the left of the primary one; following the primary's animated
+        // width by translation keeps the pairing out of the layout pass entirely
+        pairFabs(applyFab, stopFab);
+        pairFabs(copyFab, clearFab);
+        // shrink to the icons while the page scrolls down, extend again on the way up — the
+        // component's own motion, now that the FABs sit directly in the CoordinatorLayout
+        shrinkOnScroll(pageSettings, applyFab, stopFab);
+        shrinkOnScroll(logScroll, copyFab, clearFab);
         batteryFix.setOnClickListener(v -> {
             Intent i = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).setData(Uri.parse("package:" + getPackageName()));
             try { startActivity(i); } catch (Exception e) { startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)); }
@@ -318,12 +320,26 @@ public class MainActivity extends AppCompatActivity {
         pulse.setRepeatMode(ValueAnimator.RESTART);
     }
 
+    /** Keeps {@code second} pinned 12dp to the left of {@code first}, whatever width it animates to. */
+    private void pairFabs(ExtendedFloatingActionButton first, ExtendedFloatingActionButton second) {
+        first.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) ->
+                second.setTranslationX(-(first.getWidth() + dp(12))));
+    }
+
+    private void shrinkOnScroll(NestedScrollView page, ExtendedFloatingActionButton... fabs) {
+        page.setOnScrollChangeListener((NestedScrollView.OnScrollChangeListener) (v, x, y, ox, oy) -> {
+            if (y > oy + dp(4)) for (ExtendedFloatingActionButton f : fabs) f.shrink();
+            else if (y < oy - dp(4) || y <= 0) for (ExtendedFloatingActionButton f : fabs) f.extend();
+        });
+    }
+
     private void snack(int textRes) {
         Snackbar.make(coordinator, textRes, Snackbar.LENGTH_SHORT).setAnchorView(anchor()).show();
     }
 
-    /** Above the FABs while they are on screen, above the navigation bar otherwise. */
+    /** Above whichever FAB pair is on screen, above the navigation bar otherwise. */
     private View anchor() {
+        if (onLogTab) return copyFab;
         return applyFab.getVisibility() == View.VISIBLE ? applyFab : nav;
     }
 
@@ -335,8 +351,10 @@ public class MainActivity extends AppCompatActivity {
     /**
      * Stopped → a single "Start"; running → "Stop" and "Apply". After pressing one of them the
      * button greys out until the service actually reaches the new state (or the wait times out),
-     * and a state change made from anywhere else moves the buttons just the same.
-     * Sizes change only here, never while scrolling, so one ChangeBounds pass covers it.
+     * and a state change made from anywhere else moves the buttons just the same. The Log tab's
+     * Copy / Clear pair only follows the tab: both stay enabled at all times.
+     * Everything here goes through the components' own animations, and nothing is touched unless
+     * it actually changed — scrolling drives shrink()/extend() and must not be measured against.
      */
     private void refreshActions() {
         boolean showStop = serviceRunning && !onLogTab;
@@ -351,10 +369,17 @@ public class MainActivity extends AppCompatActivity {
             applyShown = showApply;
             if (showApply) applyFab.show(); else applyFab.hide();
         }
+        if (onLogTab != logFabsShown) {
+            logFabsShown = onLogTab;
+            if (onLogTab) { copyFab.show(); clearFab.show(); } else { copyFab.hide(); clearFab.hide(); }
+        }
         stopFab.setEnabled(!waitingForStop);
 
         setTextIfChanged(applyFab, getString(serviceRunning ? R.string.action_apply : R.string.action_start));
-        applyFab.setIconResource(serviceRunning ? R.drawable.ic_restart : R.drawable.ic_play);
+        // setIconResource() always requests a layout; this runs on the 1 Hz status poll, so an
+        // unconditional call would drop a stray measure into whatever shrink/extend is in flight
+        int icon = serviceRunning ? R.drawable.ic_restart : R.drawable.ic_play;
+        if (icon != applyIcon) { applyIcon = icon; applyFab.setIconResource(icon); }
         applyFab.setEnabled(configValid && !waitingForStart);
     }
 
