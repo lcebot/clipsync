@@ -62,7 +62,7 @@ public class SyncService extends Service {
         Status.write(this, (String) l[0], (String) l[1], (String) l[2], (Boolean) l[3], (String) l[4], (String) l[5], suspendedOnce);
     }
 
-    private Config cfg;
+    private volatile Config cfg;
     private FileCache cache;
     private ClipboardManager clipboard;
     private PowerManager power;
@@ -130,9 +130,15 @@ public class SyncService extends Service {
 
     /** Clips pushed by the system_server hook (xposed.Entry): the ClipData rides in the intent. */
     public static final String ACTION_CLIP = "io.github.lcebot.clipsync.CLIP";
+    /** Re-read files/clipsync.conf and reconnect, in place (no service restart, no process churn). */
+    public static final String ACTION_RELOAD = "io.github.lcebot.clipsync.RELOAD";
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        if (started && intent != null && ACTION_RELOAD.equals(intent.getAction())) {
+            reload();
+            return START_STICKY;
+        }
         // the hook uses plain startService(): no startForeground obligation, no notification churn
         if (started && intent != null && ACTION_CLIP.equals(intent.getAction())) {
             ClipData cd = intent.getClipData();
@@ -143,6 +149,25 @@ public class SyncService extends Service {
             }
         }
         return START_STICKY;
+    }
+
+    private void reload() {
+        Config next;
+        try {
+            next = Config.load(this);
+        } catch (RuntimeException e) {
+            Logger.w("reload: invalid config, keeping the old one (" + e.getMessage() + ")");
+            return;
+        }
+        cfg = next;
+        Logger.i("config reloaded: " + (cfg.host.isEmpty() ? "(no host)" : cfg.host + ":" + cfg.port)
+                + " mode " + cfg.mode + (cfg.mdns ? ", browse " + cfg.mdnsTimeoutMs + " ms" : "")
+                + ", " + cfg.threads + " streams, files -> " + cfg.filesDir);
+        abortTransfers(conn, "configuration changed", null);
+        Connection.forgetMdns();
+        backoff = BACKOFF_MIN_MS;
+        dropConnection();                 // the loop reconnects with the new settings
+        wake();
     }
 
     @Override

@@ -22,7 +22,8 @@ android {
         buildConfigField("String", "HOST", "\"${props.getProperty("host", "")}\"")
         buildConfigField("int", "PORT", props.getProperty("port", "47521"))
         buildConfigField("String", "PSK", "\"${props.getProperty("psk", "")}\"")
-        buildConfigField("boolean", "MDNS", props.getProperty("mdns", "true"))
+        // ddns+mdns | ddns | mdns  (an empty host with the default mode makes the app fall back to mdns)
+        buildConfigField("String", "MODE", "\"${props.getProperty("mode", if (props.getProperty("host", "").isBlank()) "mdns" else "ddns+mdns")}\"")
     }
 
     buildFeatures { buildConfig = true }

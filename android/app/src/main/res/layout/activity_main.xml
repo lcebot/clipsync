@@ -6,435 +6,492 @@
     android:orientation="vertical"
     android:fitsSystemWindows="true">
 
-    <com.google.android.material.appbar.MaterialToolbar
-        android:id="@+id/toolbar"
-        android:layout_width="match_parent"
-        android:layout_height="?attr/actionBarSize"
-        app:title="@string/app_name" />
-
-    <!-- pages, with the status pill floating bottom-left over whichever page is shown -->
-    <FrameLayout
+    <androidx.coordinatorlayout.widget.CoordinatorLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1">
 
-        <!-- ================= page: Settings ================= -->
-        <androidx.core.widget.NestedScrollView
-            android:id="@+id/page_settings"
+        <!-- ===== header: title + Stop / Apply, shrinks on scroll (text on the buttons goes away) ===== -->
+        <com.google.android.material.appbar.AppBarLayout
+            android:id="@+id/appbar"
             android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:clipToPadding="false"
-            android:paddingBottom="72dp">
+            android:layout_height="wrap_content"
+            app:liftOnScroll="true">
 
             <LinearLayout
+                android:id="@+id/header"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:paddingHorizontal="16dp"
-                android:paddingTop="4dp">
+                android:layout_height="96dp"
+                android:minHeight="56dp"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:paddingStart="16dp"
+                android:paddingEnd="8dp"
+                app:layout_scrollFlags="scroll|exitUntilCollapsed|snap">
 
-                <!-- background permission (shown only while battery optimisation still applies) -->
-                <com.google.android.material.card.MaterialCardView
-                    android:id="@+id/battery_row"
-                    style="?attr/materialCardViewFilledStyle"
+                <TextView
+                    android:id="@+id/title"
+                    android:layout_width="0dp"
+                    android:layout_weight="1"
+                    android:layout_height="wrap_content"
+                    android:textAppearance="?attr/textAppearanceHeadlineMedium"
+                    android:textColor="?attr/colorOnSurface"
+                    android:transformPivotX="0dp"
+                    android:text="@string/app_name" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/stop"
+                    style="?attr/materialButtonOutlinedStyle"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    app:icon="@drawable/ic_stop"
+                    android:text="Stop" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/apply"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    app:icon="@drawable/ic_restart"
+                    android:text="Apply" />
+            </LinearLayout>
+        </com.google.android.material.appbar.AppBarLayout>
+
+        <!-- ===== pages ===== -->
+        <FrameLayout
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            app:layout_behavior="@string/appbar_scrolling_view_behavior">
+
+            <!-- ---------- Settings ---------- -->
+            <androidx.core.widget.NestedScrollView
+                android:id="@+id/page_settings"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:clipToPadding="false"
+                android:paddingBottom="80dp">
+
+                <LinearLayout
+                    android:id="@+id/settings_root"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    app:cardBackgroundColor="?attr/colorErrorContainer">
+                    android:orientation="vertical"
+                    android:paddingHorizontal="16dp"
+                    android:animateLayoutChanges="true">
+
+                    <!-- background permission (shown only while battery optimisation still applies) -->
+                    <com.google.android.material.card.MaterialCardView
+                        android:id="@+id/battery_row"
+                        style="?attr/materialCardViewFilledStyle"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        app:cardBackgroundColor="?attr/colorErrorContainer">
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal"
+                            android:gravity="center_vertical"
+                            android:paddingStart="12dp"
+                            android:paddingEnd="4dp">
+
+                            <TextView
+                                android:id="@+id/battery_text"
+                                android:layout_width="0dp"
+                                android:layout_weight="1"
+                                android:layout_height="wrap_content"
+                                android:paddingVertical="8dp"
+                                android:textAppearance="?attr/textAppearanceBodySmall"
+                                android:textColor="?attr/colorOnErrorContainer"
+                                android:text="Battery optimisation is on" />
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/battery_fix"
+                                style="?attr/borderlessButtonStyle"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Allow" />
+                        </LinearLayout>
+                    </com.google.android.material.card.MaterialCardView>
+
+                    <!-- ===== Connection ===== -->
+                    <TextView style="@style/ClipSync.SectionTitle" android:text="Connection" />
+
+                    <com.google.android.material.button.MaterialButtonToggleGroup
+                        android:id="@+id/mode"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        app:singleSelection="true"
+                        app:selectionRequired="true"
+                        app:checkedButton="@+id/mode_both">
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/mode_both"
+                            style="?attr/materialButtonOutlinedStyle"
+                            android:layout_width="0dp"
+                            android:layout_weight="1"
+                            android:layout_height="wrap_content"
+                            android:text="DDNS + mDNS" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/mode_ddns"
+                            style="?attr/materialButtonOutlinedStyle"
+                            android:layout_width="0dp"
+                            android:layout_weight="1"
+                            android:layout_height="wrap_content"
+                            android:text="DDNS only" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/mode_mdns"
+                            style="?attr/materialButtonOutlinedStyle"
+                            android:layout_width="0dp"
+                            android:layout_weight="1"
+                            android:layout_height="wrap_content"
+                            android:text="mDNS only" />
+                    </com.google.android.material.button.MaterialButtonToggleGroup>
 
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:orientation="horizontal"
-                        android:gravity="center_vertical"
-                        android:paddingStart="12dp"
-                        android:paddingEnd="4dp">
+                        android:layout_marginTop="12dp">
 
-                        <TextView
-                            android:id="@+id/battery_text"
+                        <com.google.android.material.textfield.TextInputLayout
+                            android:id="@+id/port_layout"
+                            style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
                             android:layout_width="0dp"
                             android:layout_weight="1"
                             android:layout_height="wrap_content"
-                            android:paddingVertical="8dp"
-                            android:textAppearance="?attr/textAppearanceBodySmall"
-                            android:textColor="?attr/colorOnErrorContainer"
-                            android:text="Battery optimisation is on" />
+                            android:hint="Port">
 
-                        <com.google.android.material.button.MaterialButton
-                            android:id="@+id/battery_fix"
-                            style="?attr/borderlessButtonStyle"
-                            android:layout_width="wrap_content"
+                            <com.google.android.material.textfield.TextInputEditText
+                                android:id="@+id/port"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:inputType="number"
+                                android:singleLine="true" />
+                        </com.google.android.material.textfield.TextInputLayout>
+
+                        <com.google.android.material.textfield.TextInputLayout
+                            android:id="@+id/psk_layout"
+                            style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
+                            android:layout_width="0dp"
+                            android:layout_weight="2"
                             android:layout_height="wrap_content"
-                            android:text="Allow" />
+                            android:layout_marginStart="8dp"
+                            android:hint="PSK key (64 hex)"
+                            app:endIconMode="password_toggle">
+
+                            <com.google.android.material.textfield.TextInputEditText
+                                android:id="@+id/psk"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:fontFamily="monospace"
+                                android:inputType="textPassword|textNoSuggestions"
+                                android:singleLine="true" />
+                        </com.google.android.material.textfield.TextInputLayout>
                     </LinearLayout>
-                </com.google.android.material.card.MaterialCardView>
 
-                <!-- ===== Connection ===== -->
-                <TextView style="@style/ClipSync.SectionTitle" android:text="Connection" />
-
-                <com.google.android.material.textfield.TextInputLayout
-                    android:id="@+id/host_layout"
-                    style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:hint="DDNS name (empty = LAN only)">
-
-                    <com.google.android.material.textfield.TextInputEditText
-                        android:id="@+id/host"
+                    <!-- shown while DDNS is part of the mode -->
+                    <com.google.android.material.textfield.TextInputLayout
+                        android:id="@+id/host_layout"
+                        style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:inputType="textUri"
-                        android:singleLine="true" />
-                </com.google.android.material.textfield.TextInputLayout>
-
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="horizontal"
-                    android:gravity="center_vertical"
-                    android:layout_marginTop="8dp">
-
-                    <com.google.android.material.materialswitch.MaterialSwitch
-                        android:id="@+id/mdns"
-                        android:layout_width="0dp"
-                        android:layout_weight="1"
-                        android:layout_height="wrap_content"
-                        android:text="mDNS on the LAN" />
-
-                    <com.google.android.material.textfield.TextInputLayout
-                        android:id="@+id/timeout_layout"
-                        style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
-                        android:layout_width="140dp"
-                        android:layout_height="wrap_content"
-                        android:layout_marginStart="8dp"
-                        android:hint="Browse (ms)">
+                        android:layout_marginTop="8dp"
+                        android:hint="DDNS name">
 
                         <com.google.android.material.textfield.TextInputEditText
-                            android:id="@+id/timeout"
+                            android:id="@+id/host"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:inputType="textUri"
+                            android:singleLine="true" />
+                    </com.google.android.material.textfield.TextInputLayout>
+
+                    <!-- shown while mDNS is part of the mode -->
+                    <LinearLayout
+                        android:id="@+id/browse_row"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:layout_marginTop="4dp">
+
+                        <TextView
+                            android:id="@+id/browse_label"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:textAppearance="?attr/textAppearanceBodyMedium"
+                            android:text="mDNS browse: 4000 ms" />
+
+                        <com.google.android.material.slider.Slider
+                            android:id="@+id/browse"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:valueFrom="0"
+                            android:valueTo="6"
+                            android:stepSize="1"
+                            android:value="3"
+                            app:labelBehavior="floating"
+                            app:tickVisible="true" />
+                    </LinearLayout>
+
+                    <!-- ===== Transfer limits ===== -->
+                    <TextView style="@style/ClipSync.SectionTitle" android:text="Transfer limits" />
+
+                    <com.google.android.material.textfield.TextInputLayout
+                        android:id="@+id/text_kb_layout"
+                        style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:hint="Text (KB)">
+
+                        <com.google.android.material.textfield.TextInputEditText
+                            android:id="@+id/text_kb"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:inputType="number"
+                            android:singleLine="true" />
+                    </com.google.android.material.textfield.TextInputLayout>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:layout_marginTop="8dp">
+
+                        <com.google.android.material.textfield.TextInputLayout
+                            android:id="@+id/file_mb_layout"
+                            style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
+                            android:layout_width="0dp"
+                            android:layout_weight="1"
+                            android:layout_height="wrap_content"
+                            android:hint="File (MB)">
+
+                            <com.google.android.material.textfield.TextInputEditText
+                                android:id="@+id/file_mb"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:inputType="number"
+                                android:singleLine="true" />
+                        </com.google.android.material.textfield.TextInputLayout>
+
+                        <com.google.android.material.textfield.TextInputLayout
+                            android:id="@+id/file_mb_local_layout"
+                            style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
+                            android:layout_width="0dp"
+                            android:layout_weight="1"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="8dp"
+                            android:hint="File on LAN (MB)">
+
+                            <com.google.android.material.textfield.TextInputEditText
+                                android:id="@+id/file_mb_local"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:inputType="number"
+                                android:singleLine="true" />
+                        </com.google.android.material.textfield.TextInputLayout>
+                    </LinearLayout>
+
+                    <TextView
+                        android:id="@+id/threads_label"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:textAppearance="?attr/textAppearanceBodyMedium"
+                        android:text="Parallel connections per file: 8" />
+
+                    <com.google.android.material.slider.Slider
+                        android:id="@+id/threads"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:valueFrom="0"
+                        android:valueTo="4"
+                        android:stepSize="1"
+                        android:value="3"
+                        app:labelBehavior="floating"
+                        app:tickVisible="true" />
+
+                    <!-- ===== Received files ===== -->
+                    <TextView style="@style/ClipSync.SectionTitle" android:text="Received files" />
+
+                    <com.google.android.material.textfield.TextInputLayout
+                        android:id="@+id/path_layout"
+                        style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:hint="Path"
+                        app:helperText="Under Download/ or Documents/ on internal storage; doubles as the transfer cache">
+
+                        <com.google.android.material.textfield.TextInputEditText
+                            android:id="@+id/path"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:inputType="textUri"
+                            android:singleLine="true" />
+                    </com.google.android.material.textfield.TextInputLayout>
+
+                    <com.google.android.material.textfield.TextInputLayout
+                        android:id="@+id/keep_hours_layout"
+                        style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:hint="Keep unused for (hours, 0 = forever)">
+
+                        <com.google.android.material.textfield.TextInputEditText
+                            android:id="@+id/keep_hours"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:inputType="number"
+                            android:singleLine="true" />
+                    </com.google.android.material.textfield.TextInputLayout>
+
+                    <com.google.android.material.textfield.TextInputLayout
+                        android:id="@+id/keep_mb_layout"
+                        style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:layout_marginBottom="16dp"
+                        android:hint="Keep at most (MB, 0 = unlimited)">
+
+                        <com.google.android.material.textfield.TextInputEditText
+                            android:id="@+id/keep_mb"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:inputType="number"
                             android:singleLine="true" />
                     </com.google.android.material.textfield.TextInputLayout>
                 </LinearLayout>
+            </androidx.core.widget.NestedScrollView>
 
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="horizontal"
-                    android:layout_marginTop="8dp">
+            <!-- ---------- Log ---------- -->
+            <LinearLayout
+                android:id="@+id/page_log"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:orientation="vertical"
+                android:visibility="gone">
 
-                    <com.google.android.material.textfield.TextInputLayout
-                        android:id="@+id/port_layout"
-                        style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
-                        android:layout_width="0dp"
-                        android:layout_weight="1"
-                        android:layout_height="wrap_content"
-                        android:hint="Port">
-
-                        <com.google.android.material.textfield.TextInputEditText
-                            android:id="@+id/port"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:inputType="number"
-                            android:singleLine="true" />
-                    </com.google.android.material.textfield.TextInputLayout>
-
-                    <com.google.android.material.textfield.TextInputLayout
-                        android:id="@+id/psk_layout"
-                        style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
-                        android:layout_width="0dp"
-                        android:layout_weight="2"
-                        android:layout_height="wrap_content"
-                        android:layout_marginStart="8dp"
-                        android:hint="PSK (64 hex chars)"
-                        app:endIconMode="password_toggle">
-
-                        <com.google.android.material.textfield.TextInputEditText
-                            android:id="@+id/psk"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:fontFamily="monospace"
-                            android:inputType="textPassword|textNoSuggestions"
-                            android:singleLine="true" />
-                    </com.google.android.material.textfield.TextInputLayout>
-                </LinearLayout>
-
-                <!-- ===== Transfer limits ===== -->
-                <TextView style="@style/ClipSync.SectionTitle" android:text="Transfer limits" />
-
-                <com.google.android.material.textfield.TextInputLayout
-                    android:id="@+id/text_kb_layout"
-                    style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:hint="Text (KB)">
-
-                    <com.google.android.material.textfield.TextInputEditText
-                        android:id="@+id/text_kb"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:inputType="number"
-                        android:singleLine="true" />
-                </com.google.android.material.textfield.TextInputLayout>
-
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="horizontal"
-                    android:layout_marginTop="8dp">
-
-                    <com.google.android.material.textfield.TextInputLayout
-                        android:id="@+id/file_mb_layout"
-                        style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
-                        android:layout_width="0dp"
-                        android:layout_weight="1"
-                        android:layout_height="wrap_content"
-                        android:hint="File (MB)">
-
-                        <com.google.android.material.textfield.TextInputEditText
-                            android:id="@+id/file_mb"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:inputType="number"
-                            android:singleLine="true" />
-                    </com.google.android.material.textfield.TextInputLayout>
-
-                    <com.google.android.material.textfield.TextInputLayout
-                        android:id="@+id/file_mb_local_layout"
-                        style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
-                        android:layout_width="0dp"
-                        android:layout_weight="1"
-                        android:layout_height="wrap_content"
-                        android:layout_marginStart="8dp"
-                        android:hint="File on LAN (MB)">
-
-                        <com.google.android.material.textfield.TextInputEditText
-                            android:id="@+id/file_mb_local"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:inputType="number"
-                            android:singleLine="true" />
-                    </com.google.android.material.textfield.TextInputLayout>
-                </LinearLayout>
-
-                <TextView
-                    android:id="@+id/threads_label"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="12dp"
-                    android:textAppearance="?attr/textAppearanceBodyMedium"
-                    android:text="Parallel connections per file: 8" />
-
-                <com.google.android.material.slider.Slider
-                    android:id="@+id/threads"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:valueFrom="0"
-                    android:valueTo="4"
-                    android:stepSize="1"
-                    android:value="3"
-                    app:labelBehavior="floating"
-                    app:tickVisible="true" />
-
-                <!-- ===== Received files ===== -->
-                <TextView style="@style/ClipSync.SectionTitle" android:text="Received files" />
-
-                <com.google.android.material.textfield.TextInputLayout
-                    android:id="@+id/path_layout"
-                    style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:hint="Path"
-                    app:helperText="Under Download/ or Documents/ on internal storage; doubles as the transfer cache">
-
-                    <com.google.android.material.textfield.TextInputEditText
-                        android:id="@+id/path"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:inputType="textUri"
-                        android:singleLine="true" />
-                </com.google.android.material.textfield.TextInputLayout>
-
-                <com.google.android.material.textfield.TextInputLayout
-                    android:id="@+id/keep_hours_layout"
-                    style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:hint="Keep unused for (hours, 0 = forever)">
-
-                    <com.google.android.material.textfield.TextInputEditText
-                        android:id="@+id/keep_hours"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:inputType="number"
-                        android:singleLine="true" />
-                </com.google.android.material.textfield.TextInputLayout>
-
-                <com.google.android.material.textfield.TextInputLayout
-                    android:id="@+id/keep_mb_layout"
-                    style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:hint="Keep at most (MB, 0 = unlimited)">
-
-                    <com.google.android.material.textfield.TextInputEditText
-                        android:id="@+id/keep_mb"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:inputType="number"
-                        android:singleLine="true" />
-                </com.google.android.material.textfield.TextInputLayout>
-
-                <!-- ===== actions ===== -->
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="horizontal"
                     android:gravity="end"
-                    android:layout_marginTop="16dp"
-                    android:layout_marginBottom="8dp">
+                    android:paddingHorizontal="8dp">
 
                     <com.google.android.material.button.MaterialButton
-                        android:id="@+id/stop"
-                        style="?attr/materialButtonOutlinedStyle"
+                        android:id="@+id/log_copy"
+                        style="?attr/borderlessButtonStyle"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="Stop" />
+                        android:text="Copy" />
 
                     <com.google.android.material.button.MaterialButton
-                        android:id="@+id/apply"
+                        android:id="@+id/log_clear"
+                        style="?attr/borderlessButtonStyle"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_marginStart="8dp"
-                        android:text="Apply &amp; restart" />
+                        android:text="Clear" />
                 </LinearLayout>
-            </LinearLayout>
-        </androidx.core.widget.NestedScrollView>
 
-        <!-- ================= page: Log ================= -->
-        <LinearLayout
-            android:id="@+id/page_log"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:orientation="vertical"
-            android:visibility="gone">
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:gravity="end"
-                android:paddingHorizontal="8dp">
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/log_copy"
-                    style="?attr/borderlessButtonStyle"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Copy" />
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/log_clear"
-                    style="?attr/borderlessButtonStyle"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Clear" />
-            </LinearLayout>
-
-            <androidx.core.widget.NestedScrollView
-                android:id="@+id/log_scroll"
-                android:layout_width="match_parent"
-                android:layout_height="0dp"
-                android:layout_weight="1"
-                android:background="?attr/colorSurfaceContainer"
-                android:clipToPadding="false"
-                android:paddingBottom="72dp"
-                android:scrollbars="vertical">
-
-                <TextView
-                    android:id="@+id/log"
+                <androidx.core.widget.NestedScrollView
+                    android:id="@+id/log_scroll"
                     android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:padding="12dp"
-                    android:fontFamily="monospace"
-                    android:textIsSelectable="true"
-                    android:textSize="11sp"
-                    android:textColor="?attr/colorOnSurface" />
-            </androidx.core.widget.NestedScrollView>
-        </LinearLayout>
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
+                    android:background="?attr/colorSurfaceContainer"
+                    android:clipToPadding="false"
+                    android:paddingBottom="80dp"
+                    android:scrollbars="vertical">
 
-        <!-- ================= status pill (both pages) ================= -->
-        <com.google.android.material.card.MaterialCardView
-            android:id="@+id/status_pill"
-            style="?attr/materialCardViewElevatedStyle"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_gravity="bottom|start"
-            android:layout_margin="16dp"
-            app:cardCornerRadius="24dp"
-            app:cardBackgroundColor="?attr/colorSecondaryContainer">
+                    <TextView
+                        android:id="@+id/log"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:padding="12dp"
+                        android:fontFamily="monospace"
+                        android:textIsSelectable="true"
+                        android:textSize="11sp"
+                        android:textColor="?attr/colorOnSurface" />
+                </androidx.core.widget.NestedScrollView>
+            </LinearLayout>
 
-            <LinearLayout
+            <!-- ---------- status pill (both pages) ---------- -->
+            <com.google.android.material.card.MaterialCardView
+                android:id="@+id/status_pill"
+                style="?attr/materialCardViewElevatedStyle"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:gravity="center_vertical"
-                android:paddingStart="14dp"
-                android:paddingEnd="16dp"
-                android:paddingVertical="10dp">
-
-                <FrameLayout
-                    android:layout_width="14dp"
-                    android:layout_height="14dp">
-
-                    <!-- halo: pulses while connected -->
-                    <View
-                        android:id="@+id/status_halo"
-                        android:layout_width="14dp"
-                        android:layout_height="14dp"
-                        android:background="@drawable/status_dot"
-                        android:alpha="0.35" />
-
-                    <View
-                        android:id="@+id/status_dot"
-                        android:layout_width="10dp"
-                        android:layout_height="10dp"
-                        android:layout_gravity="center"
-                        android:background="@drawable/status_dot" />
-                </FrameLayout>
+                android:layout_gravity="bottom|start"
+                android:layout_margin="16dp"
+                app:cardCornerRadius="24dp"
+                app:cardBackgroundColor="?attr/colorSecondaryContainer">
 
                 <LinearLayout
+                    android:id="@+id/status_inner"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:orientation="vertical"
-                    android:layout_marginStart="10dp">
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:paddingStart="14dp"
+                    android:paddingEnd="14dp"
+                    android:paddingVertical="10dp">
 
-                    <TextView
-                        android:id="@+id/status_title"
+                    <FrameLayout
+                        android:layout_width="14dp"
+                        android:layout_height="14dp">
+
+                        <View
+                            android:id="@+id/status_halo"
+                            android:layout_width="14dp"
+                            android:layout_height="14dp"
+                            android:background="@drawable/status_dot"
+                            android:alpha="0.35" />
+
+                        <View
+                            android:id="@+id/status_dot"
+                            android:layout_width="10dp"
+                            android:layout_height="10dp"
+                            android:layout_gravity="center"
+                            android:background="@drawable/status_dot" />
+                    </FrameLayout>
+
+                    <LinearLayout
+                        android:id="@+id/status_text"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:textAppearance="?attr/textAppearanceLabelLarge"
-                        android:textColor="?attr/colorOnSecondaryContainer"
-                        android:text="Stopped" />
+                        android:orientation="vertical"
+                        android:layout_marginStart="10dp">
 
-                    <TextView
-                        android:id="@+id/status_detail"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:textAppearance="?attr/textAppearanceBodySmall"
-                        android:textColor="?attr/colorOnSecondaryContainer"
-                        android:fontFamily="monospace"
-                        android:maxWidth="260dp"
-                        android:singleLine="true"
-                        android:ellipsize="middle"
-                        android:visibility="gone" />
+                        <TextView
+                            android:id="@+id/status_title"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:textAppearance="?attr/textAppearanceLabelLarge"
+                            android:textColor="?attr/colorOnSecondaryContainer"
+                            android:singleLine="true"
+                            android:text="Stopped" />
+
+                        <TextView
+                            android:id="@+id/status_detail"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:textAppearance="?attr/textAppearanceBodySmall"
+                            android:textColor="?attr/colorOnSecondaryContainer"
+                            android:fontFamily="monospace"
+                            android:maxWidth="260dp"
+                            android:singleLine="true"
+                            android:ellipsize="middle"
+                            android:visibility="gone" />
+                    </LinearLayout>
                 </LinearLayout>
-            </LinearLayout>
-        </com.google.android.material.card.MaterialCardView>
-    </FrameLayout>
+            </com.google.android.material.card.MaterialCardView>
+        </FrameLayout>
+    </androidx.coordinatorlayout.widget.CoordinatorLayout>
 
     <com.google.android.material.bottomnavigation.BottomNavigationView
         android:id="@+id/nav"
