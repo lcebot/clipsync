@@ -63,7 +63,7 @@
             android:layout_height="match_parent"
             app:layout_behavior="@string/appbar_scrolling_view_behavior">
 
-            <!-- ---------- Settings ---------- -->
+            <!-- ===== page: Settings ===== -->
             <androidx.core.widget.NestedScrollView
                 android:id="@+id/page_settings"
                 android:layout_width="match_parent"
@@ -368,7 +368,7 @@
                 </LinearLayout>
             </androidx.core.widget.NestedScrollView>
 
-            <!-- ---------- Log ---------- -->
+            <!-- ===== page: Log ===== -->
             <LinearLayout
                 android:id="@+id/page_log"
                 android:layout_width="match_parent"
@@ -420,7 +420,7 @@
                 </androidx.core.widget.NestedScrollView>
             </LinearLayout>
 
-            <!-- ---------- status pill (both pages) ---------- -->
+            <!-- ===== status pill (both pages) ===== -->
             <com.google.android.material.card.MaterialCardView
                 android:id="@+id/status_pill"
                 style="?attr/materialCardViewElevatedStyle"
