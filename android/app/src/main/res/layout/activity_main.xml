@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
@@ -11,59 +12,62 @@
         android:layout_height="0dp"
         android:layout_weight="1">
 
-        <!-- ===== header: title + Stop / Apply, shrinks on scroll (text on the buttons goes away) ===== -->
+        <!-- ===== M3 "medium" collapsing top app bar: title scaling, insets and lift-on-scroll are
+             the component's own. The two actions live in the toolbar's trailing area; their
+             text -> icon morph is the one custom touch (driven by the app bar offset). ===== -->
         <com.google.android.material.appbar.AppBarLayout
             android:id="@+id/appbar"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            app:liftOnScroll="true">
+            app:liftOnScroll="true"
+            app:liftOnScrollTargetViewId="@+id/page_settings">
 
-            <!-- 96dp expanded, 56dp collapsed. The content row is pinned to the BOTTOM 56dp so it
-                 is exactly what remains visible once the top 40dp scrolled away. -->
-            <FrameLayout
-                android:id="@+id/header"
+            <com.google.android.material.appbar.CollapsingToolbarLayout
+                android:id="@+id/collapsing"
+                style="?attr/collapsingToolbarLayoutMediumStyle"
                 android:layout_width="match_parent"
-                android:layout_height="96dp"
-                android:minHeight="56dp"
-                app:layout_scrollFlags="scroll|exitUntilCollapsed|snap">
+                android:layout_height="?attr/collapsingToolbarLayoutMediumSize"
+                app:layout_scrollFlags="scroll|exitUntilCollapsed|snap"
+                app:titleCollapseMode="scale"
+                app:title="@string/app_name">
 
-                <LinearLayout
-                    android:id="@+id/header_row"
+                <com.google.android.material.appbar.MaterialToolbar
+                    android:id="@+id/toolbar"
                     android:layout_width="match_parent"
-                    android:layout_height="56dp"
-                    android:layout_gravity="bottom"
-                    android:orientation="horizontal"
-                    android:gravity="center_vertical"
-                    android:paddingStart="16dp"
-                    android:paddingEnd="8dp">
+                    android:layout_height="?attr/actionBarSize"
+                    app:layout_collapseMode="pin"
+                    app:contentInsetEnd="0dp">
 
-                    <TextView
-                        android:id="@+id/title"
-                        android:layout_width="0dp"
-                        android:layout_weight="1"
-                        android:layout_height="wrap_content"
-                        android:textAppearance="?attr/textAppearanceHeadlineMedium"
-                        android:textColor="?attr/colorOnSurface"
-                        android:transformPivotX="0dp"
-                        android:text="@string/app_name" />
-
-                    <com.google.android.material.button.MaterialButton
-                        android:id="@+id/stop"
-                        style="?attr/materialButtonOutlinedStyle"
+                    <!-- trailing actions: 16dp to the edge (layout margin), 8dp between them
+                         expanded, widened to 12dp as they turn into 40dp circles -->
+                    <LinearLayout
+                        android:id="@+id/actions"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        app:icon="@drawable/ic_stop"
-                        android:text="Stop" />
+                        android:layout_gravity="end|center_vertical"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical"
+                        android:paddingEnd="16dp"
+                        android:paddingStart="0dp">
 
-                    <com.google.android.material.button.MaterialButton
-                        android:id="@+id/apply"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginStart="8dp"
-                        app:icon="@drawable/ic_restart"
-                        android:text="Apply" />
-                </LinearLayout>
-            </FrameLayout>
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/stop"
+                            style="?attr/materialButtonOutlinedStyle"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            app:icon="@drawable/ic_stop"
+                            android:text="@string/action_stop" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/apply"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="8dp"
+                            app:icon="@drawable/ic_restart"
+                            android:text="@string/action_apply" />
+                    </LinearLayout>
+                </com.google.android.material.appbar.MaterialToolbar>
+            </com.google.android.material.appbar.CollapsingToolbarLayout>
         </com.google.android.material.appbar.AppBarLayout>
 
         <!-- ===== pages ===== -->
@@ -112,19 +116,19 @@
                                 android:paddingVertical="8dp"
                                 android:textAppearance="?attr/textAppearanceBodySmall"
                                 android:textColor="?attr/colorOnErrorContainer"
-                                android:text="Battery optimisation is on" />
+                                android:text="@string/battery_on" />
 
                             <com.google.android.material.button.MaterialButton
                                 android:id="@+id/battery_fix"
                                 style="?attr/borderlessButtonStyle"
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
-                                android:text="Allow" />
+                                android:text="@string/battery_allow" />
                         </LinearLayout>
                     </com.google.android.material.card.MaterialCardView>
 
                     <!-- ===== Connection ===== -->
-                    <TextView style="@style/ClipSync.SectionTitle" android:text="Connection" />
+                    <TextView style="@style/ClipSync.SectionTitle" android:text="@string/section_connection" />
 
                     <com.google.android.material.button.MaterialButtonToggleGroup
                         android:id="@+id/mode"
@@ -139,17 +143,17 @@
                         <com.google.android.material.button.MaterialButton
                             android:id="@+id/mode_both"
                             style="@style/ClipSync.Segment"
-                            android:text="Both" />
+                            android:text="@string/mode_both" />
 
                         <com.google.android.material.button.MaterialButton
                             android:id="@+id/mode_ddns"
                             style="@style/ClipSync.Segment"
-                            android:text="DDNS only" />
+                            android:text="@string/mode_ddns" />
 
                         <com.google.android.material.button.MaterialButton
                             android:id="@+id/mode_mdns"
                             style="@style/ClipSync.Segment"
-                            android:text="mDNS only" />
+                            android:text="@string/mode_mdns" />
                     </com.google.android.material.button.MaterialButtonToggleGroup>
 
                     <LinearLayout
@@ -164,7 +168,7 @@
                             android:layout_width="0dp"
                             android:layout_weight="1"
                             android:layout_height="wrap_content"
-                            android:hint="Port">
+                            android:hint="@string/hint_port">
 
                             <com.google.android.material.textfield.TextInputEditText
                                 android:id="@+id/port"
@@ -181,7 +185,7 @@
                             android:layout_weight="2"
                             android:layout_height="wrap_content"
                             android:layout_marginStart="8dp"
-                            android:hint="PSK key (64 hex)"
+                            android:hint="@string/hint_psk"
                             app:endIconMode="password_toggle">
 
                             <com.google.android.material.textfield.TextInputEditText
@@ -201,7 +205,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="8dp"
-                        android:hint="DDNS name">
+                        android:hint="@string/hint_host">
 
                         <com.google.android.material.textfield.TextInputEditText
                             android:id="@+id/host"
@@ -224,7 +228,7 @@
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:textAppearance="?attr/textAppearanceBodyMedium"
-                            android:text="mDNS browse: 4000 ms" />
+                            tools:text="mDNS browse: 4000 ms" />
 
                         <com.google.android.material.slider.Slider
                             android:id="@+id/browse"
@@ -239,14 +243,14 @@
                     </LinearLayout>
 
                     <!-- ===== Transfer limits ===== -->
-                    <TextView style="@style/ClipSync.SectionTitle" android:text="Transfer limits" />
+                    <TextView style="@style/ClipSync.SectionTitle" android:text="@string/section_limits" />
 
                     <com.google.android.material.textfield.TextInputLayout
                         android:id="@+id/text_kb_layout"
                         style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:hint="Text (KB)">
+                        android:hint="@string/hint_text_kb">
 
                         <com.google.android.material.textfield.TextInputEditText
                             android:id="@+id/text_kb"
@@ -268,7 +272,7 @@
                             android:layout_width="0dp"
                             android:layout_weight="1"
                             android:layout_height="wrap_content"
-                            android:hint="File (MB)">
+                            android:hint="@string/hint_file_mb">
 
                             <com.google.android.material.textfield.TextInputEditText
                                 android:id="@+id/file_mb"
@@ -285,7 +289,7 @@
                             android:layout_weight="1"
                             android:layout_height="wrap_content"
                             android:layout_marginStart="8dp"
-                            android:hint="File on LAN (MB)">
+                            android:hint="@string/hint_file_mb_local">
 
                             <com.google.android.material.textfield.TextInputEditText
                                 android:id="@+id/file_mb_local"
@@ -302,7 +306,7 @@
                         android:layout_height="wrap_content"
                         android:layout_marginTop="12dp"
                         android:textAppearance="?attr/textAppearanceBodyMedium"
-                        android:text="Parallel connections per file: 8" />
+                        tools:text="Parallel connections per file: 8" />
 
                     <com.google.android.material.slider.Slider
                         android:id="@+id/threads"
@@ -316,15 +320,15 @@
                         app:tickVisible="true" />
 
                     <!-- ===== Received files ===== -->
-                    <TextView style="@style/ClipSync.SectionTitle" android:text="Received files" />
+                    <TextView style="@style/ClipSync.SectionTitle" android:text="@string/section_files" />
 
                     <com.google.android.material.textfield.TextInputLayout
                         android:id="@+id/path_layout"
                         style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:hint="Path"
-                        app:helperText="Under Download/ or Documents/ on internal storage; doubles as the transfer cache">
+                        android:hint="@string/hint_path"
+                        app:helperText="@string/helper_path">
 
                         <com.google.android.material.textfield.TextInputEditText
                             android:id="@+id/path"
@@ -340,7 +344,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="8dp"
-                        android:hint="Keep unused for (hours, 0 = forever)">
+                        android:hint="@string/hint_keep_hours">
 
                         <com.google.android.material.textfield.TextInputEditText
                             android:id="@+id/keep_hours"
@@ -357,7 +361,7 @@
                         android:layout_height="wrap_content"
                         android:layout_marginTop="8dp"
                         android:layout_marginBottom="16dp"
-                        android:hint="Keep at most (MB, 0 = unlimited)">
+                        android:hint="@string/hint_keep_mb">
 
                         <com.google.android.material.textfield.TextInputEditText
                             android:id="@+id/keep_mb"
@@ -389,14 +393,14 @@
                         style="?attr/borderlessButtonStyle"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="Copy" />
+                        android:text="@string/log_copy" />
 
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/log_clear"
                         style="?attr/borderlessButtonStyle"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="Clear" />
+                        android:text="@string/log_clear" />
                 </LinearLayout>
 
                 <androidx.core.widget.NestedScrollView
@@ -480,7 +484,7 @@
                         android:textAppearance="?attr/textAppearanceTitleMedium"
                         android:textColor="?attr/colorOnSecondaryContainer"
                         android:singleLine="true"
-                        android:text="Stopped" />
+                        android:text="@string/state_stopped" />
 
                     <TextView
                         android:id="@+id/status_host"

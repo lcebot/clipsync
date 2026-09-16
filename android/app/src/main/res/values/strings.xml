@@ -1,5 +1,65 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">ClipSync</string>
-    <string name="app_desc">Sync clipboard with a Windows PC over IPv6. Scope: System Framework.</string>
+    <string name="app_desc">Sync clipboard, images and files with a Windows PC. Scope: System Framework.</string>
+
+    <!-- header actions -->
+    <string name="action_stop">Stop</string>
+    <string name="action_apply">Apply</string>
+
+    <!-- navigation -->
+    <string name="nav_settings">Settings</string>
+    <string name="nav_log">Log</string>
+
+    <!-- battery card -->
+    <string name="battery_on">Battery optimisation is on: the system may freeze ClipSync in the background (nothing is copied or received until you reopen it).</string>
+    <string name="battery_still_frozen">The system still froze ClipSync in the background. Check the log for "root keep-alive" and "hooked" (LSPosed); on this ROM also allow autostart / no background restrictions and lock ClipSync in Recents.</string>
+    <string name="battery_allow">Allow</string>
+
+    <!-- connection -->
+    <string name="section_connection">Connection</string>
+    <string name="mode_both">Both</string>
+    <string name="mode_ddns">DDNS only</string>
+    <string name="mode_mdns">mDNS only</string>
+    <string name="hint_port">Port</string>
+    <string name="hint_psk">PSK key (64 hex)</string>
+    <string name="hint_host">DDNS name</string>
+    <string name="browse_label">mDNS browse: %1$d ms</string>
+
+    <!-- transfer limits -->
+    <string name="section_limits">Transfer limits</string>
+    <string name="hint_text_kb">Text (KB)</string>
+    <string name="hint_file_mb">File (MB)</string>
+    <string name="hint_file_mb_local">File on LAN (MB)</string>
+    <string name="threads_label">Parallel connections per file: %1$d</string>
+
+    <!-- received files -->
+    <string name="section_files">Received files</string>
+    <string name="hint_path">Path</string>
+    <string name="helper_path">Under Download/ or Documents/ on internal storage; doubles as the transfer cache</string>
+    <string name="hint_keep_hours">Keep unused for (hours, 0 = forever)</string>
+    <string name="hint_keep_mb">Keep at most (MB, 0 = unlimited)</string>
+
+    <!-- log page -->
+    <string name="log_copy">Copy</string>
+    <string name="log_clear">Clear</string>
+
+    <!-- status pill -->
+    <string name="state_stopped">Stopped</string>
+    <string name="state_connecting">Connecting…</string>
+    <string name="state_disconnected">Disconnected</string>
+    <string name="state_no_network">No network</string>
+    <string name="state_idle">Idle</string>
+    <string name="state_not_running">not running — restarting</string>
+    <string name="state_autostart_off">auto-start off</string>
+    <string name="kind_mdns">mDNS</string>
+    <string name="kind_ddns">DDNS (%1$s)</string>
+    <string name="link_lan">LAN</string>
+    <string name="link_internet">Internet</string>
+
+    <!-- snackbars -->
+    <string name="snack_stopped">Service stopped (auto-start off until Apply)</string>
+    <string name="snack_applied">Saved and applied</string>
+    <string name="snack_log_copied">Log copied</string>
+    <string name="snack_save_failed">Save failed: %1$s</string>
 </resources>

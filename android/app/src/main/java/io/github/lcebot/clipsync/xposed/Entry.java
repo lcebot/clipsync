@@ -19,10 +19,10 @@ import io.github.libxposed.api.XposedModuleInterface;
  * "system"). See {@link Common} for what the hooks do. {@link LegacyEntry} is the same set for
  * the classic API and is kept as reference / fallback, without an entry declaration.
  *
- * <p>system_server is AOT-compiled; the small private methods we hook
- * ({@code clipboardAccessAllowed}, {@code setPrimaryClipInternalLocked}) are inlined into their
- * callers, where a hook on the callee never runs. Every caller is therefore deoptimized first
- * (small classes, one-off cost).
+ * <p>Hooks are kept to the minimum: only the overloads whose signature we actually rely on are
+ * intercepted (package name at the expected argument index), every interceptor is a couple of
+ * comparisons, and nothing is deoptimized — LSPosed's hooking already takes care of inlined
+ * callees on the releases this targets.
  */
 public class Entry extends XposedModule {
 
@@ -44,25 +44,9 @@ public class Entry extends XposedModule {
         install(param.getClassLoader());
     }
 
-    private void deoptAll(Class<?> c, List<String> report) {
-        int n = 0;
-        for (Method m : c.getDeclaredMethods()) {
-            if (Modifier.isAbstract(m.getModifiers()) || Modifier.isNative(m.getModifiers())) continue;
-            try { deoptimize(m); n++; } catch (Throwable ignored) { }
-        }
-        for (Constructor<?> k : c.getDeclaredConstructors()) {
-            try { deoptimize(k); n++; } catch (Throwable ignored) { }
-        }
-        report.add("deopt " + c.getSimpleName() + " ×" + n);
-    }
-
-    private void deoptNamed(Class<?> c, String prefix, List<String> report) {
-        int n = 0;
-        for (Method m : c.getDeclaredMethods()) {
-            if (!m.getName().startsWith(prefix)) continue;
-            try { deoptimize(m); n++; } catch (Throwable ignored) { }
-        }
-        if (n > 0) report.add("deopt " + c.getSimpleName() + "." + prefix + "* ×" + n);
+    /** Parameter {@code i} of {@code m} is a String — the overload shape our interceptors assume. */
+    private static boolean stringAt(Method m, int i) {
+        return m.getParameterCount() > i && m.getParameterTypes()[i] == String.class;
     }
 
     private void install(ClassLoader cl) {
@@ -72,16 +56,16 @@ public class Entry extends XposedModule {
         // ---- clipboard
         try {
             Class<?> svc = cl.loadClass(Common.CLIP_SVC);
-            deoptAll(svc, hooked);                                     // callers of the two hooked methods
-            for (Class<?> inner : svc.getDeclaredClasses()) deoptAll(inner, hooked);   // ClipboardImpl (binder stub)
             for (Method m : svc.getDeclaredMethods()) {
                 switch (m.getName()) {
                     case "clipboardAccessAllowed" -> {
+                        if (!stringAt(m, 1)) continue;                 // (int op, String callingPackage, …)
                         hook(m).setId("access").setExceptionMode(ExceptionMode.PROTECTIVE)
                                 .intercept(chain -> Common.PKG.equals(chain.getArg(1)) ? Boolean.TRUE : chain.proceed());
                         hooked.add("clipboardAccessAllowed");
                     }
                     case "showAccessNotificationLocked" -> {
+                        if (!stringAt(m, 0)) continue;                 // (String callingPackage, …)
                         // void on 12–14, boolean ("shown?") on 15: returning null there NPEs inside
                         // system_server and every getPrimaryClip() of ours fails with RemoteException
                         final Object skip = m.getReturnType() == boolean.class ? Boolean.FALSE : null;
@@ -112,10 +96,6 @@ public class Entry extends XposedModule {
         // ---- keep-alive
         try {
             Class<?> pr = cl.loadClass("com.android.server.am.ProcessRecord");
-            try {
-                deoptNamed(cl.loadClass("com.android.server.am.ProcessList"), "newProcessRecord", hooked);   // the constructor's caller
-            } catch (Throwable ignored) {
-            }
             for (Constructor<?> c : pr.getDeclaredConstructors()) {
                 hook(c).setId("pr").setExceptionMode(ExceptionMode.PROTECTIVE)
                         .intercept(chain -> {
@@ -145,8 +125,6 @@ public class Entry extends XposedModule {
         int died = 0;
         try {
             Class<?> ams = cl.loadClass("com.android.server.am.ActivityManagerService");
-            deoptNamed(ams, "appDiedLocked", hooked);
-            deoptNamed(ams, "handleAppDiedLocked", hooked);
             for (Method m : ams.getDeclaredMethods()) {
                 String n = m.getName();
                 if (!(n.equals("handleAppDiedLocked") || n.equals("appDiedLocked")) || m.getParameterCount() < 1

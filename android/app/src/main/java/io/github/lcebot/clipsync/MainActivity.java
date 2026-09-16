@@ -61,8 +61,7 @@ public class MainActivity extends AppCompatActivity {
     private TextView browseLabel, threadsLabel;
     private ViewGroup settingsRoot;
     // header
-    private View title;
-    private ViewGroup headerRow;
+    private AppBarLayout appbar;
     private MaterialButton stopBtn, applyBtn;
     // pages / log
     private View pageSettings, pageLog, batteryRow, batteryFix;
@@ -136,8 +135,7 @@ public class MainActivity extends AppCompatActivity {
         threads = findViewById(R.id.threads);
         threadsLabel = findViewById(R.id.threads_label);
         settingsRoot = findViewById(R.id.settings_root);
-        headerRow = findViewById(R.id.header_row);
-        title = findViewById(R.id.title);
+        appbar = findViewById(R.id.appbar);
         stopBtn = findViewById(R.id.stop);
         applyBtn = findViewById(R.id.apply);
         pageSettings = findViewById(R.id.page_settings);
@@ -173,10 +171,10 @@ public class MainActivity extends AppCompatActivity {
         keepMb.setText(String.valueOf(longOf(p, "keep_max_mb", 256)));
         int t = Config.snapThreads((int) longOf(p, "threads", 8));
         threads.setValue(indexOf(Config.THREAD_STEPS, t));
-        threadsLabel.setText("Parallel connections per file: " + t);
+        threadsLabel.setText(getString(R.string.threads_label, t));
         int b = Config.snapBrowse((int) longOf(p, "mdns_timeout_ms", 4000));
         browse.setValue(indexOf(Config.BROWSE_STEPS_MS, b));
-        browseLabel.setText("mDNS browse: " + b + " ms");
+        browseLabel.setText(getString(R.string.browse_label, b));
         applyMode(false);
     }
 
@@ -263,21 +261,21 @@ public class MainActivity extends AppCompatActivity {
             e.addTextChangedListener(revalidate);
         mode.addOnButtonCheckedListener((g, id, checked) -> { if (checked) { applyMode(true); validate(); } });
         threads.setLabelFormatter(v -> String.valueOf(Config.THREAD_STEPS[Math.max(0, Math.min(4, Math.round(v)))]));
-        threads.addOnChangeListener((s, v, u) -> threadsLabel.setText("Parallel connections per file: " + threadsValue()));
+        threads.addOnChangeListener((s, v, u) -> threadsLabel.setText(getString(R.string.threads_label, threadsValue())));
         browse.setLabelFormatter(v -> Config.BROWSE_STEPS_MS[Math.max(0, Math.min(6, Math.round(v)))] + " ms");
-        browse.addOnChangeListener((s, v, u) -> browseLabel.setText("mDNS browse: " + browseValue() + " ms"));
+        browse.addOnChangeListener((s, v, u) -> browseLabel.setText(getString(R.string.browse_label, browseValue())));
 
         applyBtn.setOnClickListener(v -> apply());
         stopBtn.setOnClickListener(v -> {
             setAutoStart(false);                       // watchdog / boot must not bring it back
             stopService(new Intent(this, SyncService.class));
-            Snackbar.make(statusPill, "Service stopped (auto-start off until Apply)", Snackbar.LENGTH_SHORT).show();
+            Snackbar.make(statusPill, R.string.snack_stopped, Snackbar.LENGTH_SHORT).show();
             ui.postDelayed(this::refreshStatus, 300);
         });
         findViewById(R.id.log_clear).setOnClickListener(v -> { Logger.clear(); log.setText(""); });
         findViewById(R.id.log_copy).setOnClickListener(v -> {
             getSystemService(ClipboardManager.class).setPrimaryClip(ClipData.newPlainText("clipsync log", log.getText()));
-            Snackbar.make(statusPill, "Log copied", Snackbar.LENGTH_SHORT).show();
+            Snackbar.make(statusPill, R.string.snack_log_copied, Snackbar.LENGTH_SHORT).show();
         });
         batteryFix.setOnClickListener(v -> {
             Intent i = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).setData(Uri.parse("package:" + getPackageName()));
@@ -289,20 +287,16 @@ public class MainActivity extends AppCompatActivity {
             boolean showLog = item.getItemId() == R.id.nav_log;
             pageSettings.setVisibility(showLog ? View.GONE : View.VISIBLE);
             pageLog.setVisibility(showLog ? View.VISIBLE : View.GONE);
+            appbar.setLiftOnScrollTargetViewId(showLog ? R.id.log_scroll : R.id.page_settings);   // lift follows the visible page
             if (showLog) logScroll.post(() -> logScroll.fullScroll(NestedScrollView.FOCUS_DOWN));
             return true;
         });
         statusPill.setOnClickListener(v -> { if (pillFolded) setPillFolded(false); else nav.setSelectedItemId(R.id.nav_log); });
 
-        // header: shrink title, drop button labels once more than half collapsed
-        AppBarLayout appbar = findViewById(R.id.appbar);
+        // header: the CollapsingToolbarLayout scales the title itself; we only morph the actions
         appbar.addOnOffsetChangedListener((bar, offset) -> {
             int range = Math.max(1, bar.getTotalScrollRange());
-            float f = Math.min(1f, -offset / (float) range);
-            float scale = 1f - 0.25f * f;                 // headline (28sp) -> ~title (21sp)
-            title.setScaleX(scale);
-            title.setScaleY(scale);
-            morphButtons(f);
+            morphButtons(Math.min(1f, -offset / (float) range));
         });
 
         pulse = ObjectAnimator.ofFloat(statusHalo, View.ALPHA, 0.45f, 0f);
@@ -338,6 +332,10 @@ public class MainActivity extends AppCompatActivity {
             int pad = Math.round(dp(16) + (dp(8) - dp(16)) * t);
             b.setPadding(pad, b.getPaddingTop(), pad, b.getPaddingBottom());
         }
+        // gap between the two actions: 8dp as text buttons, 12dp once they are circles
+        ViewGroup.MarginLayoutParams lp = (ViewGroup.MarginLayoutParams) applyBtn.getLayoutParams();
+        int gap = Math.round(dp(8) + (dp(12) - dp(8)) * t);
+        if (lp.getMarginStart() != gap) { lp.setMarginStart(gap); applyBtn.setLayoutParams(lp); }
     }
 
     private int dp(int v) {
@@ -384,7 +382,7 @@ public class MainActivity extends AppCompatActivity {
         Status.Snapshot s = Status.read(this);
         if (!s.alive() && !"stopped".equals(s.state)) {
             // the service process is gone without saying goodbye (killed); the watchdog restarts it
-            s = new Status.Snapshot("stopped", autoStartEnabled() ? "not running — restarting" : "auto-start off",
+            s = new Status.Snapshot("stopped", getString(autoStartEnabled() ? R.string.state_not_running : R.string.state_autostart_off),
                     null, false, null, null, 0, s.suspended);
         }
         boolean connected = "connected".equals(s.state);
@@ -408,17 +406,18 @@ public class MainActivity extends AppCompatActivity {
         // line 1: kind / state · line 2: peer name · line 3: address (or state detail)
         String titleText, hostText, detailText;
         if (connected) {
-            titleText = "mdns".equals(s.via) ? "mDNS" : "DDNS (" + (s.lan ? "LAN" : "Internet") + ")";
+            titleText = "mdns".equals(s.via) ? getString(R.string.kind_mdns)
+                    : getString(R.string.kind_ddns, getString(s.lan ? R.string.link_lan : R.string.link_internet));
             hostText = s.host;
             detailText = s.addr;
         } else {
-            titleText = switch (s.state) {
-                case "connecting" -> "Connecting…";
-                case "disconnected" -> "Disconnected";
-                case "no network" -> "No network";
-                case "idle" -> "Idle";
-                default -> "Stopped";
-            };
+            titleText = getString(switch (s.state) {
+                case "connecting" -> R.string.state_connecting;
+                case "disconnected" -> R.string.state_disconnected;
+                case "no network" -> R.string.state_no_network;
+                case "idle" -> R.string.state_idle;
+                default -> R.string.state_stopped;
+            });
             hostText = null;
             detailText = s.detail;
         }
@@ -445,9 +444,7 @@ public class MainActivity extends AppCompatActivity {
             batteryRow.setVisibility(View.GONE);
         } else {
             batteryRow.setVisibility(View.VISIBLE);
-            batteryText.setText(exempt
-                    ? "The system still froze ClipSync in the background. Check the log for \"root keep-alive\" and \"hooked\" (LSPosed); on this ROM also allow autostart / no background restrictions and lock ClipSync in Recents."
-                    : "Battery optimisation is on: the system may freeze ClipSync in the background (nothing is copied or received until you reopen it).");
+            batteryText.setText(exempt ? R.string.battery_still_frozen : R.string.battery_on);
             batteryFix.setVisibility(exempt ? View.GONE : View.VISIBLE);
         }
     }
@@ -496,7 +493,7 @@ public class MainActivity extends AppCompatActivity {
             }
             Logger.i("config applied: mode " + c.mode + (c.host.isEmpty() ? "" : ", " + c.host) + ":" + c.port
                     + (c.mdns ? ", browse " + c.mdnsTimeoutMs + " ms" : "") + ", " + c.threads + " streams, files -> " + c.filesDir);
-            Snackbar.make(statusPill, "Saved and applied", Snackbar.LENGTH_SHORT).show();
+            Snackbar.make(statusPill, R.string.snack_applied, Snackbar.LENGTH_SHORT).show();
         } catch (IllegalArgumentException e) {
             // should not happen (live validation), but map it back to a field anyway
             String msg = e.getMessage() == null ? "invalid value" : e.getMessage();
@@ -510,7 +507,7 @@ public class MainActivity extends AppCompatActivity {
             target.setError(msg.substring(key.length() + 1).trim());
             target.requestFocus();
         } catch (Exception e) {
-            Snackbar.make(statusPill, "Save failed: " + e, Snackbar.LENGTH_LONG).show();
+            Snackbar.make(statusPill, getString(R.string.snack_save_failed, e.toString()), Snackbar.LENGTH_LONG).show();
         }
     }
 
