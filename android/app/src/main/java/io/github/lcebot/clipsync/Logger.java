@@ -38,16 +38,36 @@ public final class Logger {
 
     private Logger() {}
 
+    private static long loadedLen = -1;
+
     /** Idempotent; loads the tail of the on-disk log into the buffer the first time. */
     public static synchronized void init(Context ctx) {
         if (file != null) return;
         file = new File(ctx.getApplicationContext().getFilesDir(), "clipsync.log");
-        if (!file.exists()) return;
+        reload();
+    }
+
+    private static void reload() {
+        lines.clear();
+        loadedLen = file.exists() ? file.length() : 0;
+        if (loadedLen == 0) return;
         try (BufferedReader r = new BufferedReader(new FileReader(file))) {
             String l;
             while ((l = r.readLine()) != null) push(l);
         } catch (IOException ignored) {
         }
+    }
+
+    /**
+     * The service writes the log from its own process (":sync"); the UI polls this to pick up
+     * new lines. Returns true when the file changed and the buffer was reloaded.
+     */
+    public static synchronized boolean refresh() {
+        if (file == null) return false;
+        long len = file.exists() ? file.length() : 0;
+        if (len == loadedLen) return false;
+        reload();
+        return true;
     }
 
     public static void i(String msg) { write("I", msg, null); }
@@ -88,6 +108,7 @@ public final class Logger {
                 w.write(line);
                 w.write('\n');
             }
+            loadedLen = file.length();          // our own append is already in the buffer
         } catch (IOException ignored) {
         }
     }
@@ -104,6 +125,7 @@ public final class Logger {
             //noinspection ResultOfMethodCallIgnored
             new File(file.getPath() + ".1").delete();
         }
+        loadedLen = 0;
     }
 
     public static void addListener(Listener l) { listeners.add(l); }

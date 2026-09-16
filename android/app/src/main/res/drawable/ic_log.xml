@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Material Symbols "receipt_long" (outlined, wght 400) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="?attr/colorControlNormal">
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M6,22 Q4.75,22 3.88,21.13 T3,19 V16 H6 V2 L7.5,3.5 L9,2 l1.5,1.5 L12,2 l1.5,1.5 L15,2 l1.5,1.5 L18,2 l1.5,1.5 L21,2 V19 q0,1.25 -0.88,2.13 T18,22 H6 Z
+M18,20 q0.43,0 0.71,-0.29 Q19,19.43 19,19 V5 H8 V16 h9 v3 q0,0.43 0.29,0.71 T18,20 Z
+M9,9 V7 h6 V9 H9 Z m0,3 V10 h6 v2 H9 Z
+M17,9 Q16.58,9 16.29,8.71 T16,8 Q16,7.57 16.29,7.29 T17,7 t0.71,0.29 T18,8 q0,0.42 -0.29,0.71 T17,9 Z
+m0,3 q-0.43,0 -0.71,-0.29 Q16,11.43 16,11 t0.29,-0.71 T17,10 t0.71,0.29 T18,11 t-0.29,0.71 T17,12 Z
+M6,20 h9 V18 H5 v1 q0,0.43 0.29,0.71 T6,20 Z" />
+</vector>

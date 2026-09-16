@@ -43,14 +43,24 @@ public class SyncService extends Service {
     // The split is kept so Wi-Fi can be tuned independently later.
     private static final long BACKOFF_MIN_MS = 1_000, BACKOFF_MAX_WIFI_MS = 60_000, BACKOFF_MAX_MOBILE_MS = 60_000;
 
-    /** One-line state for MainActivity ("stopped", "connecting…", "connected via …"). */
-    private static volatile String status = "stopped";
-    private static volatile boolean alive = false;
+    // State for the UI lives in files/status.json (the UI runs in another process): see Status.
+    private static volatile boolean suspendedOnce = false;
+    private Object[] last = {"stopped", null, null, false, null, null};
 
-    public static String status() { return status; }
-    public static boolean isAlive() { return alive; }
-
-    private static void setStatus(String s) { status = s; }
+    private void setStatus(String state) { setStatus(state, null); }
+    private void setStatus(String state, String detail) { publish(state, detail, null, false, null, null); }
+    private void setConnected(Connection c) {
+        publish("connected", null, c.via, c.lanPeer, c.peerName, String.valueOf(c.remote).replaceFirst("^[^/]*/", ""));
+    }
+    private void publish(String state, String detail, String via, boolean lan, String host, String addr) {
+        last = new Object[]{state, detail, via, lan, host, addr};
+        Status.write(this, state, detail, via, lan, host, addr, suspendedOnce);
+    }
+    /** Re-write the same state with a fresh timestamp (liveness for the UI). */
+    private void touchStatus() {
+        Object[] l = last;
+        Status.write(this, (String) l[0], (String) l[1], (String) l[2], (Boolean) l[3], (String) l[4], (String) l[5], suspendedOnce);
+    }
 
     private Config cfg;
     private FileCache cache;
@@ -85,12 +95,11 @@ public class SyncService extends Service {
             cfg = Config.load(this);
         } catch (RuntimeException e) {
             Logger.w("invalid config: " + e.getMessage() + " — open the app and fix it");
-            setStatus("stopped (invalid config)");
+            setStatus("stopped", "invalid config");
             stopSelf();
             return;
         }
         started = true;
-        alive = true;
         cache = new FileCache(this);
         clipboard = getSystemService(ClipboardManager.class);
         power = getSystemService(PowerManager.class);
@@ -110,7 +119,11 @@ public class SyncService extends Service {
         worker = new Thread(this::mainLoop, "clipsync-net");
         worker.setDaemon(true);
         worker.start();
-        setStatus("connecting…");
+        setStatus("connecting");
+        // root: whitelist + app-ops + standby bucket, so vendor battery managers leave us alone
+        Thread ka = new Thread(() -> Logger.i(Root.keepAlive(getPackageName())), "clipsync-root");
+        ka.setDaemon(true);
+        ka.start();
         Logger.i("service started, target " + (cfg.host.isEmpty() ? "(none)" : cfg.host + ":" + cfg.port)
                 + (cfg.mdns ? " + mdns" : ""));
     }
@@ -123,7 +136,6 @@ public class SyncService extends Service {
     @Override
     public void onDestroy() {
         running = false;
-        alive = false;
         if (started) {
             clipboard.removePrimaryClipChangedListener(clipListener);
             unregisterReceiver(screenReceiver);
@@ -144,12 +156,17 @@ public class SyncService extends Service {
 
     private void startForegroundQuiet() {
         NotificationManager nm = getSystemService(NotificationManager.class);
-        NotificationChannel ch = new NotificationChannel(CHANNEL, "ClipSync", NotificationManager.IMPORTANCE_MIN);
+        // LOW, not MIN: silent, but the notification stays visible. Some ROMs treat a foreground
+        // service whose notification is collapsed away as freezable in the background.
+        NotificationChannel ch = new NotificationChannel(CHANNEL, "ClipSync", NotificationManager.IMPORTANCE_LOW);
         ch.setShowBadge(false);
         nm.createNotificationChannel(ch);
+        Intent open = new Intent(this, MainActivity.class).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         Notification n = new Notification.Builder(this, CHANNEL)
                 .setSmallIcon(R.drawable.ic_notification)
                 .setContentTitle("ClipSync")
+                .setContentText("Syncing clipboard with the PC")
+                .setContentIntent(android.app.PendingIntent.getActivity(this, 0, open, android.app.PendingIntent.FLAG_IMMUTABLE))
                 .setOngoing(true)
                 .build();
         startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
@@ -422,7 +439,7 @@ public class SyncService extends Service {
         Transfer d = download;
         if (d != null && !d.sha256.equals(sha)) { d.abort(); d.partial.keep(); }
         Files.Partial p = Files.Partial.resume(this, sha);
-        if (p == null) p = Files.Partial.create(this, name, hdr.optString("mime", "application/octet-stream"), size, sha, seq);
+        if (p == null) p = Files.Partial.create(this, cfg.relativePath, name, hdr.optString("mime", "application/octet-stream"), size, sha, seq);
         List<int[]> missing = p.missing();
         c.sendJson(Connection.T_WANT, shaMsg(sha).put("ranges", rangesJson(missing)));
         Logger.i("offer: " + name + " (" + size + " bytes) -> want " + (p.haveCount() == 0 ? "all" : (p.n - p.haveCount()) + "/" + p.n + " chunks (resume)"));
@@ -562,7 +579,8 @@ public class SyncService extends Service {
             // and never try without a network (the callback wakes us when one appears).
             synchronized (lock) {
                 while (running && ((!screenOn && pendingLocal == null) || !hasNetwork)) {
-                    try { lock.wait(); } catch (InterruptedException ignored) {}
+                    try { lock.wait(60_000); } catch (InterruptedException ignored) {}
+                    touchStatus();                       // keep status.json fresh for the UI
                 }
             }
             if (!running) break;
@@ -579,7 +597,7 @@ public class SyncService extends Service {
                 backoff = BACKOFF_MIN_MS;
                 String link = c.lanPeer ? "LAN link, file limit " + cfg.maxFileBytesLocal / (1024 * 1024) + " MB"
                                         : "internet link, file limit " + cfg.maxFileBytes / (1024 * 1024) + " MB";
-                setStatus("connected via " + c.via + " to " + c.peer + " (" + (c.lanPeer ? "LAN" : "internet") + ")");
+                setConnected(c);
                 Logger.i("connected via " + c.via + " to " + c.peer + " (" + link + ")");
                 flushPending(c);
                 if (!screenOn) {
@@ -601,8 +619,19 @@ public class SyncService extends Service {
 
                 Thread pinger = new Thread(() -> {
                     try {
+                        long interval = lan ? PING_WIFI_MS : PING_MOBILE_MS;
                         while (conn == c) {
-                            Thread.sleep(lan ? PING_WIFI_MS : PING_MOBILE_MS);
+                            long before = System.currentTimeMillis();
+                            Thread.sleep(interval);
+                            long gap = System.currentTimeMillis() - before - interval;
+                            if (gap > 20_000) {
+                                // a sleep that overshoots by this much means the process was frozen
+                                // meanwhile: the OS (or the ROM's battery manager) suspended us
+                                Logger.w("process was suspended for ~" + gap / 1000 + " s by the system — "
+                                        + "exempt ClipSync from battery optimisation / background limits (see the app)");
+                                suspendedOnce = true;
+                            }
+                            touchStatus();
                             if (conn == c) c.send(Connection.T_PING);
                         }
                     } catch (Exception ignored) {
@@ -630,14 +659,14 @@ public class SyncService extends Service {
                     offered.clear();
                 }
                 if (unanswered != null) synchronized (lock) { if (pendingLocal == null) pendingLocal = unanswered; }
-                if (running) setStatus(screenOn ? "disconnected" : "idle (screen off)");
+                if (running) setStatus(screenOn ? "disconnected" : "idle", screenOn ? null : "screen off");
             }
 
             if (!running) break;
             if ((screenOn || pendingLocal != null) && hasNetwork) {
                 long wait = Math.min(backoff, backoffMax());
                 Logger.i("retry in " + wait / 1000 + "s (" + (onLan ? "lan" : "mobile") + ")");
-                setStatus("disconnected, retry in " + wait / 1000 + "s");
+                setStatus("disconnected", "retry in " + wait / 1000 + " s");
                 synchronized (lock) {
                     try { lock.wait(wait); } catch (InterruptedException ignored) {}
                 }

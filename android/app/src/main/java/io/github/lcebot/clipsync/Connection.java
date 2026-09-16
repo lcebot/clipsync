@@ -62,6 +62,8 @@ public final class Connection implements AutoCloseable {
     public final String via;
     /** Human-readable peer: DDNS name or mDNS service name, plus the address actually used. */
     public final String peer;
+    /** Just the name part: the DDNS name, or the advertised mDNS service name. */
+    public final String peerName;
     /**
      * True when the PC is on our LAN: reached via mDNS, or its address is on one of the prefixes
      * of the network we are using. Decides which file-size limit applies (sent in HELLO too).
@@ -96,7 +98,8 @@ public final class Connection implements AutoCloseable {
         socket = (Socket) r[0];
         via = (String) r[1];
         remote = (InetSocketAddress) socket.getRemoteSocketAddress();
-        peer = r[2] + " [" + remote + "]";
+        peerName = String.valueOf(r[2]);
+        peer = peerName + " [" + remote + "]";
         lanPeer = "mdns".equals(via) || (ctx != null && OnLink.isOnLink(ctx, net, socket.getInetAddress()));
         socket.setSoTimeout(READ_TIMEOUT_MS);
         socket.setTcpNoDelay(true);
