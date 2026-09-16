@@ -17,10 +17,11 @@
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round">
 
-        <!-- Modern (libxposed API 102) module: declared by META-INF/xposed/*, no meta-data here.
-             The classic-API entry (assets/xposed_init, LegacyEntry) stays dormant unless the
-             legacy meta-data is added back. -->
-
+        <!-- classic Xposed API module declaration (entry class: assets/xposed_init) -->
+        <meta-data android:name="xposedmodule" android:value="true" />
+        <meta-data android:name="xposeddescription" android:value="@string/app_desc" />
+        <meta-data android:name="xposedminversion" android:value="93" />
+        <meta-data android:name="xposedscope" android:resource="@array/xposedscope" />
 
         <activity
             android:name=".MainActivity"

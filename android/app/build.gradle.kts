@@ -35,15 +35,14 @@ android {
     }
 
     compileOptions {
-        // libxposed api 102 uses sealed interfaces / records -> Java 17
+        // switch expressions etc. -> Java 17
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
 }
 
 dependencies {
-    compileOnly("io.github.libxposed:api:102.0.0")     // new API (Entry)
-    compileOnly("de.robv.android.xposed:api:82")        // classic API (LegacyEntry) — what LSPosed implements
+    compileOnly("de.robv.android.xposed:api:82")        // classic Xposed API (LegacyEntry)
     // androidx.annotation (for @NonNull in Entry) comes transitively via appcompat/core; pinning a
     // newer version explicitly collides with AGP's runtime/compile consistent resolution.
     implementation("androidx.appcompat:appcompat:1.7.0")
