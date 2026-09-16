@@ -18,7 +18,8 @@
 # Make the keystore once, keep it offline, never commit it. No JDK needed — PowerShell writes a
 # PKCS12 directly (see README / the commands below), then base64 it into KEYSTORE_B64:
 #   [Convert]::ToBase64String([IO.File]::ReadAllBytes("clipsync.p12")) | Set-Clipboard
-# (not certutil -encode: it wraps the output in BEGIN/END lines that base64 -d chokes on)
+# Not certutil -encode (it wraps the output in BEGIN/END lines) and not > / Out-File (PowerShell 5
+# writes UTF-16 with a BOM); paste straight from the clipboard into the secret.
 # KEY_ALIAS may be left unset — the build reads the store's only alias.
 # Losing this file means no device can ever overwrite-install the app again.
 #
@@ -86,7 +87,17 @@ jobs:
           KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
         run: |
           if [ -n "$KEYSTORE_B64" ]; then
-            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/clipsync.p12"
+            # Strip every whitespace character first. A secret copied on Windows usually carries a
+            # trailing CR, and GNU base64 treats one stray \r as garbage and rejects the whole
+            # input ("invalid input"). Not --ignore-garbage: that would also swallow a genuinely
+            # corrupt secret and hand Gradle a broken file.
+            printf '%s' "$KEYSTORE_B64" | tr -d '[:space:]' | base64 -d > "$RUNNER_TEMP/clipsync.p12"
+            # a PKCS12 is a DER SEQUENCE, so the file must start with 30 82
+            head -c2 "$RUNNER_TEMP/clipsync.p12" | od -An -tx1 | grep -q '30 82' || {
+              echo "KEYSTORE_B64 does not decode to a PKCS12."
+              echo 'Re-copy it with: [Convert]::ToBase64String([IO.File]::ReadAllBytes("clipsync.p12")) | Set-Clipboard'
+              exit 1
+            }
             echo "KEYSTORE_FILE=$RUNNER_TEMP/clipsync.p12" >> "$GITHUB_ENV"
             echo "signing with the keystore secret"
           else
