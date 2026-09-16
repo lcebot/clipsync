@@ -59,7 +59,8 @@ public class MainActivity extends AppCompatActivity {
     private ViewGroup settingsRoot;
     // app bar / actions
     private AppBarLayout appbar;
-    private View coordinator, fabs;
+    private View coordinator;
+    private BottomNavigationView nav;
     private ExtendedFloatingActionButton stopFab, applyFab;
     // pages / log
     private NestedScrollView pageSettings;
@@ -75,8 +76,9 @@ public class MainActivity extends AppCompatActivity {
     private ObjectAnimator pulse;
     // action state: which of Start / Stop + Apply is shown, and what we are waiting for
     private boolean serviceRunning, waitingForStop, waitingForStart;
-    private boolean onLogTab, stopShown, configValid;
-    private boolean applyStarts = true;                     // matches serviceRunning == false
+    private boolean onLogTab, configValid;
+    // mirrors of the FABs' own shown/hidden state, so we only drive show()/hide() on a real change
+    private boolean stopShown, applyShown = true;
     private long waitingSince;
     private static final long WAIT_TIMEOUT_MS = 12_000;
 
@@ -139,7 +141,7 @@ public class MainActivity extends AppCompatActivity {
         settingsRoot = findViewById(R.id.settings_root);
         appbar = findViewById(R.id.appbar);
         coordinator = findViewById(R.id.coordinator);
-        fabs = findViewById(R.id.fabs);
+        nav = findViewById(R.id.nav);
         stopFab = findViewById(R.id.stop);
         applyFab = findViewById(R.id.apply);
         pageSettings = findViewById(R.id.page_settings);
@@ -275,6 +277,16 @@ public class MainActivity extends AppCompatActivity {
             refreshActions();                          // greys Stop out until the service is gone
             snack(R.string.snack_stopped);
         });
+        // Stop rides to the left of Apply; following Apply's animated width by translation keeps it
+        // out of the layout pass entirely
+        applyFab.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) ->
+                stopFab.setTranslationX(-(applyFab.getWidth() + dp(12))));
+        // shrink to the icons while the settings page scrolls down, extend again on the way up —
+        // the component's own motion, now that the FABs sit directly in the CoordinatorLayout
+        pageSettings.setOnScrollChangeListener((NestedScrollView.OnScrollChangeListener) (v, x, y, ox, oy) -> {
+            if (y > oy + dp(4)) { stopFab.shrink(); applyFab.shrink(); }
+            else if (y < oy - dp(4) || y <= 0) { stopFab.extend(); applyFab.extend(); }
+        });
         findViewById(R.id.log_clear).setOnClickListener(v -> { Logger.clear(); log.setText(""); });
         findViewById(R.id.log_copy).setOnClickListener(v -> {
             getSystemService(ClipboardManager.class).setPrimaryClip(ClipData.newPlainText("clipsync log", log.getText()));
@@ -285,7 +297,6 @@ public class MainActivity extends AppCompatActivity {
             try { startActivity(i); } catch (Exception e) { startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)); }
         });
 
-        BottomNavigationView nav = findViewById(R.id.nav);
         nav.setOnItemSelectedListener(item -> {
             boolean showLog = item.getItemId() == R.id.nav_log;
             pageSettings.setVisibility(showLog ? View.GONE : View.VISIBLE);
@@ -308,7 +319,16 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void snack(int textRes) {
-        Snackbar.make(coordinator, textRes, Snackbar.LENGTH_SHORT).setAnchorView(fabs).show();
+        Snackbar.make(coordinator, textRes, Snackbar.LENGTH_SHORT).setAnchorView(anchor()).show();
+    }
+
+    /** Above the FABs while they are on screen, above the navigation bar otherwise. */
+    private View anchor() {
+        return applyFab.getVisibility() == View.VISIBLE ? applyFab : nav;
+    }
+
+    private int dp(int v) {
+        return Math.round(v * getResources().getDisplayMetrics().density);
     }
 
 
@@ -321,23 +341,21 @@ public class MainActivity extends AppCompatActivity {
     private void refreshActions() {
         boolean showStop = serviceRunning && !onLogTab;
         boolean showApply = !onLogTab;
-        boolean startMode = !serviceRunning;
-        if (stopShown != showStop || applyStarts != startMode) {
-            TransitionManager.beginDelayedTransition(fabs, new AutoTransition().setDuration(200));
+        // show()/hide() are the component's own animations; going through setVisibility would
+        // desync its internal state
+        if (showStop != stopShown) {
+            stopShown = showStop;
+            if (showStop) stopFab.show(); else stopFab.hide();
         }
-        stopShown = showStop;
-        applyStarts = startMode;
-
-        stopFab.setVisibility(showStop ? View.VISIBLE : View.GONE);
+        if (showApply != applyShown) {
+            applyShown = showApply;
+            if (showApply) applyFab.show(); else applyFab.hide();
+        }
         stopFab.setEnabled(!waitingForStop);
-        stopFab.setAlpha(waitingForStop ? 0.5f : 1f);
 
-        applyFab.setVisibility(showApply ? View.VISIBLE : View.GONE);
         setTextIfChanged(applyFab, getString(serviceRunning ? R.string.action_apply : R.string.action_start));
         applyFab.setIconResource(serviceRunning ? R.drawable.ic_restart : R.drawable.ic_play);
-        boolean applyOk = configValid && !waitingForStart;
-        applyFab.setEnabled(applyOk);
-        applyFab.setAlpha(applyOk ? 1f : 0.5f);
+        applyFab.setEnabled(configValid && !waitingForStart);
     }
 
     /**
@@ -527,7 +545,7 @@ public class MainActivity extends AppCompatActivity {
             target.requestFocus();
         } catch (Exception e) {
             Snackbar.make(coordinator, getString(R.string.snack_save_failed, e.toString()), Snackbar.LENGTH_LONG)
-                    .setAnchorView(fabs).show();
+                    .setAnchorView(anchor()).show();
         }
     }
 
