@@ -18,10 +18,7 @@ import android.text.Editable;
 import android.text.TextUtils;
 import android.text.TextWatcher;
 import android.transition.AutoTransition;
-import android.transition.ChangeBounds;
-import android.transition.Fade;
 import android.transition.TransitionManager;
-import android.transition.TransitionSet;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.TextView;
@@ -31,23 +28,21 @@ import androidx.core.widget.NestedScrollView;
 
 import com.google.android.material.appbar.AppBarLayout;
 import com.google.android.material.bottomnavigation.BottomNavigationView;
-import com.google.android.material.button.MaterialButton;
 import com.google.android.material.button.MaterialButtonToggleGroup;
-import com.google.android.material.card.MaterialCardView;
+import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton;
 import com.google.android.material.color.MaterialColors;
 import com.google.android.material.slider.Slider;
 import com.google.android.material.snackbar.Snackbar;
 import com.google.android.material.textfield.TextInputEditText;
 import com.google.android.material.textfield.TextInputLayout;
 
-import java.util.List;
 import java.util.Properties;
 
 /**
- * Two pages behind a bottom navigation bar — Settings and Log — under a header that shrinks on
- * scroll (title smaller, Stop / Apply reduced to icons), plus a status pill floating bottom-left
- * on both pages: pulsing dot while connected, "mDNS" / "DDNS (LAN|Internet)", peer and address;
- * it folds to just the dot 10 s after the last change and unfolds on any change.
+ * Two pages behind a bottom navigation bar — Settings and Log — under an M3 collapsing top app bar.
+ * The connection status lives in the bar's top-right corner (pulsing dot, connection kind, peer and
+ * address; the lower two lines fade out as the bar collapses, tapping it returns to the top), the
+ * two actions are extended FABs bottom-right that shrink on scroll and only exist on Settings.
  * Every field is validated live; Apply is enabled only when all of them are valid and sends a
  * RELOAD to the running service (no restart).
  */
@@ -60,25 +55,23 @@ public class MainActivity extends AppCompatActivity {
     private Slider browse, threads;
     private TextView browseLabel, threadsLabel;
     private ViewGroup settingsRoot;
-    // header
+    // app bar / actions
     private AppBarLayout appbar;
-    private MaterialButton stopBtn, applyBtn;
+    private View coordinator, fabs;
+    private ExtendedFloatingActionButton stopFab, applyFab;
     // pages / log
-    private View pageSettings, pageLog, batteryRow, batteryFix;
+    private NestedScrollView pageSettings;
+    private View pageLog, batteryRow, batteryFix;
     private TextView log, batteryText;
     private NestedScrollView logScroll;
-    // status pill
-    private MaterialCardView statusPill;
-    private ViewGroup statusInner;
-    private View statusText, statusDot, statusHalo;
+    // status
+    private ViewGroup statusBlock;
+    private View statusDot, statusHalo;
     private TextView statusTitle, statusHost, statusDetail;
+    private boolean hasHost, hasDetail, wasConnected;
     private ObjectAnimator pulse;
-    private String lastPillContent = "";
-    private boolean pillFolded;
-    private static final long FOLD_AFTER_MS = 10_000;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
-    private final Runnable fold = () -> setPillFolded(true);
     private final Logger.Listener logListener = line -> ui.post(() -> {
         log.append("\n" + line);
         if (pageLog.getVisibility() == View.VISIBLE) logScroll.post(() -> logScroll.fullScroll(NestedScrollView.FOCUS_DOWN));
@@ -136,8 +129,10 @@ public class MainActivity extends AppCompatActivity {
         threadsLabel = findViewById(R.id.threads_label);
         settingsRoot = findViewById(R.id.settings_root);
         appbar = findViewById(R.id.appbar);
-        stopBtn = findViewById(R.id.stop);
-        applyBtn = findViewById(R.id.apply);
+        coordinator = findViewById(R.id.coordinator);
+        fabs = findViewById(R.id.fabs);
+        stopFab = findViewById(R.id.stop);
+        applyFab = findViewById(R.id.apply);
         pageSettings = findViewById(R.id.page_settings);
         pageLog = findViewById(R.id.page_log);
         log = findViewById(R.id.log);
@@ -145,9 +140,7 @@ public class MainActivity extends AppCompatActivity {
         batteryRow = findViewById(R.id.battery_row);
         batteryText = findViewById(R.id.battery_text);
         batteryFix = findViewById(R.id.battery_fix);
-        statusPill = findViewById(R.id.status_pill);
-        statusInner = findViewById(R.id.status_inner);
-        statusText = findViewById(R.id.status_text);
+        statusBlock = findViewById(R.id.status_block);
         statusTitle = findViewById(R.id.status_title);
         statusHost = findViewById(R.id.status_host);
         statusDetail = findViewById(R.id.status_detail);
@@ -239,7 +232,8 @@ public class MainActivity extends AppCompatActivity {
         ok &= show(pathL, Config.checkPath(text(path)));
         ok &= show(keepHoursL, Config.checkRange(text(keepHours), 0, 8760, "h"));
         ok &= show(keepMbL, Config.checkRange(text(keepMb), 0, 1024 * 1024, "MB"));
-        applyBtn.setEnabled(ok);
+        applyFab.setEnabled(ok);
+        applyFab.setAlpha(ok ? 1f : 0.5f);
         return ok;
     }
 
@@ -265,17 +259,23 @@ public class MainActivity extends AppCompatActivity {
         browse.setLabelFormatter(v -> Config.BROWSE_STEPS_MS[Math.max(0, Math.min(6, Math.round(v)))] + " ms");
         browse.addOnChangeListener((s, v, u) -> browseLabel.setText(getString(R.string.browse_label, browseValue())));
 
-        applyBtn.setOnClickListener(v -> apply());
-        stopBtn.setOnClickListener(v -> {
+        applyFab.setOnClickListener(v -> apply());
+        stopFab.setOnClickListener(v -> {
             setAutoStart(false);                       // watchdog / boot must not bring it back
             stopService(new Intent(this, SyncService.class));
-            Snackbar.make(statusPill, R.string.snack_stopped, Snackbar.LENGTH_SHORT).show();
+            snack(R.string.snack_stopped);
             ui.postDelayed(this::refreshStatus, 300);
+        });
+        // the FABs shrink to their icons while the settings page scrolls down, and extend again
+        // on the way back up — ExtendedFloatingActionButton's own animation
+        pageSettings.setOnScrollChangeListener((NestedScrollView.OnScrollChangeListener) (v, x, y, ox, oy) -> {
+            if (y > oy + dp(4)) { stopFab.shrink(); applyFab.shrink(); }
+            else if (y < oy - dp(4) || y <= 0) { stopFab.extend(); applyFab.extend(); }
         });
         findViewById(R.id.log_clear).setOnClickListener(v -> { Logger.clear(); log.setText(""); });
         findViewById(R.id.log_copy).setOnClickListener(v -> {
             getSystemService(ClipboardManager.class).setPrimaryClip(ClipData.newPlainText("clipsync log", log.getText()));
-            Snackbar.make(statusPill, R.string.snack_log_copied, Snackbar.LENGTH_SHORT).show();
+            snack(R.string.snack_log_copied);
         });
         batteryFix.setOnClickListener(v -> {
             Intent i = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).setData(Uri.parse("package:" + getPackageName()));
@@ -288,19 +288,25 @@ public class MainActivity extends AppCompatActivity {
             pageSettings.setVisibility(showLog ? View.GONE : View.VISIBLE);
             pageLog.setVisibility(showLog ? View.VISIBLE : View.GONE);
             appbar.setLiftOnScrollTargetViewId(showLog ? R.id.log_scroll : R.id.page_settings);   // lift follows the visible page
+            if (showLog) { stopFab.hide(); applyFab.hide(); } else { stopFab.show(); applyFab.show(); }
             if (showLog) logScroll.post(() -> logScroll.fullScroll(NestedScrollView.FOCUS_DOWN));
             return true;
         });
-        statusPill.setOnClickListener(v -> { if (pillFolded) setPillFolded(false); else nav.setSelectedItemId(R.id.nav_log); });
+        // tapping the status: back to the top, bar re-expanded
+        statusBlock.setOnClickListener(v -> {
+            appbar.setExpanded(true, true);
+            if (pageLog.getVisibility() == View.VISIBLE) logScroll.smoothScrollTo(0, 0);
+            else pageSettings.smoothScrollTo(0, 0);
+        });
 
-        // header: the CollapsingToolbarLayout scales the title itself; we only morph the actions
+        // the CollapsingToolbarLayout scales the title itself; we only fade / place the status
         appbar.addOnOffsetChangedListener((bar, offset) -> {
             int range = Math.max(1, bar.getTotalScrollRange());
-            morphButtons(Math.min(1f, -offset / (float) range));
+            positionStatus(Math.min(1f, -offset / (float) range));
         });
-        // the first offset callback arrives before anything is measured, and every shape change
-        // re-measures the buttons: reposition afterwards (translation only, so this cannot loop)
-        findViewById(R.id.actions).addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> positionButtons(lastF));
+        // the first offset callback arrives before anything is measured, and hiding a line
+        // re-measures the block: re-place it afterwards (translation only, so this cannot loop)
+        statusBlock.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> placeStatus());
 
         pulse = ObjectAnimator.ofFloat(statusHalo, View.ALPHA, 0.45f, 0f);
         pulse.setDuration(1400);
@@ -308,60 +314,41 @@ public class MainActivity extends AppCompatActivity {
         pulse.setRepeatMode(ValueAnimator.RESTART);
     }
 
-    private int btnMinWidth = -1;
-    private int stopTextColor, applyTextColor;
-    private float lastF, lastT = -1f;
+    private void snack(int textRes) {
+        Snackbar.make(coordinator, textRes, Snackbar.LENGTH_SHORT).setAnchorView(fabs).show();
+    }
+
+    private float lastF;
 
     /**
-     * Continuous morph driven by the scroll fraction (like the title): the label is squeezed
-     * horizontally and faded out, paddings and minimum width shrink in step, until at f = 1 the
-     * button is 24dp icon + 2 × 8dp — as wide as it is tall, which on the full-pill M3 shape is
-     * a circle. No discrete jump anywhere.
+     * Expanded: all three lines. Collapsing: peer and address fade out over the first half, so by
+     * the time the bar is closed only the connection kind (or "Stopped") is left beside the dot.
      */
-    private void morphButtons(float f) {
+    private void positionStatus(float f) {
         lastF = f;
-        if (btnMinWidth < 0) {
-            btnMinWidth = applyBtn.getMinWidth();
-            stopTextColor = stopBtn.getCurrentTextColor();
-            applyTextColor = applyBtn.getCurrentTextColor();
-        }
-        // shape: label squeezed away and faded out, paddings and minimum width shrinking, until the
-        // body is 24dp icon + 2 × 8dp = 40dp — as wide as it is tall, i.e. a circle. Re-measuring
-        // the buttons is only worth it when the fraction really moved (setMinWidth always relayouts).
-        float t = clamp01((f - 0.15f) / 0.7f);
-        if (Math.abs(t - lastT) > 0.004f) {
-            lastT = t;
-            for (MaterialButton b : new MaterialButton[]{stopBtn, applyBtn}) {
-                int base = b == applyBtn ? applyTextColor : stopTextColor;
-                b.setTextScaleX(Math.max(0.001f, 1f - t));                 // 0 would be ignored by TextView
-                b.setTextColor(androidx.core.graphics.ColorUtils.setAlphaComponent(base, Math.round(255 * (1f - t))));
-                b.setIconPadding(Math.round(dp(8) * (1f - t)));
-                int mw = Math.round(btnMinWidth * (1f - t));
-                b.setMinWidth(mw);
-                b.setMinimumWidth(mw);
-                int pad = Math.round(dp(16) + (dp(8) - dp(16)) * t);
-                b.setPadding(pad, b.getPaddingTop(), pad, b.getPaddingBottom());
-            }
-        }
-        positionButtons(f);
+        float fade = clamp01(1f - 2f * f);
+        statusHost.setAlpha(fade);
+        statusDetail.setAlpha(fade);
+        boolean show = fade > 0f;
+        statusHost.setVisibility(hasHost && show ? View.VISIBLE : View.GONE);
+        statusDetail.setVisibility(hasDetail && show ? View.VISIBLE : View.GONE);
+        placeStatus();
     }
 
     /**
-     * Arrangement: stacked while the bar is open, side by side once collapsed. Both buttons are laid
-     * out top-right of the actions box, so this is pure translation — no layout, nothing that could
-     * disturb the app bar. Staggered so they never cross: Stop slides out of the way first, then
-     * Apply rises into the collapsed row (a rise of exactly the distance the bar itself travels).
+     * The block keeps its centre on the collapsed bar's centre line in every state, so it grows and
+     * shrinks in place in the top-right corner instead of drifting. Translation only: no layout,
+     * nothing that could disturb the app bar.
      */
-    private void positionButtons(float f) {
-        int h = stopBtn.getHeight(), bar = appbar.getHeight();
+    private void placeStatus() {
+        int h = statusBlock.getHeight(), bar = appbar.getHeight();
         if (h == 0 || bar == 0) return;                                // not laid out yet
-        float stackTop = (bar - (2f * h + dp(8))) / 2f;                // top button, bar expanded
-        float rowTop = (bar - appbar.getTotalScrollRange() - h) / 2f;  // both buttons, bar collapsed
-        float stackBottom = stackTop + h + dp(8);
-        float slide = clamp01(f / 0.55f), rise = clamp01((f - 0.45f) / 0.55f);
-        stopBtn.setTranslationX(-slide * (applyBtn.getWidth() + dp(12)));
-        stopBtn.setTranslationY(stackTop + (rowTop - stackTop) * f);
-        applyBtn.setTranslationY(stackBottom + (rowTop - stackBottom) * rise);
+        int collapsed = bar - appbar.getTotalScrollRange();
+        statusBlock.setTranslationY((collapsed - h) / 2f);
+    }
+
+    private static void setTextIfChanged(TextView v, String text) {
+        if (!text.contentEquals(v.getText())) v.setText(text);
     }
 
     private static float clamp01(float v) {
@@ -378,7 +365,7 @@ public class MainActivity extends AppCompatActivity {
         log.setText(TextUtils.join("\n", Logger.snapshot()));
         logScroll.post(() -> logScroll.fullScroll(NestedScrollView.FOCUS_DOWN));
         Logger.addListener(logListener);
-        lastPillContent = "";
+        wasConnected = false;
         ui.post(tick);
     }
 
@@ -387,7 +374,6 @@ public class MainActivity extends AppCompatActivity {
         super.onPause();
         Logger.removeListener(logListener);
         ui.removeCallbacks(tick);
-        ui.removeCallbacks(fold);
         pulse.cancel();
     }
 
@@ -407,7 +393,7 @@ public class MainActivity extends AppCompatActivity {
                 PackageManager.DONT_KILL_APP);
     }
 
-    // ------------------------------------------------------------------ status pill
+    // ------------------------------------------------------------------ status
     private void refreshStatus() {
         Status.Snapshot s = Status.read(this);
         if (!s.alive() && !"stopped".equals(s.state)) {
@@ -423,15 +409,9 @@ public class MainActivity extends AppCompatActivity {
                 : busy ? com.google.android.material.R.attr.colorTertiary : com.google.android.material.R.attr.colorOutline);
         statusDot.setBackgroundTintList(ColorStateList.valueOf(dot));
         statusHalo.setBackgroundTintList(ColorStateList.valueOf(dot));
-        // stopped: the whole pill goes grey, not just the dot
-        int bg = MaterialColors.getColor(statusPill, stopped ? com.google.android.material.R.attr.colorSurfaceContainerHighest
-                : com.google.android.material.R.attr.colorSecondaryContainer);
-        int fg = MaterialColors.getColor(statusPill, stopped ? com.google.android.material.R.attr.colorOnSurfaceVariant
-                : com.google.android.material.R.attr.colorOnSecondaryContainer);
-        statusPill.setCardBackgroundColor(bg);
-        statusTitle.setTextColor(fg);
-        statusHost.setTextColor(fg);
-        statusDetail.setTextColor(fg);
+        statusTitle.setTextColor(MaterialColors.getColor(statusTitle, stopped
+                ? com.google.android.material.R.attr.colorOnSurfaceVariant
+                : com.google.android.material.R.attr.colorOnSurface));
 
         // line 1: kind / state · line 2: peer name · line 3: address (or state detail)
         String titleText, hostText, detailText;
@@ -451,20 +431,19 @@ public class MainActivity extends AppCompatActivity {
             hostText = null;
             detailText = s.detail;
         }
-        statusTitle.setText(titleText);
-        statusHost.setText(hostText == null ? "" : hostText);
-        statusHost.setVisibility(hostText == null ? View.GONE : View.VISIBLE);
-        statusDetail.setText(detailText == null ? "" : detailText);
-        statusDetail.setVisibility(detailText == null ? View.GONE : View.VISIBLE);
+        // this runs once a second: only touch the TextViews when the text really changed, or every
+        // tick would queue a layout pass for the status block
+        setTextIfChanged(statusTitle, titleText);
+        hasHost = hostText != null;
+        hasDetail = detailText != null;
+        setTextIfChanged(statusHost, hasHost ? hostText : "");
+        setTextIfChanged(statusDetail, hasDetail ? detailText : "");
+        positionStatus(lastF);                         // applies the fade and the visibilities
 
-        String content = s.state + "|" + titleText + "|" + hostText + "|" + detailText;
-        if (!content.equals(lastPillContent)) {
-            lastPillContent = content;
+        if (connected != wasConnected) {
+            wasConnected = connected;
             if (connected) { statusHalo.setVisibility(View.VISIBLE); if (!pulse.isRunning()) pulse.start(); }
             else { pulse.cancel(); statusHalo.setVisibility(View.INVISIBLE); }
-            setPillFolded(false);                      // any change unfolds; it folds again 10 s later
-            ui.removeCallbacks(fold);
-            ui.postDelayed(fold, FOLD_AFTER_MS);
         }
 
         // background-permission card
@@ -479,27 +458,6 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    /**
-     * Fold: the card shrinks to an 84dp rounded square with the dot in the middle; unfold: the dot
-     * slides left and the text appears. Height never changes (fixed in the layout).
-     */
-    private void setPillFolded(boolean folded) {
-        if (folded == pillFolded) return;
-        pillFolded = folded;
-        TransitionManager.beginDelayedTransition(statusPill, new TransitionSet()
-                .addTransition(new ChangeBounds()).addTransition(new Fade()).setDuration(260));
-        statusText.setVisibility(folded ? View.GONE : View.VISIBLE);
-        ViewGroup.LayoutParams lp = statusInner.getLayoutParams();
-        lp.width = folded ? dp(84) : ViewGroup.LayoutParams.WRAP_CONTENT;
-        statusInner.setLayoutParams(lp);
-        statusInner.setPadding(folded ? 0 : dp(20), 0, folded ? 0 : dp(20), 0);
-        ((android.widget.LinearLayout) statusInner).setGravity(folded
-                ? android.view.Gravity.CENTER : android.view.Gravity.CENTER_VERTICAL | android.view.Gravity.START);
-        if (!folded) {
-            ui.removeCallbacks(fold);                  // a manual unfold folds again after the same delay
-            ui.postDelayed(fold, FOLD_AFTER_MS);
-        }
-    }
 
     // ------------------------------------------------------------------ apply
     private static long longOf(Properties p, String key, long dflt) {
@@ -523,7 +481,7 @@ public class MainActivity extends AppCompatActivity {
             }
             Logger.i("config applied: mode " + c.mode + (c.host.isEmpty() ? "" : ", " + c.host) + ":" + c.port
                     + (c.mdns ? ", browse " + c.mdnsTimeoutMs + " ms" : "") + ", " + c.threads + " streams, files -> " + c.filesDir);
-            Snackbar.make(statusPill, R.string.snack_applied, Snackbar.LENGTH_SHORT).show();
+            snack(R.string.snack_applied);
         } catch (IllegalArgumentException e) {
             // should not happen (live validation), but map it back to a field anyway
             String msg = e.getMessage() == null ? "invalid value" : e.getMessage();
@@ -537,7 +495,8 @@ public class MainActivity extends AppCompatActivity {
             target.setError(msg.substring(key.length() + 1).trim());
             target.requestFocus();
         } catch (Exception e) {
-            Snackbar.make(statusPill, getString(R.string.snack_save_failed, e.toString()), Snackbar.LENGTH_LONG).show();
+            Snackbar.make(coordinator, getString(R.string.snack_save_failed, e.toString()), Snackbar.LENGTH_LONG)
+                    .setAnchorView(fabs).show();
         }
     }
 
