@@ -277,7 +277,10 @@ public class SyncService extends Service {
             // re-hash) of a possibly 100 MB file.
             long stamp = cd.getDescription() != null ? cd.getDescription().getTimestamp() : 0;
             synchronized (lock) {
-                if (stamp > 0 && stamp == lastClipStamp) return;
+                if (stamp > 0 && stamp == lastClipStamp) {
+                    Logger.i("clip (" + source + "): same clip already handled, skipped");   // proves the path is alive
+                    return;
+                }
                 lastClipStamp = stamp;
             }
             // A clip can carry several items and each item text and/or a URI. Prefer the first

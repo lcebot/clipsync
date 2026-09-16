@@ -35,9 +35,18 @@ public class Entry extends XposedModule {
 
     private final AtomicBoolean installed = new AtomicBoolean(false);
 
+    /**
+     * The framework's own {@code log()} lands in LSPosed's module log, not in logcat under our
+     * tag; write both so {@code adb logcat -s ClipSync} shows the module's life signs too.
+     */
+    private void both(int level, String msg, Throwable t) {
+        if (t != null) { Log.println(level, Common.TAG, msg + "\n" + Log.getStackTraceString(t)); log(Log.INFO, Common.TAG, msg, t); }
+        else { Log.println(level, Common.TAG, msg); log(Log.INFO, Common.TAG, msg); }
+    }
+
     @Override
     public void onModuleLoaded(@NonNull XposedModuleInterface.ModuleLoadedParam param) {
-        log(Log.INFO, Common.TAG, "module loaded in " + param.getProcessName());
+        both(Log.INFO, "module loaded in " + param.getProcessName(), null);
     }
 
     @Override
@@ -105,7 +114,7 @@ public class Entry extends XposedModule {
                 hooked.add(setter.getName() + " -> push");
             }
         } catch (Throwable t) {
-            log(Log.ERROR, Common.TAG, "clipboard hook failed", t);
+            both(Log.ERROR, "clipboard hook failed", t);
         }
 
         // ---- keep-alive
@@ -126,7 +135,7 @@ public class Entry extends XposedModule {
             }
             hooked.add("ProcessRecord.<init> -> shouldNotFreeze");
         } catch (Throwable t) {
-            log(Log.WARN, Common.TAG, "ProcessRecord hook failed: " + t);
+            both(Log.WARN, "ProcessRecord hook failed: " + t, null);
         }
         try {
             for (Method m : android.os.Process.class.getDeclaredMethods()) {
@@ -137,7 +146,7 @@ public class Entry extends XposedModule {
                 hooked.add("Process.setProcessFrozen");
             }
         } catch (Throwable t) {
-            log(Log.WARN, Common.TAG, "Process.setProcessFrozen hook failed: " + t);
+            both(Log.WARN, "Process.setProcessFrozen hook failed: " + t, null);
         }
 
         // ---- watchdog
@@ -159,12 +168,12 @@ public class Entry extends XposedModule {
                 died++;
             }
         } catch (Throwable t) {
-            log(Log.WARN, Common.TAG, "watchdog: death hook failed: " + t);
+            both(Log.WARN, "watchdog: death hook failed: " + t, null);
         }
         Common.pollMs = died > 0 ? Common.POLL_WITH_HOOK_MS : Common.POLL_WITHOUT_HOOK_MS;
         Common.scheduleCheck(Common.pollMs);
         hooked.add("watchdog(death hooks " + died + ", poll " + Common.pollMs / 1000 + " s)");
 
-        log(Log.INFO, Common.TAG, "hooked (libxposed) " + hooked);
+        both(Log.INFO, "hooked (libxposed) " + hooked, null);
     }
 }
