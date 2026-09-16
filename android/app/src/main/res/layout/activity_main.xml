@@ -7,68 +7,46 @@
     android:orientation="vertical"
     android:fitsSystemWindows="true">
 
-    <androidx.coordinatorlayout.widget.CoordinatorLayout
+    <!-- Overlay host. The actions and the status pill live HERE, not inside the CoordinatorLayout:
+         every time one of them re-lays out (fold/unfold, text -> icon morph) the request would
+         otherwise mark the CoordinatorLayout dirty, re-run the app bar behaviours and make the
+         collapsing title jump or flash. As siblings their layout pass never reaches it. -->
+    <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1">
 
-        <!-- ===== M3 "medium" collapsing top app bar: title scaling, insets and lift-on-scroll are
-             the component's own. The two actions live in the toolbar's trailing area; their
-             text -> icon morph is the one custom touch (driven by the app bar offset). ===== -->
-        <com.google.android.material.appbar.AppBarLayout
-            android:id="@+id/appbar"
+        <androidx.coordinatorlayout.widget.CoordinatorLayout
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            app:liftOnScroll="true"
-            app:liftOnScrollTargetViewId="@+id/page_settings">
+            android:layout_height="match_parent">
 
-            <com.google.android.material.appbar.CollapsingToolbarLayout
-                android:id="@+id/collapsing"
-                style="?attr/collapsingToolbarLayoutMediumStyle"
+            <!-- ===== M3 "medium" collapsing top app bar: title scaling, insets and lift-on-scroll
+                 are the component's own. ===== -->
+            <com.google.android.material.appbar.AppBarLayout
+                android:id="@+id/appbar"
                 android:layout_width="match_parent"
-                android:layout_height="?attr/collapsingToolbarLayoutMediumSize"
-                app:layout_scrollFlags="scroll|exitUntilCollapsed|snap"
-                app:titleCollapseMode="scale"
-                app:title="@string/app_name">
+                android:layout_height="wrap_content"
+                app:liftOnScroll="true"
+                app:liftOnScrollTargetViewId="@+id/page_settings">
 
-                <com.google.android.material.appbar.MaterialToolbar
-                    android:id="@+id/toolbar"
+                <com.google.android.material.appbar.CollapsingToolbarLayout
+                    android:id="@+id/collapsing"
+                    style="?attr/collapsingToolbarLayoutMediumStyle"
                     android:layout_width="match_parent"
-                    android:layout_height="?attr/actionBarSize"
-                    app:layout_collapseMode="pin"
-                    app:contentInsetEnd="0dp">
+                    android:layout_height="?attr/collapsingToolbarLayoutMediumSize"
+                    app:layout_scrollFlags="scroll|exitUntilCollapsed|snap"
+                    app:titleCollapseMode="scale"
+                    app:expandedTitleMarginEnd="120dp"
+                    app:maxLines="1"
+                    app:title="@string/app_name">
 
-                    <!-- trailing actions: 16dp to the edge (layout margin), 8dp between them
-                         expanded, widened to 12dp as they turn into 40dp circles -->
-                    <LinearLayout
-                        android:id="@+id/actions"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_gravity="end|center_vertical"
-                        android:orientation="horizontal"
-                        android:gravity="center_vertical"
-                        android:paddingEnd="16dp"
-                        android:paddingStart="0dp">
-
-                        <com.google.android.material.button.MaterialButton
-                            android:id="@+id/stop"
-                            style="?attr/materialButtonOutlinedStyle"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            app:icon="@drawable/ic_stop"
-                            android:text="@string/action_stop" />
-
-                        <com.google.android.material.button.MaterialButton
-                            android:id="@+id/apply"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:layout_marginStart="8dp"
-                            app:icon="@drawable/ic_restart"
-                            android:text="@string/action_apply" />
-                    </LinearLayout>
-                </com.google.android.material.appbar.MaterialToolbar>
-            </com.google.android.material.appbar.CollapsingToolbarLayout>
-        </com.google.android.material.appbar.AppBarLayout>
+                    <com.google.android.material.appbar.MaterialToolbar
+                        android:id="@+id/toolbar"
+                        android:layout_width="match_parent"
+                        android:layout_height="?attr/actionBarSize"
+                        app:layout_collapseMode="pin" />
+                </com.google.android.material.appbar.CollapsingToolbarLayout>
+            </com.google.android.material.appbar.AppBarLayout>
 
         <!-- ===== pages ===== -->
         <FrameLayout
@@ -425,11 +403,46 @@
                 </androidx.core.widget.NestedScrollView>
             </LinearLayout>
 
+            </FrameLayout>
+        </androidx.coordinatorlayout.widget.CoordinatorLayout>
+
+        <!-- ===== trailing actions, overlaying the app bar =====
+             Laid out once, right-aligned at the top of a box as tall as the expanded app bar; the
+             expanded / collapsed arrangement is pure translation (see MainActivity.morphButtons):
+             stacked vertically while the bar is open, side by side once it is collapsed. -->
+        <FrameLayout
+            android:id="@+id/actions"
+            android:layout_width="wrap_content"
+            android:layout_height="?attr/collapsingToolbarLayoutMediumSize"
+            android:layout_gravity="top|end"
+            android:paddingEnd="16dp">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/stop"
+                style="?attr/materialButtonOutlinedStyle"
+                android:layout_width="wrap_content"
+                android:layout_height="40dp"
+                android:layout_gravity="top|end"
+                app:icon="@drawable/ic_stop"
+                app:iconSize="24dp"
+                app:insetTop="0dp"
+                app:insetBottom="0dp"
+                android:text="@string/action_stop" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/apply"
+                android:layout_width="wrap_content"
+                android:layout_height="40dp"
+                android:layout_gravity="top|end"
+                app:icon="@drawable/ic_restart"
+                app:iconSize="24dp"
+                app:insetTop="0dp"
+                app:insetBottom="0dp"
+                android:text="@string/action_apply" />
         </FrameLayout>
 
-        <!-- ===== status pill (both pages) — a direct child of the CoordinatorLayout, so it is
-             anchored to the bottom of the visible area and does not ride along with the app bar ===== -->
-        <!-- fixed 84dp tall in every state; folded it becomes an 84dp rounded square with the dot
+        <!-- ===== status pill (both pages) =====
+             fixed 84dp tall in every state; folded it becomes an 84dp rounded square with the dot
              centred, unfolded the dot slides left and the three text lines appear on its right -->
         <com.google.android.material.card.MaterialCardView
             android:id="@+id/status_pill"
@@ -511,7 +524,7 @@
                 </LinearLayout>
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
-    </androidx.coordinatorlayout.widget.CoordinatorLayout>
+    </FrameLayout>
 
     <com.google.android.material.bottomnavigation.BottomNavigationView
         android:id="@+id/nav"

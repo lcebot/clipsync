@@ -298,6 +298,9 @@ public class MainActivity extends AppCompatActivity {
             int range = Math.max(1, bar.getTotalScrollRange());
             morphButtons(Math.min(1f, -offset / (float) range));
         });
+        // the first offset callback arrives before anything is measured, and every shape change
+        // re-measures the buttons: reposition afterwards (translation only, so this cannot loop)
+        findViewById(R.id.actions).addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> positionButtons(lastF));
 
         pulse = ObjectAnimator.ofFloat(statusHalo, View.ALPHA, 0.45f, 0f);
         pulse.setDuration(1400);
@@ -307,6 +310,7 @@ public class MainActivity extends AppCompatActivity {
 
     private int btnMinWidth = -1;
     private int stopTextColor, applyTextColor;
+    private float lastF, lastT = -1f;
 
     /**
      * Continuous morph driven by the scroll fraction (like the title): the label is squeezed
@@ -315,27 +319,53 @@ public class MainActivity extends AppCompatActivity {
      * a circle. No discrete jump anywhere.
      */
     private void morphButtons(float f) {
+        lastF = f;
         if (btnMinWidth < 0) {
             btnMinWidth = applyBtn.getMinWidth();
             stopTextColor = stopBtn.getCurrentTextColor();
             applyTextColor = applyBtn.getCurrentTextColor();
         }
-        float t = Math.max(0f, Math.min(1f, (f - 0.15f) / 0.7f));     // morph between 15 % and 85 %
-        for (MaterialButton b : new MaterialButton[]{stopBtn, applyBtn}) {
-            int base = b == applyBtn ? applyTextColor : stopTextColor;
-            b.setTextScaleX(Math.max(0.001f, 1f - t));                 // 0 would be ignored by TextView
-            b.setTextColor(androidx.core.graphics.ColorUtils.setAlphaComponent(base, Math.round(255 * (1f - t))));
-            b.setIconPadding(Math.round(dp(8) * (1f - t)));
-            int mw = Math.round(btnMinWidth * (1f - t));
-            b.setMinWidth(mw);
-            b.setMinimumWidth(mw);
-            int pad = Math.round(dp(16) + (dp(8) - dp(16)) * t);
-            b.setPadding(pad, b.getPaddingTop(), pad, b.getPaddingBottom());
+        // shape: label squeezed away and faded out, paddings and minimum width shrinking, until the
+        // body is 24dp icon + 2 × 8dp = 40dp — as wide as it is tall, i.e. a circle. Re-measuring
+        // the buttons is only worth it when the fraction really moved (setMinWidth always relayouts).
+        float t = clamp01((f - 0.15f) / 0.7f);
+        if (Math.abs(t - lastT) > 0.004f) {
+            lastT = t;
+            for (MaterialButton b : new MaterialButton[]{stopBtn, applyBtn}) {
+                int base = b == applyBtn ? applyTextColor : stopTextColor;
+                b.setTextScaleX(Math.max(0.001f, 1f - t));                 // 0 would be ignored by TextView
+                b.setTextColor(androidx.core.graphics.ColorUtils.setAlphaComponent(base, Math.round(255 * (1f - t))));
+                b.setIconPadding(Math.round(dp(8) * (1f - t)));
+                int mw = Math.round(btnMinWidth * (1f - t));
+                b.setMinWidth(mw);
+                b.setMinimumWidth(mw);
+                int pad = Math.round(dp(16) + (dp(8) - dp(16)) * t);
+                b.setPadding(pad, b.getPaddingTop(), pad, b.getPaddingBottom());
+            }
         }
-        // gap between the two actions: 8dp as text buttons, 12dp once they are circles
-        ViewGroup.MarginLayoutParams lp = (ViewGroup.MarginLayoutParams) applyBtn.getLayoutParams();
-        int gap = Math.round(dp(8) + (dp(12) - dp(8)) * t);
-        if (lp.getMarginStart() != gap) { lp.setMarginStart(gap); applyBtn.setLayoutParams(lp); }
+        positionButtons(f);
+    }
+
+    /**
+     * Arrangement: stacked while the bar is open, side by side once collapsed. Both buttons are laid
+     * out top-right of the actions box, so this is pure translation — no layout, nothing that could
+     * disturb the app bar. Staggered so they never cross: Stop slides out of the way first, then
+     * Apply rises into the collapsed row (a rise of exactly the distance the bar itself travels).
+     */
+    private void positionButtons(float f) {
+        int h = stopBtn.getHeight(), bar = appbar.getHeight();
+        if (h == 0 || bar == 0) return;                                // not laid out yet
+        float stackTop = (bar - (2f * h + dp(8))) / 2f;                // top button, bar expanded
+        float rowTop = (bar - appbar.getTotalScrollRange() - h) / 2f;  // both buttons, bar collapsed
+        float stackBottom = stackTop + h + dp(8);
+        float slide = clamp01(f / 0.55f), rise = clamp01((f - 0.45f) / 0.55f);
+        stopBtn.setTranslationX(-slide * (applyBtn.getWidth() + dp(12)));
+        stopBtn.setTranslationY(stackTop + (rowTop - stackTop) * f);
+        applyBtn.setTranslationY(stackBottom + (rowTop - stackBottom) * rise);
+    }
+
+    private static float clamp01(float v) {
+        return Math.max(0f, Math.min(1f, v));
     }
 
     private int dp(int v) {
