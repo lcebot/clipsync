@@ -31,6 +31,7 @@ import com.google.android.material.bottomnavigation.BottomNavigationView;
 import com.google.android.material.button.MaterialButtonToggleGroup;
 import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton;
 import com.google.android.material.color.MaterialColors;
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.google.android.material.slider.Slider;
 import com.google.android.material.snackbar.Snackbar;
 import com.google.android.material.textfield.TextInputEditText;
@@ -40,9 +41,10 @@ import java.util.Properties;
 
 /**
  * Two pages behind a bottom navigation bar — Settings and Log — under an M3 collapsing top app bar.
- * The connection status lives in the bar's top-right corner (pulsing dot, connection kind, peer and
- * address; the lower two lines fade out as the bar collapses, tapping it returns to the top), the
- * two actions are extended FABs bottom-right that shrink on scroll and only exist on Settings.
+ * The connection status is a one-line chip in the bar's top-right corner (pulsing dot plus the
+ * connection kind); tapping it opens the peer and address in full. The actions are extended FABs
+ * bottom-right, on the Settings tab only, and follow the service: "Start" while it is stopped,
+ * "Stop" + "Apply" while it runs.
  * Every field is validated live; Apply is enabled only when all of them are valid and sends a
  * RELOAD to the running service (no restart).
  */
@@ -67,9 +69,16 @@ public class MainActivity extends AppCompatActivity {
     // status
     private ViewGroup statusBlock;
     private View statusDot, statusHalo;
-    private TextView statusTitle, statusHost, statusDetail;
-    private boolean hasHost, hasDetail, wasConnected;
+    private TextView statusTitle;
+    private String peerName, peerAddr, connectionKind;      // shown in the details dialog
+    private boolean wasConnected;
     private ObjectAnimator pulse;
+    // action state: which of Start / Stop + Apply is shown, and what we are waiting for
+    private boolean serviceRunning, waitingForStop, waitingForStart;
+    private boolean onLogTab, stopShown, configValid;
+    private boolean applyStarts = true;                     // matches serviceRunning == false
+    private long waitingSince;
+    private static final long WAIT_TIMEOUT_MS = 12_000;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final Logger.Listener logListener = line -> ui.post(() -> {
@@ -142,8 +151,6 @@ public class MainActivity extends AppCompatActivity {
         batteryFix = findViewById(R.id.battery_fix);
         statusBlock = findViewById(R.id.status_block);
         statusTitle = findViewById(R.id.status_title);
-        statusHost = findViewById(R.id.status_host);
-        statusDetail = findViewById(R.id.status_detail);
         statusDot = findViewById(R.id.status_dot);
         statusHalo = findViewById(R.id.status_halo);
     }
@@ -232,8 +239,8 @@ public class MainActivity extends AppCompatActivity {
         ok &= show(pathL, Config.checkPath(text(path)));
         ok &= show(keepHoursL, Config.checkRange(text(keepHours), 0, 8760, "h"));
         ok &= show(keepMbL, Config.checkRange(text(keepMb), 0, 1024 * 1024, "MB"));
-        applyFab.setEnabled(ok);
-        applyFab.setAlpha(ok ? 1f : 0.5f);
+        configValid = ok;
+        refreshActions();
         return ok;
     }
 
@@ -263,14 +270,10 @@ public class MainActivity extends AppCompatActivity {
         stopFab.setOnClickListener(v -> {
             setAutoStart(false);                       // watchdog / boot must not bring it back
             stopService(new Intent(this, SyncService.class));
+            waitingForStop = true;
+            waitingSince = System.currentTimeMillis();
+            refreshActions();                          // greys Stop out until the service is gone
             snack(R.string.snack_stopped);
-            ui.postDelayed(this::refreshStatus, 300);
-        });
-        // the FABs shrink to their icons while the settings page scrolls down, and extend again
-        // on the way back up — ExtendedFloatingActionButton's own animation
-        pageSettings.setOnScrollChangeListener((NestedScrollView.OnScrollChangeListener) (v, x, y, ox, oy) -> {
-            if (y > oy + dp(4)) { stopFab.shrink(); applyFab.shrink(); }
-            else if (y < oy - dp(4) || y <= 0) { stopFab.extend(); applyFab.extend(); }
         });
         findViewById(R.id.log_clear).setOnClickListener(v -> { Logger.clear(); log.setText(""); });
         findViewById(R.id.log_copy).setOnClickListener(v -> {
@@ -288,24 +291,14 @@ public class MainActivity extends AppCompatActivity {
             pageSettings.setVisibility(showLog ? View.GONE : View.VISIBLE);
             pageLog.setVisibility(showLog ? View.VISIBLE : View.GONE);
             appbar.setLiftOnScrollTargetViewId(showLog ? R.id.log_scroll : R.id.page_settings);   // lift follows the visible page
-            if (showLog) { stopFab.hide(); applyFab.hide(); } else { stopFab.show(); applyFab.show(); }
+            onLogTab = showLog;
+            refreshActions();
             if (showLog) logScroll.post(() -> logScroll.fullScroll(NestedScrollView.FOCUS_DOWN));
             return true;
         });
-        // tapping the status: back to the top, bar re-expanded
-        statusBlock.setOnClickListener(v -> {
-            appbar.setExpanded(true, true);
-            if (pageLog.getVisibility() == View.VISIBLE) logScroll.smoothScrollTo(0, 0);
-            else pageSettings.smoothScrollTo(0, 0);
-        });
+        statusBlock.setOnClickListener(v -> showConnectionDetails());
 
-        // the CollapsingToolbarLayout scales the title itself; we only fade / place the status
-        appbar.addOnOffsetChangedListener((bar, offset) -> {
-            int range = Math.max(1, bar.getTotalScrollRange());
-            positionStatus(Math.min(1f, -offset / (float) range));
-        });
-        // the first offset callback arrives before anything is measured, and hiding a line
-        // re-measures the block: re-place it afterwards (translation only, so this cannot loop)
+        // the first offset callback arrives before anything is measured: place it once laid out
         statusBlock.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> placeStatus());
 
         pulse = ObjectAnimator.ofFloat(statusHalo, View.ALPHA, 0.45f, 0f);
@@ -318,27 +311,39 @@ public class MainActivity extends AppCompatActivity {
         Snackbar.make(coordinator, textRes, Snackbar.LENGTH_SHORT).setAnchorView(fabs).show();
     }
 
-    private float lastF;
 
     /**
-     * Expanded: all three lines. Collapsing: peer and address fade out over the first half, so by
-     * the time the bar is closed only the connection kind (or "Stopped") is left beside the dot.
+     * Stopped → a single "Start"; running → "Stop" and "Apply". After pressing one of them the
+     * button greys out until the service actually reaches the new state (or the wait times out),
+     * and a state change made from anywhere else moves the buttons just the same.
+     * Sizes change only here, never while scrolling, so one ChangeBounds pass covers it.
      */
-    private void positionStatus(float f) {
-        lastF = f;
-        float fade = clamp01(1f - 2f * f);
-        statusHost.setAlpha(fade);
-        statusDetail.setAlpha(fade);
-        boolean show = fade > 0f;
-        statusHost.setVisibility(hasHost && show ? View.VISIBLE : View.GONE);
-        statusDetail.setVisibility(hasDetail && show ? View.VISIBLE : View.GONE);
-        placeStatus();
+    private void refreshActions() {
+        boolean showStop = serviceRunning && !onLogTab;
+        boolean showApply = !onLogTab;
+        boolean startMode = !serviceRunning;
+        if (stopShown != showStop || applyStarts != startMode) {
+            TransitionManager.beginDelayedTransition(fabs, new AutoTransition().setDuration(200));
+        }
+        stopShown = showStop;
+        applyStarts = startMode;
+
+        stopFab.setVisibility(showStop ? View.VISIBLE : View.GONE);
+        stopFab.setEnabled(!waitingForStop);
+        stopFab.setAlpha(waitingForStop ? 0.5f : 1f);
+
+        applyFab.setVisibility(showApply ? View.VISIBLE : View.GONE);
+        setTextIfChanged(applyFab, getString(serviceRunning ? R.string.action_apply : R.string.action_start));
+        applyFab.setIconResource(serviceRunning ? R.drawable.ic_restart : R.drawable.ic_play);
+        boolean applyOk = configValid && !waitingForStart;
+        applyFab.setEnabled(applyOk);
+        applyFab.setAlpha(applyOk ? 1f : 0.5f);
     }
 
     /**
-     * The block keeps its centre on the collapsed bar's centre line in every state, so it grows and
-     * shrinks in place in the top-right corner instead of drifting. Translation only: no layout,
-     * nothing that could disturb the app bar.
+     * The chip sits on the collapsed bar's centre line, so it stays put in the top-right corner
+     * whether the bar is open or closed. Translation only: no layout, nothing that could disturb
+     * the app bar.
      */
     private void placeStatus() {
         int h = statusBlock.getHeight(), bar = appbar.getHeight();
@@ -347,16 +352,30 @@ public class MainActivity extends AppCompatActivity {
         statusBlock.setTranslationY((collapsed - h) / 2f);
     }
 
+    /** Peer name and address in full, wrapped, each copied by tapping it. */
+    private void showConnectionDetails() {
+        if (peerName == null && peerAddr == null) return;              // nothing to show when stopped
+        View body = getLayoutInflater().inflate(R.layout.dialog_status, null);
+        TextView peer = body.findViewById(R.id.dialog_peer), addr = body.findViewById(R.id.dialog_address);
+        peer.setText(peerName == null ? "—" : peerName);
+        addr.setText(peerAddr == null ? "—" : peerAddr);
+        peer.setOnClickListener(v -> copy(peerName));
+        addr.setOnClickListener(v -> copy(peerAddr));
+        new MaterialAlertDialogBuilder(this)
+                .setTitle(connectionKind == null ? getString(R.string.state_stopped) : connectionKind)
+                .setView(body)
+                .setPositiveButton(android.R.string.ok, null)
+                .show();
+    }
+
+    private void copy(String text) {
+        if (text == null || text.isEmpty()) return;
+        getSystemService(ClipboardManager.class).setPrimaryClip(ClipData.newPlainText("clipsync", text));
+        snack(R.string.snack_copied);
+    }
+
     private static void setTextIfChanged(TextView v, String text) {
         if (!text.contentEquals(v.getText())) v.setText(text);
-    }
-
-    private static float clamp01(float v) {
-        return Math.max(0f, Math.min(1f, v));
-    }
-
-    private int dp(int v) {
-        return Math.round(v * getResources().getDisplayMetrics().density);
     }
 
     @Override
@@ -413,13 +432,14 @@ public class MainActivity extends AppCompatActivity {
                 ? com.google.android.material.R.attr.colorOnSurfaceVariant
                 : com.google.android.material.R.attr.colorOnSurface));
 
-        // line 1: kind / state · line 2: peer name · line 3: address (or state detail)
-        String titleText, hostText, detailText;
+        // the chip carries the connection kind (or the state) only; peer and address go to the dialog
+        String titleText;
         if (connected) {
-            titleText = "mdns".equals(s.via) ? getString(R.string.kind_mdns)
+            connectionKind = "mdns".equals(s.via) ? getString(R.string.kind_mdns)
                     : getString(R.string.kind_ddns, getString(s.lan ? R.string.link_lan : R.string.link_internet));
-            hostText = s.host;
-            detailText = s.addr;
+            titleText = connectionKind;
+            peerName = s.host;
+            peerAddr = s.addr;
         } else {
             titleText = getString(switch (s.state) {
                 case "connecting" -> R.string.state_connecting;
@@ -428,23 +448,31 @@ public class MainActivity extends AppCompatActivity {
                 case "idle" -> R.string.state_idle;
                 default -> R.string.state_stopped;
             });
-            hostText = null;
-            detailText = s.detail;
+            connectionKind = null;
+            peerName = null;
+            peerAddr = s.detail;                       // e.g. "retry in 5 s" — still worth showing
         }
-        // this runs once a second: only touch the TextViews when the text really changed, or every
-        // tick would queue a layout pass for the status block
+        // this runs once a second: only touch the TextView when the text really changed, or every
+        // tick would queue a layout pass for the status chip
         setTextIfChanged(statusTitle, titleText);
-        hasHost = hostText != null;
-        hasDetail = detailText != null;
-        setTextIfChanged(statusHost, hasHost ? hostText : "");
-        setTextIfChanged(statusDetail, hasDetail ? detailText : "");
-        positionStatus(lastF);                         // applies the fade and the visibilities
+        statusBlock.setClickable(peerName != null || peerAddr != null);
 
         if (connected != wasConnected) {
             wasConnected = connected;
             if (connected) { statusHalo.setVisibility(View.VISIBLE); if (!pulse.isRunning()) pulse.start(); }
             else { pulse.cancel(); statusHalo.setVisibility(View.INVISIBLE); }
         }
+
+        // the actions follow the service: Start alone while it is stopped, Stop + Apply while it runs
+        boolean running = !stopped;
+        if (running != serviceRunning) {
+            serviceRunning = running;
+            if (running) waitingForStart = false; else waitingForStop = false;
+        }
+        if ((waitingForStart || waitingForStop) && System.currentTimeMillis() - waitingSince > WAIT_TIMEOUT_MS) {
+            waitingForStart = waitingForStop = false;  // the service never got there; hand control back
+        }
+        refreshActions();
 
         // background-permission card
         PowerManager pm = getSystemService(PowerManager.class);
@@ -477,7 +505,10 @@ public class MainActivity extends AppCompatActivity {
             if (Status.read(this).alive()) {
                 startService(svc.setAction(SyncService.ACTION_RELOAD));      // in place: no restart, no process churn
             } else {
-                startForegroundService(svc);
+                startForegroundService(svc);                                 // this was the "Start" button
+                waitingForStart = true;
+                waitingSince = System.currentTimeMillis();
+                refreshActions();
             }
             Logger.i("config applied: mode " + c.mode + (c.host.isEmpty() ? "" : ", " + c.host) + ":" + c.port
                     + (c.mdns ? ", browse " + c.mdnsTimeoutMs + " ms" : "") + ", " + c.threads + " streams, files -> " + c.filesDir);

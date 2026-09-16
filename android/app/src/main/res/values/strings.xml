@@ -3,9 +3,10 @@
     <string name="app_name">ClipSync</string>
     <string name="app_desc">Sync clipboard, images and files with a Windows PC. Scope: System Framework.</string>
 
-    <!-- header actions -->
+    <!-- actions -->
     <string name="action_stop">Stop</string>
     <string name="action_apply">Apply</string>
+    <string name="action_start">Start</string>
 
     <!-- navigation -->
     <string name="nav_settings">Settings</string>
@@ -57,7 +58,13 @@
     <string name="link_lan">LAN</string>
     <string name="link_internet">Internet</string>
 
+    <!-- connection details dialog -->
+    <string name="dialog_peer">Peer</string>
+    <string name="dialog_address">Address</string>
+    <string name="dialog_tap_to_copy">Tap a value to copy it.</string>
+
     <!-- snackbars -->
+    <string name="snack_copied">Copied</string>
     <string name="snack_stopped">Service stopped (auto-start off until Apply)</string>
     <string name="snack_applied">Saved and applied</string>
     <string name="snack_log_copied">Log copied</string>

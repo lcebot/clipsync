@@ -407,62 +407,34 @@
         </androidx.coordinatorlayout.widget.CoordinatorLayout>
 
         <!-- ===== connection status, top-right, sitting on the app bar =====
-             No container of its own: three right-aligned lines plus the pulsing dot. The lower two
-             fade out as the bar collapses, leaving just the connection kind; the block keeps its
-             centre on the collapsed bar's centre line (pure translation, set in MainActivity).
-             Tapping it scrolls back to the top and re-expands the bar. -->
+             One line only — "Stopped" or the connection kind — plus the pulsing dot, so its size
+             never changes and nothing is ever ellipsised. Peer and address are one tap away
+             (dialog_status). Bounded rounded ripple: a borderless one would spill over the bar. -->
         <LinearLayout
             android:id="@+id/status_block"
             android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
+            android:layout_height="36dp"
             android:layout_gravity="top|end"
+            android:layout_marginEnd="12dp"
             android:orientation="horizontal"
             android:gravity="center_vertical"
-            android:paddingStart="12dp"
-            android:paddingEnd="16dp"
-            android:paddingVertical="6dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
+            android:minWidth="96dp"
+            android:paddingStart="14dp"
+            android:paddingEnd="14dp"
+            android:background="@drawable/status_ripple"
             android:clickable="true"
             android:focusable="true">
 
-            <LinearLayout
-                android:layout_width="wrap_content"
+            <TextView
+                android:id="@+id/status_title"
+                android:layout_width="0dp"
+                android:layout_weight="1"
                 android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:gravity="end">
-
-                <TextView
-                    android:id="@+id/status_title"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:textAppearance="?attr/textAppearanceLabelLarge"
-                    android:textColor="?attr/colorOnSurface"
-                    android:singleLine="true"
-                    android:text="@string/state_stopped" />
-
-                <TextView
-                    android:id="@+id/status_host"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:textAppearance="?attr/textAppearanceBodySmall"
-                    android:textColor="?attr/colorOnSurfaceVariant"
-                    android:maxWidth="200dp"
-                    android:singleLine="true"
-                    android:ellipsize="middle"
-                    android:visibility="gone" />
-
-                <TextView
-                    android:id="@+id/status_detail"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:textAppearance="?attr/textAppearanceLabelSmall"
-                    android:textColor="?attr/colorOnSurfaceVariant"
-                    android:fontFamily="monospace"
-                    android:maxWidth="200dp"
-                    android:singleLine="true"
-                    android:ellipsize="middle"
-                    android:visibility="gone" />
-            </LinearLayout>
+                android:textAppearance="?attr/textAppearanceLabelLarge"
+                android:textColor="?attr/colorOnSurface"
+                android:gravity="end"
+                android:singleLine="true"
+                android:text="@string/state_stopped" />
 
             <FrameLayout
                 android:layout_width="20dp"
@@ -485,8 +457,11 @@
             </FrameLayout>
         </LinearLayout>
 
-        <!-- ===== actions: a pair of extended FABs, bottom-right, Settings tab only =====
-             shrink()/extend() are the component's own animations, driven by the settings scroll. -->
+        <!-- ===== actions: extended FABs, bottom-right, Settings tab only =====
+             They stay extended: their size changes only when the service state does (Start ↔
+             Stop + Apply), animated by one ChangeBounds pass. Driving shrink()/extend() from the
+             scroll made the component re-measure against this wrap_content row every frame and
+             overshoot the target width before snapping back. -->
         <LinearLayout
             android:id="@+id/fabs"
             android:layout_width="wrap_content"
