@@ -425,8 +425,8 @@
                 android:layout_gravity="top|end"
                 app:icon="@drawable/ic_stop"
                 app:iconSize="24dp"
-                app:insetTop="0dp"
-                app:insetBottom="0dp"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
                 android:text="@string/action_stop" />
 
             <com.google.android.material.button.MaterialButton
@@ -436,8 +436,8 @@
                 android:layout_gravity="top|end"
                 app:icon="@drawable/ic_restart"
                 app:iconSize="24dp"
-                app:insetTop="0dp"
-                app:insetBottom="0dp"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
                 android:text="@string/action_apply" />
         </FrameLayout>
 
