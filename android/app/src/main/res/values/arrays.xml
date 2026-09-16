@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- classic-API module scope: system_server only -->
+    <string-array name="xposedscope">
+        <item>android</item>
+    </string-array>
+</resources>
