@@ -6,9 +6,9 @@ import java.io.FileInputStream;
 import java.lang.reflect.Method;
 
 /**
- * Everything the system_server module does, independent of which Xposed API loaded it.
- * {@link Entry} (libxposed API 100+) and {@link LegacyEntry} (classic de.robv API) are thin
- * adapters that install the same hooks and call into here. Must not reference either API.
+ * Everything the system_server module does, independent of the Xposed API that loaded it.
+ * {@link LegacyEntry} (classic de.robv API) installs the hooks and calls into here.
+ * Must not reference any Xposed API.
  *
  * <ul>
  *   <li>Clipboard: writes are allowed without focus on every release, so "writing works in the
