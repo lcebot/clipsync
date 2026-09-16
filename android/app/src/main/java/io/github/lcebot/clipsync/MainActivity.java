@@ -61,7 +61,8 @@ public class MainActivity extends AppCompatActivity {
     private TextView browseLabel, threadsLabel;
     private ViewGroup settingsRoot;
     // header
-    private View header, title;
+    private View title;
+    private ViewGroup headerRow;
     private MaterialButton stopBtn, applyBtn;
     private boolean headerCollapsed;
     // pages / log
@@ -72,7 +73,7 @@ public class MainActivity extends AppCompatActivity {
     private MaterialCardView statusPill;
     private ViewGroup statusInner;
     private View statusText, statusDot, statusHalo;
-    private TextView statusTitle, statusDetail;
+    private TextView statusTitle, statusHost, statusDetail;
     private ObjectAnimator pulse;
     private String lastPillContent = "";
     private boolean pillFolded;
@@ -136,7 +137,7 @@ public class MainActivity extends AppCompatActivity {
         threads = findViewById(R.id.threads);
         threadsLabel = findViewById(R.id.threads_label);
         settingsRoot = findViewById(R.id.settings_root);
-        header = findViewById(R.id.header);
+        headerRow = findViewById(R.id.header_row);
         title = findViewById(R.id.title);
         stopBtn = findViewById(R.id.stop);
         applyBtn = findViewById(R.id.apply);
@@ -151,6 +152,7 @@ public class MainActivity extends AppCompatActivity {
         statusInner = findViewById(R.id.status_inner);
         statusText = findViewById(R.id.status_text);
         statusTitle = findViewById(R.id.status_title);
+        statusHost = findViewById(R.id.status_host);
         statusDetail = findViewById(R.id.status_detail);
         statusDot = findViewById(R.id.status_dot);
         statusHalo = findViewById(R.id.status_halo);
@@ -310,18 +312,28 @@ public class MainActivity extends AppCompatActivity {
         pulse.setRepeatMode(ValueAnimator.RESTART);
     }
 
+    private int btnMinWidth = -1;
+
+    /**
+     * Collapsed: the buttons become circles — no label, no minimum width, and horizontal padding
+     * chosen so that width == height (the M3 button shape is a full pill, so equal sides = circle).
+     */
     private void setHeaderCollapsed(boolean collapsed) {
         if (collapsed == headerCollapsed) return;
         headerCollapsed = collapsed;
-        TransitionManager.beginDelayedTransition((ViewGroup) header, new TransitionSet()
+        if (btnMinWidth < 0) btnMinWidth = applyBtn.getMinWidth();
+        TransitionManager.beginDelayedTransition(headerRow, new TransitionSet()
                 .addTransition(new Fade()).addTransition(new ChangeBounds()).setDuration(180));
-        stopBtn.setText(collapsed ? "" : "Stop");
-        applyBtn.setText(collapsed ? "" : "Apply");
-        int pad = collapsed ? dp(12) : dp(16);
-        stopBtn.setIconPadding(collapsed ? 0 : dp(8));
-        applyBtn.setIconPadding(collapsed ? 0 : dp(8));
-        stopBtn.setPadding(pad, stopBtn.getPaddingTop(), pad, stopBtn.getPaddingBottom());
-        applyBtn.setPadding(pad, applyBtn.getPaddingTop(), pad, applyBtn.getPaddingBottom());
+        for (MaterialButton b : new MaterialButton[]{stopBtn, applyBtn}) {
+            boolean isApply = b == applyBtn;
+            b.setText(collapsed ? "" : isApply ? "Apply" : "Stop");
+            b.setIconPadding(collapsed ? 0 : dp(8));
+            b.setMinWidth(collapsed ? 0 : btnMinWidth);
+            b.setMinimumWidth(collapsed ? 0 : btnMinWidth);
+            // 40dp tall button body: 24dp icon + 2 × 8dp = 40dp wide -> circle
+            int pad = collapsed ? dp(8) : dp(16);
+            b.setPadding(pad, b.getPaddingTop(), pad, b.getPaddingBottom());
+        }
     }
 
     private int dp(int v) {
@@ -386,11 +398,14 @@ public class MainActivity extends AppCompatActivity {
                 : com.google.android.material.R.attr.colorOnSecondaryContainer);
         statusPill.setCardBackgroundColor(bg);
         statusTitle.setTextColor(fg);
+        statusHost.setTextColor(fg);
         statusDetail.setTextColor(fg);
 
-        String titleText, detailText;
+        // line 1: kind / state · line 2: peer name · line 3: address (or state detail)
+        String titleText, hostText, detailText;
         if (connected) {
-            titleText = ("mdns".equals(s.via) ? "mDNS" : "DDNS (" + (s.lan ? "LAN" : "Internet") + ")") + " · " + s.host;
+            titleText = "mdns".equals(s.via) ? "mDNS" : "DDNS (" + (s.lan ? "LAN" : "Internet") + ")";
+            hostText = s.host;
             detailText = s.addr;
         } else {
             titleText = switch (s.state) {
@@ -400,13 +415,16 @@ public class MainActivity extends AppCompatActivity {
                 case "idle" -> "Idle";
                 default -> "Stopped";
             };
+            hostText = null;
             detailText = s.detail;
         }
         statusTitle.setText(titleText);
+        statusHost.setText(hostText == null ? "" : hostText);
+        statusHost.setVisibility(hostText == null ? View.GONE : View.VISIBLE);
         statusDetail.setText(detailText == null ? "" : detailText);
         statusDetail.setVisibility(detailText == null ? View.GONE : View.VISIBLE);
 
-        String content = s.state + "|" + titleText + "|" + detailText;
+        String content = s.state + "|" + titleText + "|" + hostText + "|" + detailText;
         if (!content.equals(lastPillContent)) {
             lastPillContent = content;
             if (connected) { statusHalo.setVisibility(View.VISIBLE); if (!pulse.isRunning()) pulse.start(); }
@@ -437,8 +455,8 @@ public class MainActivity extends AppCompatActivity {
         TransitionManager.beginDelayedTransition(statusPill, new TransitionSet()
                 .addTransition(new ChangeBounds()).addTransition(new Fade()).setDuration(260));
         statusText.setVisibility(folded ? View.GONE : View.VISIBLE);
-        int side = folded ? dp(13) : dp(14);
-        statusInner.setPadding(side, statusInner.getPaddingTop(), side, statusInner.getPaddingBottom());
+        int start = dp(16), end = folded ? dp(16) : dp(18);
+        statusInner.setPadding(start, statusInner.getPaddingTop(), end, statusInner.getPaddingBottom());
         // keep the pill's height: the text block is the tallest child, so pad the dot's row instead
         statusInner.setMinimumHeight(folded ? statusInner.getHeight() : 0);
     }
