@@ -4,9 +4,27 @@
 #   CLIPSYNC_HOST  - your PC's DDNS hostname
 #   CLIPSYNC_PSK   - 64 hex chars, same as windows/clipsync.ini
 #   CLIPSYNC_PORT  - optional, default 47521
+#   CLIPSYNC_MODE  - optional: ddns+mdns (default) | ddns | mdns
+#   KEYSTORE_B64       - base64 of your personal keystore (see below)
+#   KEYSTORE_PASSWORD  - store password
+#   KEY_ALIAS          - optional, defaults to the store's only alias
+#   KEY_PASSWORD       - optional, defaults to KEYSTORE_PASSWORD (PKCS12 has one password)
 # Forks without secrets still build; the APK then reads /data/data/io.github.lcebot.clipsync/files/clipsync.conf at runtime.
 #
+# NOTE: this repo is public and the tag job attaches the APK to a public Release. CLIPSYNC_PSK and
+# CLIPSYNC_HOST are compiled into BuildConfig, so setting those secrets would publish them inside a
+# downloadable APK. Leave them unset and configure the app on the device instead.
+#
+# Make the keystore once, keep it offline, never commit it. No JDK needed — PowerShell writes a
+# PKCS12 directly (see README / the commands below), then base64 it into KEYSTORE_B64:
+#   [Convert]::ToBase64String([IO.File]::ReadAllBytes("clipsync.p12")) | Set-Clipboard
+# (not certutil -encode: it wraps the output in BEGIN/END lines that base64 -d chokes on)
+# KEY_ALIAS may be left unset — the build reads the store's only alias.
+# Losing this file means no device can ever overwrite-install the app again.
+#
 # Output: workflow artifact "clipsync-apk"; on tags v* it is also attached to a GitHub Release.
+# Without the keystore secrets the build still succeeds, but produces app-release-unsigned.apk,
+# which cannot be installed.
 name: build-apk
 on:
   push:
@@ -51,9 +69,10 @@ jobs:
           HOST: ${{ secrets.CLIPSYNC_HOST }}
           PORT: ${{ secrets.CLIPSYNC_PORT }}
           PSK: ${{ secrets.CLIPSYNC_PSK }}
+          MODE: ${{ secrets.CLIPSYNC_MODE }}
         run: |
           if [ -n "$PSK" ]; then
-            printf 'host=%s\nport=%s\npsk=%s\n' "$HOST" "${PORT:-47521}" "$PSK" > clipsync.properties
+            printf 'host=%s\nport=%s\npsk=%s\nmode=%s\n' "$HOST" "${PORT:-47521}" "$PSK" "${MODE:-ddns+mdns}" > clipsync.properties
             echo "using secrets"
           elif [ -f clipsync.properties ]; then
             echo "using committed clipsync.properties"
@@ -61,16 +80,33 @@ jobs:
             echo "no config: APK will need /data/data/io.github.lcebot.clipsync/files/clipsync.conf at runtime"
           fi
 
+      # Decoded into RUNNER_TEMP, never into the workspace: nothing here can end up in an artifact.
+      - name: decode keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/clipsync.p12"
+            echo "KEYSTORE_FILE=$RUNNER_TEMP/clipsync.p12" >> "$GITHUB_ENV"
+            echo "signing with the keystore secret"
+          else
+            echo "no keystore secret: the release APK will be unsigned"
+          fi
+
       - name: build
-        run: gradle assembleDebug --no-daemon
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: gradle assembleRelease --no-daemon
 
       - uses: actions/upload-artifact@v4
         with:
           name: clipsync-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: android/app/build/outputs/apk/release/*.apk
 
       - name: release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: android/app/build/outputs/apk/debug/app-debug.apk
+          files: android/app/build/outputs/apk/release/*.apk
