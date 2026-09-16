@@ -17,6 +17,11 @@
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round">
 
+        <!-- Modern (libxposed API 102) module: declared by META-INF/xposed/*, no meta-data here.
+             The classic-API entry (assets/xposed_init, LegacyEntry) stays dormant unless the
+             legacy meta-data is added back. -->
+
+
         <activity
             android:name=".MainActivity"
             android:exported="true"

@@ -42,7 +42,8 @@ android {
 }
 
 dependencies {
-    compileOnly("io.github.libxposed:api:102.0.0")
+    compileOnly("io.github.libxposed:api:102.0.0")     // new API (Entry)
+    compileOnly("de.robv.android.xposed:api:82")        // classic API (LegacyEntry) — what LSPosed implements
     // androidx.annotation (for @NonNull in Entry) comes transitively via appcompat/core; pinning a
     // newer version explicitly collides with AGP's runtime/compile consistent resolution.
     implementation("androidx.appcompat:appcompat:1.7.0")
