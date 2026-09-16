@@ -18,43 +18,52 @@
             android:layout_height="wrap_content"
             app:liftOnScroll="true">
 
-            <LinearLayout
+            <!-- 96dp expanded, 56dp collapsed. The content row is pinned to the BOTTOM 56dp so it
+                 is exactly what remains visible once the top 40dp scrolled away. -->
+            <FrameLayout
                 android:id="@+id/header"
                 android:layout_width="match_parent"
                 android:layout_height="96dp"
                 android:minHeight="56dp"
-                android:orientation="horizontal"
-                android:gravity="center_vertical"
-                android:paddingStart="16dp"
-                android:paddingEnd="8dp"
                 app:layout_scrollFlags="scroll|exitUntilCollapsed|snap">
 
-                <TextView
-                    android:id="@+id/title"
-                    android:layout_width="0dp"
-                    android:layout_weight="1"
-                    android:layout_height="wrap_content"
-                    android:textAppearance="?attr/textAppearanceHeadlineMedium"
-                    android:textColor="?attr/colorOnSurface"
-                    android:transformPivotX="0dp"
-                    android:text="@string/app_name" />
+                <LinearLayout
+                    android:id="@+id/header_row"
+                    android:layout_width="match_parent"
+                    android:layout_height="56dp"
+                    android:layout_gravity="bottom"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:paddingStart="16dp"
+                    android:paddingEnd="8dp">
 
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/stop"
-                    style="?attr/materialButtonOutlinedStyle"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    app:icon="@drawable/ic_stop"
-                    android:text="Stop" />
+                    <TextView
+                        android:id="@+id/title"
+                        android:layout_width="0dp"
+                        android:layout_weight="1"
+                        android:layout_height="wrap_content"
+                        android:textAppearance="?attr/textAppearanceHeadlineMedium"
+                        android:textColor="?attr/colorOnSurface"
+                        android:transformPivotX="0dp"
+                        android:text="@string/app_name" />
 
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/apply"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="8dp"
-                    app:icon="@drawable/ic_restart"
-                    android:text="Apply" />
-            </LinearLayout>
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/stop"
+                        style="?attr/materialButtonOutlinedStyle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        app:icon="@drawable/ic_stop"
+                        android:text="Stop" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/apply"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="8dp"
+                        app:icon="@drawable/ic_restart"
+                        android:text="Apply" />
+                </LinearLayout>
+            </FrameLayout>
         </com.google.android.material.appbar.AppBarLayout>
 
         <!-- ===== pages ===== -->
@@ -76,8 +85,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="vertical"
-                    android:paddingHorizontal="16dp"
-                    android:animateLayoutChanges="true">
+                    android:paddingHorizontal="16dp">
 
                     <!-- background permission (shown only while battery optimisation still applies) -->
                     <com.google.android.material.card.MaterialCardView
@@ -126,28 +134,21 @@
                         app:selectionRequired="true"
                         app:checkedButton="@+id/mode_both">
 
+                        <!-- compact labels: smaller type and padding, single line, never ellipsised;
+                             width is distributed by content (wrap_content + weight on the leftovers) -->
                         <com.google.android.material.button.MaterialButton
                             android:id="@+id/mode_both"
-                            style="?attr/materialButtonOutlinedStyle"
-                            android:layout_width="0dp"
-                            android:layout_weight="1"
-                            android:layout_height="wrap_content"
+                            style="@style/ClipSync.Segment"
                             android:text="DDNS + mDNS" />
 
                         <com.google.android.material.button.MaterialButton
                             android:id="@+id/mode_ddns"
-                            style="?attr/materialButtonOutlinedStyle"
-                            android:layout_width="0dp"
-                            android:layout_weight="1"
-                            android:layout_height="wrap_content"
+                            style="@style/ClipSync.Segment"
                             android:text="DDNS only" />
 
                         <com.google.android.material.button.MaterialButton
                             android:id="@+id/mode_mdns"
-                            style="?attr/materialButtonOutlinedStyle"
-                            android:layout_width="0dp"
-                            android:layout_weight="1"
-                            android:layout_height="wrap_content"
+                            style="@style/ClipSync.Segment"
                             android:text="mDNS only" />
                     </com.google.android.material.button.MaterialButtonToggleGroup>
 
@@ -216,7 +217,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:orientation="vertical"
-                        android:layout_marginTop="4dp">
+                        android:layout_marginTop="12dp">
 
                         <TextView
                             android:id="@+id/browse_label"
@@ -420,77 +421,91 @@
                 </androidx.core.widget.NestedScrollView>
             </LinearLayout>
 
-            <!-- ===== status pill (both pages) ===== -->
-            <com.google.android.material.card.MaterialCardView
-                android:id="@+id/status_pill"
-                style="?attr/materialCardViewElevatedStyle"
+        </FrameLayout>
+
+        <!-- ===== status pill (both pages) — a direct child of the CoordinatorLayout, so it is
+             anchored to the bottom of the visible area and does not ride along with the app bar ===== -->
+        <com.google.android.material.card.MaterialCardView
+            android:id="@+id/status_pill"
+            style="?attr/materialCardViewElevatedStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|start"
+            android:layout_margin="16dp"
+            app:cardCornerRadius="28dp"
+            app:cardBackgroundColor="?attr/colorSecondaryContainer">
+
+            <LinearLayout
+                android:id="@+id/status_inner"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_gravity="bottom|start"
-                android:layout_margin="16dp"
-                app:cardCornerRadius="24dp"
-                app:cardBackgroundColor="?attr/colorSecondaryContainer">
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:paddingStart="16dp"
+                android:paddingEnd="18dp"
+                android:paddingVertical="12dp">
 
+                <FrameLayout
+                    android:layout_width="24dp"
+                    android:layout_height="24dp">
+
+                    <View
+                        android:id="@+id/status_halo"
+                        android:layout_width="24dp"
+                        android:layout_height="24dp"
+                        android:background="@drawable/status_dot"
+                        android:alpha="0.35" />
+
+                    <View
+                        android:id="@+id/status_dot"
+                        android:layout_width="16dp"
+                        android:layout_height="16dp"
+                        android:layout_gravity="center"
+                        android:background="@drawable/status_dot" />
+                </FrameLayout>
+
+                <!-- three lines: kind, peer name, address -->
                 <LinearLayout
-                    android:id="@+id/status_inner"
+                    android:id="@+id/status_text"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:orientation="horizontal"
-                    android:gravity="center_vertical"
-                    android:paddingStart="14dp"
-                    android:paddingEnd="14dp"
-                    android:paddingVertical="10dp">
+                    android:orientation="vertical"
+                    android:layout_marginStart="14dp">
 
-                    <FrameLayout
-                        android:layout_width="14dp"
-                        android:layout_height="14dp">
-
-                        <View
-                            android:id="@+id/status_halo"
-                            android:layout_width="14dp"
-                            android:layout_height="14dp"
-                            android:background="@drawable/status_dot"
-                            android:alpha="0.35" />
-
-                        <View
-                            android:id="@+id/status_dot"
-                            android:layout_width="10dp"
-                            android:layout_height="10dp"
-                            android:layout_gravity="center"
-                            android:background="@drawable/status_dot" />
-                    </FrameLayout>
-
-                    <LinearLayout
-                        android:id="@+id/status_text"
+                    <TextView
+                        android:id="@+id/status_title"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:orientation="vertical"
-                        android:layout_marginStart="10dp">
+                        android:textAppearance="?attr/textAppearanceTitleMedium"
+                        android:textColor="?attr/colorOnSecondaryContainer"
+                        android:singleLine="true"
+                        android:text="Stopped" />
 
-                        <TextView
-                            android:id="@+id/status_title"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:textAppearance="?attr/textAppearanceLabelLarge"
-                            android:textColor="?attr/colorOnSecondaryContainer"
-                            android:singleLine="true"
-                            android:text="Stopped" />
+                    <TextView
+                        android:id="@+id/status_host"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:textAppearance="?attr/textAppearanceBodyMedium"
+                        android:textColor="?attr/colorOnSecondaryContainer"
+                        android:maxWidth="280dp"
+                        android:singleLine="true"
+                        android:ellipsize="middle"
+                        android:visibility="gone" />
 
-                        <TextView
-                            android:id="@+id/status_detail"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:textAppearance="?attr/textAppearanceBodySmall"
-                            android:textColor="?attr/colorOnSecondaryContainer"
-                            android:fontFamily="monospace"
-                            android:maxWidth="260dp"
-                            android:singleLine="true"
-                            android:ellipsize="middle"
-                            android:visibility="gone" />
-                    </LinearLayout>
+                    <TextView
+                        android:id="@+id/status_detail"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:textAppearance="?attr/textAppearanceBodySmall"
+                        android:textColor="?attr/colorOnSecondaryContainer"
+                        android:fontFamily="monospace"
+                        android:maxWidth="280dp"
+                        android:singleLine="true"
+                        android:ellipsize="middle"
+                        android:visibility="gone" />
                 </LinearLayout>
-            </com.google.android.material.card.MaterialCardView>
-        </FrameLayout>
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
     </androidx.coordinatorlayout.widget.CoordinatorLayout>
 
     <com.google.android.material.bottomnavigation.BottomNavigationView

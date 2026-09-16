@@ -7,6 +7,19 @@
         <item name="windowNoTitle">true</item>
     </style>
 
+    <!-- segmented-button segment: fits three labels on a phone width without ellipsis -->
+    <style name="ClipSync.Segment" parent="Widget.Material3.Button.OutlinedButton">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_weight">1</item>
+        <item name="android:minWidth">0dp</item>
+        <item name="android:paddingStart">8dp</item>
+        <item name="android:paddingEnd">8dp</item>
+        <item name="android:textAppearance">?attr/textAppearanceLabelMedium</item>
+        <item name="android:maxLines">1</item>
+        <item name="android:ellipsize">none</item>
+    </style>
+
     <!-- small group header above each block of settings -->
     <style name="ClipSync.SectionTitle" parent="android:Widget.TextView">
         <item name="android:layout_width">match_parent</item>
