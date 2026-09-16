@@ -27,9 +27,8 @@ import io.github.libxposed.api.XposedModuleInterface;
  *       failing, the push never fires — while writes, allowed without focus anyway, "work").
  *       Every caller is therefore deoptimized first; the classes involved are small, so this is
  *       cheap and done once.</li>
- *   <li><b>Lifecycle.</b> Hooks are installed from whichever system_server callback the framework
- *       delivers first ({@code onSystemServerLoaded} / {@code onSystemServerStarting}); the
- *       installer is idempotent.</li>
+ *   <li><b>Lifecycle.</b> Hooks are installed from {@code onSystemServerStarting} (the system_server
+ *       callback this API level exposes); the installer is idempotent.</li>
  * </ul>
  */
 public class Entry extends XposedModule {
@@ -39,11 +38,6 @@ public class Entry extends XposedModule {
     @Override
     public void onModuleLoaded(@NonNull XposedModuleInterface.ModuleLoadedParam param) {
         log(Log.INFO, Common.TAG, "module loaded in " + param.getProcessName());
-    }
-
-    @Override
-    public void onSystemServerLoaded(@NonNull XposedModuleInterface.SystemServerLoadedParam param) {
-        install(param.getClassLoader());
     }
 
     @Override
