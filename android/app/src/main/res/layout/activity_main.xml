@@ -17,6 +17,7 @@
         android:layout_weight="1">
 
         <androidx.coordinatorlayout.widget.CoordinatorLayout
+            android:id="@+id/coordinator"
             android:layout_width="match_parent"
             android:layout_height="match_parent">
 
@@ -36,7 +37,6 @@
                     android:layout_height="?attr/collapsingToolbarLayoutMediumSize"
                     app:layout_scrollFlags="scroll|exitUntilCollapsed|snap"
                     app:titleCollapseMode="scale"
-                    app:expandedTitleMarginEnd="120dp"
                     app:maxLines="1"
                     app:title="@string/app_name">
 
@@ -406,124 +406,117 @@
             </FrameLayout>
         </androidx.coordinatorlayout.widget.CoordinatorLayout>
 
-        <!-- ===== trailing actions, overlaying the app bar =====
-             Laid out once, right-aligned at the top of a box as tall as the expanded app bar; the
-             expanded / collapsed arrangement is pure translation (see MainActivity.morphButtons):
-             stacked vertically while the bar is open, side by side once it is collapsed. -->
-        <FrameLayout
-            android:id="@+id/actions"
+        <!-- ===== connection status, top-right, sitting on the app bar =====
+             No container of its own: three right-aligned lines plus the pulsing dot. The lower two
+             fade out as the bar collapses, leaving just the connection kind; the block keeps its
+             centre on the collapsed bar's centre line (pure translation, set in MainActivity).
+             Tapping it scrolls back to the top and re-expands the bar. -->
+        <LinearLayout
+            android:id="@+id/status_block"
             android:layout_width="wrap_content"
-            android:layout_height="?attr/collapsingToolbarLayoutMediumSize"
+            android:layout_height="wrap_content"
             android:layout_gravity="top|end"
-            android:paddingEnd="16dp">
-
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/stop"
-                style="?attr/materialButtonOutlinedStyle"
-                android:layout_width="wrap_content"
-                android:layout_height="40dp"
-                android:layout_gravity="top|end"
-                app:icon="@drawable/ic_stop"
-                app:iconSize="24dp"
-                android:insetTop="0dp"
-                android:insetBottom="0dp"
-                android:text="@string/action_stop" />
-
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/apply"
-                android:layout_width="wrap_content"
-                android:layout_height="40dp"
-                android:layout_gravity="top|end"
-                app:icon="@drawable/ic_restart"
-                app:iconSize="24dp"
-                android:insetTop="0dp"
-                android:insetBottom="0dp"
-                android:text="@string/action_apply" />
-        </FrameLayout>
-
-        <!-- ===== status pill (both pages) =====
-             fixed 84dp tall in every state; folded it becomes an 84dp rounded square with the dot
-             centred, unfolded the dot slides left and the three text lines appear on its right -->
-        <com.google.android.material.card.MaterialCardView
-            android:id="@+id/status_pill"
-            style="?attr/materialCardViewElevatedStyle"
-            android:layout_width="wrap_content"
-            android:layout_height="84dp"
-            android:layout_gravity="bottom|start"
-            android:layout_margin="16dp"
-            app:cardCornerRadius="24dp"
-            app:cardBackgroundColor="?attr/colorSecondaryContainer">
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingStart="12dp"
+            android:paddingEnd="16dp"
+            android:paddingVertical="6dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:clickable="true"
+            android:focusable="true">
 
             <LinearLayout
-                android:id="@+id/status_inner"
                 android:layout_width="wrap_content"
-                android:layout_height="match_parent"
-                android:orientation="horizontal"
-                android:gravity="center_vertical"
-                android:paddingStart="20dp"
-                android:paddingEnd="20dp">
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:gravity="end">
 
-                <FrameLayout
-                    android:layout_width="24dp"
-                    android:layout_height="24dp">
-
-                    <View
-                        android:id="@+id/status_halo"
-                        android:layout_width="24dp"
-                        android:layout_height="24dp"
-                        android:background="@drawable/status_dot"
-                        android:alpha="0.35" />
-
-                    <View
-                        android:id="@+id/status_dot"
-                        android:layout_width="16dp"
-                        android:layout_height="16dp"
-                        android:layout_gravity="center"
-                        android:background="@drawable/status_dot" />
-                </FrameLayout>
-
-                <!-- three lines: kind, peer name, address -->
-                <LinearLayout
-                    android:id="@+id/status_text"
+                <TextView
+                    android:id="@+id/status_title"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:orientation="vertical"
-                    android:layout_marginStart="14dp">
+                    android:textAppearance="?attr/textAppearanceLabelLarge"
+                    android:textColor="?attr/colorOnSurface"
+                    android:singleLine="true"
+                    android:text="@string/state_stopped" />
 
-                    <TextView
-                        android:id="@+id/status_title"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:textAppearance="?attr/textAppearanceTitleMedium"
-                        android:textColor="?attr/colorOnSecondaryContainer"
-                        android:singleLine="true"
-                        android:text="@string/state_stopped" />
+                <TextView
+                    android:id="@+id/status_host"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textAppearance="?attr/textAppearanceBodySmall"
+                    android:textColor="?attr/colorOnSurfaceVariant"
+                    android:maxWidth="200dp"
+                    android:singleLine="true"
+                    android:ellipsize="middle"
+                    android:visibility="gone" />
 
-                    <TextView
-                        android:id="@+id/status_host"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:textAppearance="?attr/textAppearanceBodyMedium"
-                        android:textColor="?attr/colorOnSecondaryContainer"
-                        android:maxWidth="280dp"
-                        android:singleLine="true"
-                        android:ellipsize="middle"
-                        android:visibility="gone" />
-
-                    <TextView
-                        android:id="@+id/status_detail"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:textAppearance="?attr/textAppearanceBodySmall"
-                        android:textColor="?attr/colorOnSecondaryContainer"
-                        android:fontFamily="monospace"
-                        android:maxWidth="280dp"
-                        android:singleLine="true"
-                        android:ellipsize="middle"
-                        android:visibility="gone" />
-                </LinearLayout>
+                <TextView
+                    android:id="@+id/status_detail"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textAppearance="?attr/textAppearanceLabelSmall"
+                    android:textColor="?attr/colorOnSurfaceVariant"
+                    android:fontFamily="monospace"
+                    android:maxWidth="200dp"
+                    android:singleLine="true"
+                    android:ellipsize="middle"
+                    android:visibility="gone" />
             </LinearLayout>
-        </com.google.android.material.card.MaterialCardView>
+
+            <FrameLayout
+                android:layout_width="20dp"
+                android:layout_height="20dp"
+                android:layout_marginStart="10dp">
+
+                <View
+                    android:id="@+id/status_halo"
+                    android:layout_width="20dp"
+                    android:layout_height="20dp"
+                    android:background="@drawable/status_dot"
+                    android:alpha="0.35" />
+
+                <View
+                    android:id="@+id/status_dot"
+                    android:layout_width="12dp"
+                    android:layout_height="12dp"
+                    android:layout_gravity="center"
+                    android:background="@drawable/status_dot" />
+            </FrameLayout>
+        </LinearLayout>
+
+        <!-- ===== actions: a pair of extended FABs, bottom-right, Settings tab only =====
+             shrink()/extend() are the component's own animations, driven by the settings scroll. -->
+        <LinearLayout
+            android:id="@+id/fabs"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|end"
+            android:layout_margin="16dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
+                android:id="@+id/stop"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/action_stop"
+                android:textColor="?attr/colorOnSurface"
+                app:icon="@drawable/ic_stop"
+                app:iconTint="?attr/colorOnSurface"
+                app:backgroundTint="?attr/colorSurfaceContainerHigh" />
+
+            <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
+                android:id="@+id/apply"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="12dp"
+                android:text="@string/action_apply"
+                android:textColor="?attr/colorOnPrimaryContainer"
+                app:icon="@drawable/ic_restart"
+                app:iconTint="?attr/colorOnPrimaryContainer"
+                app:backgroundTint="?attr/colorPrimaryContainer" />
+        </LinearLayout>
     </FrameLayout>
 
     <com.google.android.material.bottomnavigation.BottomNavigationView
