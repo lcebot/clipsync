@@ -15,8 +15,11 @@ import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
 /**
- * Classic Xposed API entry (assets/xposed_init + manifest meta-data). Runs inside system_server
- * (scope "android"). The logic lives in {@link Common}; this class only installs the hooks.
+ * Classic Xposed API entry — kept as reference / fallback, currently NOT declared (assets/xposed_init
+ * is empty, no xposedmodule meta-data); the active entry is {@link Entry} (libxposed API 102).
+ * To switch back: put this class name into assets/xposed_init and restore the meta-data
+ * (xposedmodule, xposedminversion 93, xposedscope = @array/xposedscope, i.e. "android").
+ * The logic lives in {@link Common}; this class only installs the hooks.
  *
  * <p>system_server is AOT-compiled and the small private methods we hook
  * ({@code clipboardAccessAllowed}, {@code setPrimaryClipInternalLocked}) get inlined into their
@@ -83,10 +86,11 @@ public class LegacyEntry implements IXposedHookLoadPackage {
                         hooked.add("clipboardAccessAllowed");
                     }
                     case "showAccessNotificationLocked" -> {
+                        final Object skip = m.getReturnType() == boolean.class ? Boolean.FALSE : null;   // boolean on 15
                         XposedBridge.hookMethod(m, new XC_MethodHook() {
                             @Override
                             protected void beforeHookedMethod(MethodHookParam p) {
-                                if (Common.PKG.equals(p.args[0])) p.setResult(null);
+                                if (Common.PKG.equals(p.args[0])) p.setResult(skip);
                             }
                         });
                         hooked.add("showAccessNotificationLocked");
