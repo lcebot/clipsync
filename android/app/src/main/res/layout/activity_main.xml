@@ -404,6 +404,36 @@
             </LinearLayout>
 
             </FrameLayout>
+
+            <!-- ===== actions: extended FABs, bottom-right, Settings tab only =====
+                 Direct children of the CoordinatorLayout — the arrangement shrink()/extend() is
+                 built for. Both are pinned to the bottom-end corner; Stop is slid left of Apply by
+                 a translation that follows Apply's animated width (translation, so it costs no
+                 layout). Sizes come from the component's own motion specs. -->
+            <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
+                android:id="@+id/apply"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="bottom|end"
+                android:layout_margin="16dp"
+                android:text="@string/action_apply"
+                android:textColor="@color/fab_fg_primary"
+                app:icon="@drawable/ic_restart"
+                app:iconTint="@color/fab_fg_primary"
+                app:backgroundTint="@color/fab_bg_primary" />
+
+            <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
+                android:id="@+id/stop"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="bottom|end"
+                android:layout_margin="16dp"
+                android:visibility="gone"
+                android:text="@string/action_stop"
+                android:textColor="@color/fab_fg_surface"
+                app:icon="@drawable/ic_stop"
+                app:iconTint="@color/fab_fg_surface"
+                app:backgroundTint="@color/fab_bg_surface" />
         </androidx.coordinatorlayout.widget.CoordinatorLayout>
 
         <!-- ===== connection status, top-right, sitting on the app bar =====
@@ -457,41 +487,6 @@
             </FrameLayout>
         </LinearLayout>
 
-        <!-- ===== actions: extended FABs, bottom-right, Settings tab only =====
-             They stay extended: their size changes only when the service state does (Start ↔
-             Stop + Apply), animated by one ChangeBounds pass. Driving shrink()/extend() from the
-             scroll made the component re-measure against this wrap_content row every frame and
-             overshoot the target width before snapping back. -->
-        <LinearLayout
-            android:id="@+id/fabs"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_gravity="bottom|end"
-            android:layout_margin="16dp"
-            android:orientation="horizontal"
-            android:gravity="center_vertical">
-
-            <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
-                android:id="@+id/stop"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="@string/action_stop"
-                android:textColor="?attr/colorOnSurface"
-                app:icon="@drawable/ic_stop"
-                app:iconTint="?attr/colorOnSurface"
-                app:backgroundTint="?attr/colorSurfaceContainerHigh" />
-
-            <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
-                android:id="@+id/apply"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="12dp"
-                android:text="@string/action_apply"
-                android:textColor="?attr/colorOnPrimaryContainer"
-                app:icon="@drawable/ic_restart"
-                app:iconTint="?attr/colorOnPrimaryContainer"
-                app:backgroundTint="?attr/colorPrimaryContainer" />
-        </LinearLayout>
     </FrameLayout>
 
     <com.google.android.material.bottomnavigation.BottomNavigationView
