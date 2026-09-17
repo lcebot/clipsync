@@ -204,20 +204,26 @@ jobs:
           fi
           mkdir -p "$RUNNER_TEMP/pc"
           cp clipsync.py install.ps1 uninstall.ps1 requirements.txt clipsync.ini "$RUNNER_TEMP/pc/"
-          (cd "$RUNNER_TEMP/pc" && zip -q -r "$GITHUB_WORKSPACE/windows.zip" .)
+          (cd "$RUNNER_TEMP/pc" && zip -q -r "$RUNNER_TEMP/windows.zip" .)
+
+      # Everything that ships is staged in one flat folder first. upload-artifact keeps the common
+      # parent of the paths it is given, so naming the APK by its build path and the zip separately
+      # would bury the APK under android/app/build/outputs/apk/release/ inside the artifact.
+      - name: collect what ships
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          cp "$GITHUB_WORKSPACE"/android/app/build/outputs/apk/release/*.apk "$GITHUB_WORKSPACE/dist/"
+          cp "$RUNNER_TEMP/windows.zip" "$GITHUB_WORKSPACE/dist/"
+          ls -l "$GITHUB_WORKSPACE/dist"
 
       - uses: actions/upload-artifact@v4
         with:
           name: clipsync
-          path: |
-            android/app/build/outputs/apk/release/*.apk
-            windows.zip
+          path: dist/           # a directory: its contents land at the root of the artifact
 
       # On a release event this attaches to the release that was just published.
       - name: attach to the release
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            android/app/build/outputs/apk/release/*.apk
-            windows.zip
+          files: dist/*
