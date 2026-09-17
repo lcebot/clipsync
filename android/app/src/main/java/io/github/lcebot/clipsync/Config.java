@@ -140,7 +140,7 @@ public final class Config {
         boolean discovery = bool(p.getProperty("discovery", "true"));
         // the old three-way mode made this impossible to express; two switches can, so it is checked
         if (!direct && !discovery)
-            throw new IllegalArgumentException("discovery: turn on local network discovery or direct addresses");
+            throw new IllegalArgumentException("discovery: turn on local network discovery or direct connections");
         if (direct) fail("peers", checkPeers(p.getProperty("peers", "")));
         fail("port", checkPort(p.getProperty("port", "")));
         fail("psk", checkPsk(p.getProperty("psk", "")));
@@ -207,7 +207,7 @@ public final class Config {
             if (seen.contains(t)) return "listed twice: " + t;
             seen.add(t);
         }
-        return any ? null : "add an address, or turn direct addresses off";
+        return any ? null : "add an address, or turn direct connections off";
     }
 
     /**

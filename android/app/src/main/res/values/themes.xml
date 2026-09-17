@@ -23,13 +23,25 @@
         <item name="android:ellipsize">none</item>
     </style>
 
-    <!-- Inside of every settings card. The card is the boundary between one group of controls and
-         the next; this is just the padding that keeps the controls off its edge. -->
+    <!-- Inside of a settings card whose controls are outlined text fields. An outlined box fills its
+         own row edge to edge, so 12dp of card padding is 12dp of visible clearance. -->
     <style name="ClipSync.CardBody" parent="">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">wrap_content</item>
         <item name="android:orientation">vertical</item>
         <item name="android:padding">12dp</item>
+    </style>
+
+    <!-- Inside of a settings card whose controls are switch rows and sliders. These carry their own
+         clear space: a MaterialSwitch measures 48dp (minTouchTargetSize) around a 32dp track, so 8dp
+         of it is already empty, and a slider and a text button are the same story. 12dp of card
+         padding on top of that reads as a wider gap than the same 12dp above an outlined box. 4dp
+         brings the first visible pixel to the same place. -->
+    <style name="ClipSync.CardBody.Rows" parent="ClipSync.CardBody">
+        <item name="android:paddingStart">12dp</item>
+        <item name="android:paddingEnd">12dp</item>
+        <item name="android:paddingTop">4dp</item>
+        <item name="android:paddingBottom">4dp</item>
     </style>
 
     <!-- small group header above each block of settings -->

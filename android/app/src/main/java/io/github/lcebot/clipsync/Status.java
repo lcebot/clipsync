@@ -21,9 +21,9 @@ public final class Status {
     public static final class Snapshot {
         public final String state;      // stopped | connecting | connected | disconnected | no network | idle
         public final String detail;     // free text for non-connected states (e.g. "retry in 3 s")
-        public final String via;        // ddns | mdns (connected only)
+        public final String via;        // direct | mdns (connected only)
         public final boolean lan;
-        public final String host;       // DDNS name or mDNS service name
+        public final String host;       // the listed address that answered, or the mDNS service name
         public final String addr;       // ip:port actually used
         public final long ts;           // wall-clock ms of the last write
         public final boolean suspended; // the pinger caught the process being frozen at least once

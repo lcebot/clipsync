@@ -105,8 +105,8 @@ received files are left alone.
 1. Install `app-release.apk`.
 2. *(rooted devices)* In **LSPosed**, enable **ClipSync** with scope **System Framework**, then
    **reboot**. On a device without root, everything except background clipboard *reading* works anyway.
-3. Open the app. Fill in the **PSK** — the dice beside the field generates one on the first device —
-   and, to reach a PC that is not on this network, turn on **Direct addresses** and add its address.
+3. Open the app. Fill in the **PSK** — **Generate random PSK key** makes one on the first device —
+   and, to reach a PC that is not on this network, turn on **Direct connections** and add its address.
    **Local network discovery** needs nothing configured. Then press **Apply** or **Start**.
 4. If the app shows a battery card, tap **Allow**. It keeps Android from suspending the connection.
 
@@ -139,10 +139,10 @@ the PC. Fields are validated as you type, and the **Apply** button stays disable
 | Setting | Default | Notes |
 |---|---|---|
 | Port | `47521` | Must match the PC |
-| PSK | — | 64 hex characters, identical on every device. The dice generates one |
+| PSK | — | 64 hex characters, identical on every device. **Generate random PSK key** under the field makes one |
 | Local network discovery | on | Find peers on this network by mDNS. Needs no configuration |
-| Direct addresses | off | Connect to addresses you list. A host name or a literal IPv4/IPv6 address — dynamic DNS is one option, not a requirement |
-| mDNS browse time | 4 s | How long to look for the PC on the LAN before giving up |
+| Direct connections | off | Connect to addresses you list. A host name or a literal IPv4/IPv6 address — dynamic DNS is one option, not a requirement |
+| mDNS browse timeout | 4 s | How long to look for the PC on the LAN before giving up |
 | Max text | 1 MB | Larger clips are not sent |
 | Max file (Internet) | 10 MB | |
 | Max file (LAN) | 100 MB | |
@@ -158,7 +158,7 @@ Settings are saved on the device and survive reboots and updates.
 | Symptom | What to check |
 |---|---|
 | Copies made **while the app is in the background** never arrive, but the PC to phone direction works | Expected on a device without root. On a rooted one it means the module is not active: writing the clipboard needs no hook, so a working PC to phone direction proves nothing. Enable ClipSync in LSPosed with scope **System Framework** and reboot. |
-| Status stays `Stopped` or keeps reconnecting | Open the **Log** tab and the logs should name the reason. For example, `ddns path failed` means no IPv6 or no AAAA record on this network; it falls back to mDNS by itself. |
+| Status stays `Stopped` or keeps reconnecting | Open the **Log** tab and the logs should name the reason. For example, `direct path failed (name)` means that address did not resolve or did not answer — no IPv6 or no AAAA record on this network, typically; local discovery is raced alongside it and takes over by itself. |
 | `mdns: no _clipsync._tcp service found` | The PC is not advertising. Check `clipsync.log` on the PC: missing `zeroconf`, UDP 5353 blocked, or Wi-Fi client isolation. |
 | Connected, but nothing arrives | PC firewall or router IPv6 inbound. `clipsync.log` should show the device connecting. |
 | `decrypt error` in `clipsync.log` | The PSK differs between the PC and that device. |

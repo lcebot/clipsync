@@ -1234,7 +1234,7 @@ def server_thread(cfg: Cfg, state: SyncState):
 # ----------------------------------------------------------------------------- mDNS (LAN fallback path)
 MDNS_TYPE = "_clipsync._tcp.local."
 MDNS_SCAN = 5              # seconds between local-address rescans (local only, cheap)
-MDNS_PROBE = 60            # seconds between DDNS-owner probes (hits the network, can be slow)
+MDNS_PROBE = 60            # seconds between name-owner probes (hits the network, can be slow)
 MDNS_PROBE_FIRST = 10      # and how long the first one waits for the resolver to be up
 
 
@@ -1251,13 +1251,13 @@ def owns_a_listed_name(peers: list, port: int) -> bool:
     Decision:
       * name resolves to one of my IPv6 addresses            -> host
       * DNS fails (no internet / no AAAA)                     -> host   (cannot decide; mDNS is the path
-                                                                         wanted when DDNS is broken)
+                                                                         wanted when the name is broken)
       * name points elsewhere AND that address accepts TCP    -> NOT host (another live PC owns it)
         on our port
       * name points elsewhere but nothing answers there       -> host   (stale record: my address changed
-                                                                         and the DDNS client has not caught
-                                                                         up yet — exactly when clients need
-                                                                         mDNS to find me)
+                                                                         and whatever updates the record has
+                                                                         not caught up — exactly when clients
+                                                                         need mDNS to find me)
     """
     if not peers:
         return True
@@ -1294,7 +1294,7 @@ def _say(level, msg):
     """Log `msg` only when it differs from the last one said this way.
 
     The host probe repeats every MDNS_PROBE seconds and its findings are usually unchanged — a
-    stale DDNS record stays stale until the updater runs. Saying so once per minute forever buries
+    stale DNS record stays stale until whatever updates it runs. Saying so once per minute buries
     the events that do matter; saying it when the answer changes is the whole of its value.
     """
     if getattr(_say, "last", None) != msg:
@@ -1340,12 +1340,12 @@ def mdns_thread(cfg: Cfg):
 
       * "what are my addresses?" is local and instant, so it is asked every MDNS_SCAN seconds and
         is what drives the advertisement;
-      * "does someone else own the DDNS name?" resolves a name and may sit out a TCP timeout — tens
-        of seconds on a slow or broken resolver — so it runs on its own thread every MDNS_PROBE
+      * "does someone else own a listed address?" resolves a name and may sit out a TCP timeout —
+        tens of seconds on a slow or broken resolver — so it runs on its own thread every MDNS_PROBE
         seconds and can only ever *withdraw* the advertisement.
 
     Keeping the slow question off the publishing path is the point: a device on the LAN is looking
-    for us during exactly the seconds a broken DDNS setup would otherwise make us wait.
+    for us during exactly the seconds a broken name would otherwise make us wait.
     """
     try:
         from zeroconf import IPVersion, ServiceInfo, Zeroconf
@@ -1435,7 +1435,7 @@ def mdns_thread(cfg: Cfg):
 
             if not host_now:
                 if zc is not None:
-                    stop("another PC owns the DDNS name")
+                    stop("another PC owns a listed address")
             elif addrs and settled and addrs != published:
                 publish(addrs)
         except Exception as e:
@@ -1507,8 +1507,8 @@ def main():
     # needs no delay of its own — the listening socket is a wildcard bind and serves interfaces
     # that appear later anyway, and the mDNS advertiser waits for the address list to settle.
     # start_delay remains for the one case that still wants it: several PCs sharing one
-    # clipsync.ini, where starting before the DDNS client has published makes the PC that does not
-    # own the name advertise for one probe interval before withdrawing.
+    # clipsync.ini, where starting before the DNS record has been published makes the PC that does
+    # not own the name advertise for one probe interval before withdrawing.
     if cfg.start_delay > 0:
         log.info("network start delayed by %ds", cfg.start_delay)
         threading.Timer(cfg.start_delay, start_network).start()

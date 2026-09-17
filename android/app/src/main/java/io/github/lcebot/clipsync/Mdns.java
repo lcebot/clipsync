@@ -23,10 +23,11 @@ import java.util.concurrent.TimeUnit;
  * platform NsdManager (no extra permissions, works from a background service).
  * Uses the API 34+ {@code registerServiceInfoCallback} resolution path (minSdk 35).
  *
- * <p>Second connection path: used when the DDNS name does not resolve / connect, or when no
- * host is configured at all. Only the PC that owns the DDNS address advertises (see
- * clipsync.py is_ddns_host), so normally exactly one service is found; every candidate is
- * tried anyway and the PSK handshake decides — a rogue advertiser only costs one failed connect.
+ * <p>Not a fallback: this races the listed addresses and whichever connects first wins (see
+ * {@link Connection}). It is also the only path when no address is listed at all. A PC that owns one
+ * of the listed names stops advertising (see clipsync.py owns_a_listed_name), so normally exactly one
+ * service is found; every candidate is tried anyway and the PSK handshake decides — a rogue
+ * advertiser only costs one failed connect.
  */
 public final class Mdns {
     static final String SERVICE_TYPE = "_clipsync._tcp.";

@@ -66,9 +66,9 @@ public final class Connection implements AutoCloseable {
     private final Object sendLock = new Object();
     /** "direct" or "mdns" — which path this session came up on (for logs and the UI). */
     public final String via;
-    /** Human-readable peer: DDNS name or mDNS service name, plus the address actually used. */
+    /** Human-readable peer: listed address or mDNS service name, plus the address actually used. */
     public final String peer;
-    /** Just the name part: the DDNS name, or the advertised mDNS service name. */
+    /** Just the name part: the listed address, or the advertised mDNS service name. */
     public final String peerName;
     /**
      * True when the PC is on our LAN: reached via mDNS, or its address is on one of the prefixes

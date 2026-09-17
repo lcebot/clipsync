@@ -23,22 +23,29 @@
     <string name="section_connection">Connection</string>
     <string name="hint_port">Port</string>
     <string name="hint_psk">PSK key (64 hex)</string>
-    <string name="psk_random">Generate a new key</string>
+    <string name="psk_generate">Generate random PSK key</string>
     <string name="psk_replace_title">Replace the key?</string>
     <string name="psk_replace_body">Every other device is using the current key and will stop connecting until you set the new one there too.</string>
     <string name="psk_replace_ok">Replace</string>
     <!-- The two switches name how a peer is found, not the route to it: a listed address is very
          often a LAN address too. Named this way, neither needs a supporting line. -->
     <string name="switch_discovery">Local network discovery</string>
-    <string name="switch_direct">Direct addresses</string>
+    <string name="switch_direct">Direct connections</string>
     <!-- Numbered, because the list holds several identical-looking fields and a screen reader has
          nothing else to tell them apart by. -->
     <string name="hint_peer">Address %1$d</string>
-    <string name="peer_empty">Enter an address, or remove this row</string>
-    <string name="peer_add">Add</string>
+    <!-- These two carry the weight a supporting line would, which is why they say what belongs in
+         the field rather than just that it is empty. The way out differs with the row: the last one
+         cannot be removed, so it names the switch instead. %1$s is switch_direct, so renaming the
+         switch does not leave the message behind. -->
+    <string name="peer_empty">Enter a host name or IP address, or remove this row</string>
+    <string name="peer_empty_last">Enter a host name or IP address, or turn off %1$s</string>
+    <!-- Carries no "+": the button has no icon (see page_settings.xml) and a typographic plus in a
+         label is not how M3 writes a text button. A plain verb phrase says it. -->
+    <string name="peer_add">Add address</string>
     <string name="peer_remove">Remove</string>
     <string name="peer_duplicate">Already listed above</string>
-    <string name="browse_label">mDNS browse: %1$d ms</string>
+    <string name="browse_label">mDNS browse timeout: %1$d ms</string>
 
     <!-- transfer limits -->
     <string name="section_limits">Transfer limits</string>

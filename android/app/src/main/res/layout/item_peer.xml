@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- One entry of the direct-addresses list. The remove control is the field's own trailing icon
+<!-- One entry of the Direct connections list. The remove control is the field's own trailing icon
      rather than a button in a column beside it: it belongs to this row and to nothing else.
-     On the last remaining row MainActivity hides it: zero addresses is what the Direct switch is
-     for, so the row cannot be removed, and TextInputLayout offers no way to disable just the
+     On the last remaining row MainActivity hides it: zero addresses is what the Direct connections
+     switch is for, so the row cannot be removed, and TextInputLayout offers no way to disable just the
      trailing icon without reaching into its internals.
      The hint is replaced per row by MainActivity ("Address 1", "Address 2", …) — every row reading
      the same hint leaves a screen reader with three identical fields.
@@ -12,8 +12,9 @@
      would take the remove control away exactly when it is most wanted: deleting the row is the most
      likely fix for an address that does not validate. The error is still carried by the red outline
      and the message beneath, so only redundant emphasis is lost.
-     endIconCheckable is off for the same reason the dice's is: removing a row is an action, not a
-     state, and TextInputLayout defaults an XML-declared custom end icon to checkable. -->
+     endIconCheckable is off because removing a row is an action, not a state, and TextInputLayout
+     defaults an XML-declared custom end icon to checkable — which a screen reader then announces as
+     a checkbox. -->
 <com.google.android.material.textfield.TextInputLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"

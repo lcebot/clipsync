@@ -67,7 +67,7 @@ public class MainActivity extends AppCompatActivity {
     private MaterialSwitch discovery, direct;
     private ViewGroup peersBox;
     private final List<TextInputLayout> peerRows = new ArrayList<>();
-    private MaterialButton peerAdd;
+    private MaterialButton peerAdd, pskRandom;
     private View browseRow;
     private Slider browse, threads;
     private TextView browseLabel, threadsLabel;
@@ -197,6 +197,7 @@ public class MainActivity extends AppCompatActivity {
         direct = findViewById(R.id.direct);
         peersBox = findViewById(R.id.peers_box);
         peerAdd = findViewById(R.id.peer_add);
+        pskRandom = findViewById(R.id.psk_random);
         portL = findViewById(R.id.port_layout);       port = findViewById(R.id.port);
         pskL = findViewById(R.id.psk_layout);         psk = findViewById(R.id.psk);
         textKbL = findViewById(R.id.text_kb_layout);  textKb = findViewById(R.id.text_kb);
@@ -267,7 +268,7 @@ public class MainActivity extends AppCompatActivity {
     // ------------------------------------------------------------------ the peers list
     /**
      * Rebuilds the rows from a list. One row always remains: zero addresses is expressed by turning
-     * the Direct switch off, which says the same thing without a list that looks broken.
+     * the Direct connections switch off, which says the same thing without a list that looks broken.
      */
     private void setPeerRows(List<String> peers) {
         peersBox.removeAllViews();
@@ -299,7 +300,7 @@ public class MainActivity extends AppCompatActivity {
 
     /**
      * The lone row's remove icon is hidden: the row cannot go, because zero addresses is what the
-     * Direct switch expresses. Hidden rather than greyed out because TextInputLayout has no public
+     * Direct connections switch expresses. Hidden rather than greyed out because TextInputLayout has no public
      * way to disable only the trailing icon.
      *
      * <p>Hints are numbered here rather than in the layout: several rows carrying one identical hint
@@ -316,7 +317,7 @@ public class MainActivity extends AppCompatActivity {
 
     /**
      * The rows exactly as they read, with nothing filtered out: a blank row is either an error the
-     * user is looking at (Direct on) or already gone (Direct off, {@link #dropBlankRows()}), so the
+     * user is looking at (Direct connections on) or already gone (off, {@link #dropBlankRows()}), so the
      * only blank that can reach here is a lone row, which joins to the empty string.
      */
     private List<String> peerValues() {
@@ -342,7 +343,9 @@ public class MainActivity extends AppCompatActivity {
     }
 
     /**
-     * Show / hide the DDNS name and the browse slider according to the segmented choice.
+     * Show / hide each switch's dependent controls: the browse slider under Local network discovery,
+     * the address list and its Add button under Direct connections. The switches themselves, and the
+     * cards holding them, never hide.
      *
      * <p>MaterialFade is M3's own transition for an element entering or leaving inside a container
      * — the same motion vocabulary as the page cross-fade — but it only fades and scales the
@@ -467,8 +470,13 @@ public class MainActivity extends AppCompatActivity {
             String raw = text((TextInputEditText) row.findViewById(R.id.peer));
             // A blank row is refused rather than quietly dropped on save: a row the user left half
             // finished is a mistake worth pointing at, and nothing blank ever reaches the file.
+            // The message says what belongs in the field, because with no supporting line under the
+            // switch this error is the only place that says it — and it names the way out, which
+            // differs: the last row cannot be removed, so turning the switch off is the way out.
             String problem = raw.trim().isEmpty()
-                    ? getString(R.string.peer_empty)
+                    ? peerRows.size() > 1
+                        ? getString(R.string.peer_empty)
+                        : getString(R.string.peer_empty_last, getString(R.string.switch_direct))
                     : Config.checkPeer(raw);
             String normal = Config.normalisePeer(raw);
             if (problem == null && seen.contains(normal)) problem = getString(R.string.peer_duplicate);
@@ -497,7 +505,7 @@ public class MainActivity extends AppCompatActivity {
         discovery.setOnCheckedChangeListener((b, checked) -> { applySwitches(true); validate(); });
         direct.setOnCheckedChangeListener((b, checked) -> { applySwitches(true); validate(); });
         peerAdd.setOnClickListener(v -> { addPeerRow("", true); validate(); });
-        pskL.setStartIconOnClickListener(v -> newPsk());
+        pskRandom.setOnClickListener(v -> newPsk());
         threads.setLabelFormatter(v -> String.valueOf(Config.THREAD_STEPS[Math.max(0, Math.min(4, Math.round(v)))]));
         threads.addOnChangeListener((s, v, u) -> threadsLabel.setText(getString(R.string.threads_label, threadsValue())));
         browse.setLabelFormatter(v -> Config.BROWSE_STEPS_MS[Math.max(0, Math.min(6, Math.round(v)))] + " ms");

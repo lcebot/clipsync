@@ -13,9 +13,10 @@ $stateFile = Join-Path $here 'install-state.json'
 $python  = (Get-Command python).Source
 $pythonw = Join-Path (Split-Path -Parent $python) "pythonw.exe"
 
-# IPv6 temporary (privacy) addresses are deliberately left as they are: the DDNS client registers
-# the temporary address on purpose (privacy). When it rotates and the record lags, the phone falls
-# back to mDNS on the LAN and the server keeps advertising (see is_ddns_host in clipsync.py).
+# IPv6 temporary (privacy) addresses are deliberately left as they are: a dynamic DNS client
+# registers the temporary address on purpose (privacy). When it rotates and the record lags, the
+# phone reaches the PC over mDNS on the LAN instead, and the server keeps advertising (see
+# owns_a_listed_name in clipsync.py).
 
 # --- firewall: TCP port for clients, UDP 5353 so python can answer mDNS queries
 $port = 47521
