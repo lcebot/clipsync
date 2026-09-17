@@ -26,13 +26,18 @@ import java.util.concurrent.CopyOnWriteArrayList;
 public final class Logger {
     public interface Listener { void onLine(String line); }
 
-    private static final int MAX_LINES = 500;
+    /**
+     * Entries kept in memory, oldest dropped first. One entry is normally one line, but a message
+     * logged with a throwable is a single entry carrying its whole stack trace. This is also what
+     * bounds the cost of the Log page, which renders the buffer as one selectable TextView.
+     */
+    static final int MAX_ENTRIES = 512;
     private static final long MAX_FILE_BYTES = 256 * 1024;
     // DateTimeFormatter is immutable/thread-safe (SimpleDateFormat is not; write() is called from
     // the net, ping, push and UI threads concurrently)
     private static final DateTimeFormatter TS = DateTimeFormatter.ofPattern("MM-dd HH:mm:ss", Locale.US);
 
-    private static final ArrayDeque<String> lines = new ArrayDeque<>(MAX_LINES);
+    private static final ArrayDeque<String> lines = new ArrayDeque<>(MAX_ENTRIES);
     private static final List<Listener> listeners = new CopyOnWriteArrayList<>();
     private static File file;
 
@@ -90,7 +95,7 @@ public final class Logger {
     }
 
     private static void push(String line) {
-        if (lines.size() >= MAX_LINES) lines.pollFirst();
+        if (lines.size() >= MAX_ENTRIES) lines.pollFirst();
         lines.addLast(line);
     }
 

@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Page 1 of the ViewPager2. The bottom padding clears the FAB pair. -->
+<!-- The Settings page, pulled into activity_main with <include>. Bottom padding clears the FABs. -->
 <androidx.core.widget.NestedScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"

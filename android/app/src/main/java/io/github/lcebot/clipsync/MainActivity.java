@@ -14,17 +14,16 @@ import android.os.Looper;
 import android.os.PowerManager;
 import android.provider.Settings;
 import android.text.Editable;
+import android.text.TextUtils;
 import android.text.TextWatcher;
-import android.transition.AutoTransition;
-import android.transition.TransitionManager;
-import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.TextView;
 
 import androidx.appcompat.app.AppCompatActivity;
-import androidx.recyclerview.widget.RecyclerView;
-import androidx.viewpager2.widget.ViewPager2;
+import androidx.core.widget.NestedScrollView;
+import androidx.transition.AutoTransition;
+import androidx.transition.TransitionManager;
 
 import com.google.android.material.appbar.AppBarLayout;
 import com.google.android.material.appbar.MaterialToolbar;
@@ -38,12 +37,13 @@ import com.google.android.material.slider.Slider;
 import com.google.android.material.snackbar.Snackbar;
 import com.google.android.material.textfield.TextInputEditText;
 import com.google.android.material.textfield.TextInputLayout;
+import com.google.android.material.transition.MaterialFadeThrough;
 
 import java.util.Properties;
 
 /**
- * Two pages in a ViewPager2 — Settings and Log — reachable by swipe or by the bottom navigation
- * bar, under an M3 collapsing top app bar. The connection status is the bar's only menu action, a
+ * Two pages behind a bottom navigation bar — Settings and Log — cross-faded into each other under
+ * an M3 collapsing top app bar. The connection status is the bar's only menu action, a
  * Chip whose icon is the pulsing dot; tapping it opens the peer and address in full. The actions
  * are extended FABs bottom-right, a different pair per page: Settings gets "Start", or "Stop" plus
  * "Apply" once the service runs, and Log gets "Copy" and "Clear".
@@ -66,11 +66,10 @@ public class MainActivity extends AppCompatActivity {
     private ExtendedFloatingActionButton stopFab, applyFab;      // Settings tab
     private ExtendedFloatingActionButton copyFab, clearFab;      // Log tab
     // pages / log
-    private ViewPager2 pager;
-    private View settingsPage, batteryRow, batteryFix;
-    private TextView batteryText;
-    private RecyclerView logList;
-    private final LogAdapter logAdapter = new LogAdapter();
+    private ViewGroup pages;
+    private NestedScrollView pageSettings, pageLog;
+    private View batteryRow, batteryFix;
+    private TextView log, batteryText;
     // status
     private Chip statusChip;
     private String peerName, peerAddr, connectionKind;      // shown in the details dialog
@@ -79,6 +78,7 @@ public class MainActivity extends AppCompatActivity {
     // action state: which of Start / Stop + Apply is shown, and what we are waiting for
     private boolean serviceRunning, waitingForStop, waitingForStart;
     private boolean onLogTab, configValid;
+    private boolean logDirty;                               // new lines waiting behind a selection
     // mirrors of the FABs' own shown/hidden state, so we only drive show()/hide() on a real change
     private boolean stopShown, applyShown = true, logFabsShown;
     private int applyIcon;                                  // 0 = never set, so the first pass applies
@@ -93,22 +93,30 @@ public class MainActivity extends AppCompatActivity {
     private final Runnable tick = new Runnable() {
         @Override
         public void run() {
-            if (Logger.refresh()) showLog();
+            if (Logger.refresh() || logDirty) showLog();
             refreshStatus();
             ui.postDelayed(this, 1000);
         }
     };
 
     /**
-     * Replaces the visible log. Following the tail is only automatic while the list is already at
-     * the bottom, so reading further up is not yanked away by the next line.
+     * Replaces the visible log.
+     *
+     * <p>Held back while text is selected: setText() drops the selection, and the whole point of
+     * the log being one TextView is that a report can be selected across many lines at once —
+     * losing it to a line that arrived meanwhile would make long selections impossible. The pending
+     * update is applied by the next tick after the selection goes away.
+     *
+     * <p>Following the tail is likewise only automatic while the view is already at the bottom, so
+     * reading further up is not yanked away by the next line.
      */
     private void showLog() {
-        boolean atBottom = !logList.canScrollVertically(1);
-        logAdapter.submit(Logger.snapshot());
-        if (atBottom && logAdapter.getItemCount() > 0) {
-            logList.scrollToPosition(logAdapter.getItemCount() - 1);
-        }
+        logDirty = true;
+        if (log.hasSelection()) return;
+        boolean atBottom = !pageLog.canScrollVertically(1);
+        log.setText(TextUtils.join("\n", Logger.snapshot()));
+        logDirty = false;
+        if (atBottom) pageLog.post(() -> pageLog.fullScroll(NestedScrollView.FOCUS_DOWN));
     }
 
     @Override
@@ -134,37 +142,35 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void bind() {
-        // The pages are inflated here rather than by the pager's adapter, so that everything on
-        // them can be found in this one pass and held for the activity's whole life.
-        settingsPage = getLayoutInflater().inflate(R.layout.page_settings, null);
-        logList = (RecyclerView) getLayoutInflater().inflate(R.layout.page_log, null);
-
-        mode = settingsPage.findViewById(R.id.mode);
-        hostL = settingsPage.findViewById(R.id.host_layout);       host = settingsPage.findViewById(R.id.host);
-        portL = settingsPage.findViewById(R.id.port_layout);       port = settingsPage.findViewById(R.id.port);
-        pskL = settingsPage.findViewById(R.id.psk_layout);         psk = settingsPage.findViewById(R.id.psk);
-        textKbL = settingsPage.findViewById(R.id.text_kb_layout);  textKb = settingsPage.findViewById(R.id.text_kb);
-        fileMbL = settingsPage.findViewById(R.id.file_mb_layout);  fileMb = settingsPage.findViewById(R.id.file_mb);
-        fileMbLocalL = settingsPage.findViewById(R.id.file_mb_local_layout);
-        fileMbLocal = settingsPage.findViewById(R.id.file_mb_local);
-        pathL = settingsPage.findViewById(R.id.path_layout);       path = settingsPage.findViewById(R.id.path);
-        keepHoursL = settingsPage.findViewById(R.id.keep_hours_layout);
-        keepHours = settingsPage.findViewById(R.id.keep_hours);
-        keepMbL = settingsPage.findViewById(R.id.keep_mb_layout);  keepMb = settingsPage.findViewById(R.id.keep_mb);
-        browseRow = settingsPage.findViewById(R.id.browse_row);
-        browse = settingsPage.findViewById(R.id.browse);
-        browseLabel = settingsPage.findViewById(R.id.browse_label);
-        threads = settingsPage.findViewById(R.id.threads);
-        threadsLabel = settingsPage.findViewById(R.id.threads_label);
-        settingsRoot = settingsPage.findViewById(R.id.settings_root);
-        batteryRow = settingsPage.findViewById(R.id.battery_row);
-        batteryText = settingsPage.findViewById(R.id.battery_text);
-        batteryFix = settingsPage.findViewById(R.id.battery_fix);
+        // the two pages live in their own layout files and are pulled in with <include>, so this
+        // stays one flat findViewById pass over the whole tree
+        mode = findViewById(R.id.mode);
+        hostL = findViewById(R.id.host_layout);       host = findViewById(R.id.host);
+        portL = findViewById(R.id.port_layout);       port = findViewById(R.id.port);
+        pskL = findViewById(R.id.psk_layout);         psk = findViewById(R.id.psk);
+        textKbL = findViewById(R.id.text_kb_layout);  textKb = findViewById(R.id.text_kb);
+        fileMbL = findViewById(R.id.file_mb_layout);  fileMb = findViewById(R.id.file_mb);
+        fileMbLocalL = findViewById(R.id.file_mb_local_layout); fileMbLocal = findViewById(R.id.file_mb_local);
+        pathL = findViewById(R.id.path_layout);       path = findViewById(R.id.path);
+        keepHoursL = findViewById(R.id.keep_hours_layout); keepHours = findViewById(R.id.keep_hours);
+        keepMbL = findViewById(R.id.keep_mb_layout);  keepMb = findViewById(R.id.keep_mb);
+        browseRow = findViewById(R.id.browse_row);
+        browse = findViewById(R.id.browse);
+        browseLabel = findViewById(R.id.browse_label);
+        threads = findViewById(R.id.threads);
+        threadsLabel = findViewById(R.id.threads_label);
+        settingsRoot = findViewById(R.id.settings_root);
+        batteryRow = findViewById(R.id.battery_row);
+        batteryText = findViewById(R.id.battery_text);
+        batteryFix = findViewById(R.id.battery_fix);
+        pages = findViewById(R.id.pages);
+        pageSettings = findViewById(R.id.page_settings);
+        pageLog = findViewById(R.id.page_log);
+        log = findViewById(R.id.log);
 
         appbar = findViewById(R.id.appbar);
         coordinator = findViewById(R.id.coordinator);
         nav = findViewById(R.id.nav);
-        pager = findViewById(R.id.pager);
         stopFab = findViewById(R.id.stop);
         applyFab = findViewById(R.id.apply);
         copyFab = findViewById(R.id.log_copy);
@@ -295,9 +301,9 @@ public class MainActivity extends AppCompatActivity {
             refreshActions();                          // greys Stop out until the service is gone
             snack(R.string.snack_stopped);
         });
-        clearFab.setOnClickListener(v -> { Logger.clear(); showLog(); });
+        clearFab.setOnClickListener(v -> { Logger.clear(); log.setText(""); });
         copyFab.setOnClickListener(v -> {
-            getSystemService(ClipboardManager.class).setPrimaryClip(ClipData.newPlainText("clipsync log", logAdapter.text()));
+            getSystemService(ClipboardManager.class).setPrimaryClip(ClipData.newPlainText("clipsync log", log.getText()));
             snack(R.string.snack_log_copied);
         });
         // The secondary FAB rides to the left of the primary one; following the primary's animated
@@ -309,29 +315,26 @@ public class MainActivity extends AppCompatActivity {
             try { startActivity(i); } catch (Exception e) { startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)); }
         });
 
-        logList.setAdapter(logAdapter);
-        pager.setAdapter(new PageAdapter(settingsPage, logList));
-        // A horizontal drag that starts on a slider belongs to the slider, not to the pager.
-        View.OnTouchListener sliderOwnsTheGesture = (v, e) -> {
-            if (e.getActionMasked() == MotionEvent.ACTION_DOWN) v.getParent().requestDisallowInterceptTouchEvent(true);
-            return false;                                   // the slider still handles it
-        };
-        threads.setOnTouchListener(sliderOwnsTheGesture);
-        browse.setOnTouchListener(sliderOwnsTheGesture);
+        // shrink to the icons while the page scrolls down, extend again on the way up. The FABs'
+        // own Behavior only reacts to the app bar leaving the screen, which exitUntilCollapsed
+        // never lets happen, so the scroll position is read here instead.
+        shrinkOnScroll(pageSettings, applyFab, stopFab);
+        shrinkOnScroll(pageLog, copyFab, clearFab);
 
-        // the bottom bar and the swipe are two ways to move the same pager
         nav.setOnItemSelectedListener(item -> {
-            pager.setCurrentItem(item.getItemId() == R.id.nav_log ? 1 : 0, true);
+            boolean toLog = item.getItemId() == R.id.nav_log;
+            if (toLog == onLogTab) return true;
+            // MaterialFadeThrough is M3's own transition for a navigation bar destination change:
+            // the outgoing page fades and scales down, the incoming one fades in. No lateral
+            // motion, which the spec reserves for peers in a sequence.
+            TransitionManager.beginDelayedTransition(pages, new MaterialFadeThrough());
+            pageSettings.setVisibility(toLog ? View.GONE : View.VISIBLE);
+            pageLog.setVisibility(toLog ? View.VISIBLE : View.GONE);
+            appbar.setLiftOnScrollTargetViewId(toLog ? R.id.page_log : R.id.page_settings);
+            onLogTab = toLog;
+            refreshActions();
+            if (toLog) showLog();
             return true;
-        });
-        pager.registerOnPageChangeCallback(new ViewPager2.OnPageChangeCallback() {
-            @Override
-            public void onPageSelected(int position) {
-                onLogTab = position == 1;
-                nav.getMenu().findItem(onLogTab ? R.id.nav_log : R.id.nav_settings).setChecked(true);
-                appbar.setLiftOnScrollTargetViewId(onLogTab ? R.id.page_log : R.id.page_settings);
-                refreshActions();
-            }
         });
 
         statusChip.setOnClickListener(v -> showConnectionDetails());
@@ -352,6 +355,13 @@ public class MainActivity extends AppCompatActivity {
     private void pairFabs(ExtendedFloatingActionButton first, ExtendedFloatingActionButton second) {
         first.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) ->
                 second.setTranslationX(-(first.getWidth() + dp(12))));
+    }
+
+    private void shrinkOnScroll(NestedScrollView page, ExtendedFloatingActionButton... fabs) {
+        page.setOnScrollChangeListener((NestedScrollView.OnScrollChangeListener) (v, x, y, ox, oy) -> {
+            if (y > oy + dp(4)) for (ExtendedFloatingActionButton f : fabs) f.shrink();
+            else if (y < oy - dp(4) || y <= 0) for (ExtendedFloatingActionButton f : fabs) f.extend();
+        });
     }
 
     private void snack(int textRes) {
@@ -433,8 +443,8 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
-        logAdapter.submit(Logger.snapshot());
-        if (logAdapter.getItemCount() > 0) logList.scrollToPosition(logAdapter.getItemCount() - 1);
+        log.setText(TextUtils.join("\n", Logger.snapshot()));
+        pageLog.post(() -> pageLog.fullScroll(NestedScrollView.FOCUS_DOWN));
         Logger.addListener(logListener);
         wasConnected = false;
         ui.post(tick);
