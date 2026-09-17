@@ -108,35 +108,19 @@
                      slot is the reveal toggle, and the leading slot — which does fit — puts an action
                      where a text field's leading icon is read as decoration.
 
-                     The label has to land in the same column as the fields' own labels above it —
-                     Port, PSK key — which an outlined box insets by 16dp. Three attributes make that
-                     true without depending on what the theme's text-button style happens to be:
-                       minWidth=0dp   a MaterialButton inherits a min width from the AppCompat button
-                                      chain, and a label shorter than it leaves the button stretched;
-                       gravity=start  because the inherited gravity is centre, so any stretch — from
-                                      minWidth or from a later match_parent — pushes the label right;
-                       paddingStart   stated as the field inset itself, rather than trusted to match.
-                     insetLeft is zeroed with it: MaterialButtonHelper adds insetLeft to paddingStart
-                     and draws the background inside it, so a non-zero inset would offset the content
-                     while leaving the touch target where it was.
+                     ClipSync.SettingsTextButton carries the alignment; themes.xml says why each of
+                     its items is needed. The short version is that the inherited android:paddingLeft
+                     is 24dp and had to be cleared, not just paired with a paddingStart.
                      No icon, deliberately, and not for a reason a layout could fix: Material Symbols
                      are drawn on a 24dp grid with a trim area, so "add" spans x=5..19 of its viewport
                      and its ink begins ~4dp inside the 20dp the button draws it at. Trimming the asset
                      would put that one icon on a different optical grid from every other icon in the
                      app; a -4dp margin would hardcode a number read off one drawable's path data. An
-                     icon can come back once the row above is confirmed aligned. -->
+                     icon can come back once this column is confirmed on a device. -->
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/psk_random"
-                    style="?attr/borderlessButtonStyle"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
+                    style="@style/ClipSync.SettingsTextButton"
                     android:layout_marginTop="4dp"
-                    android:gravity="start|center_vertical"
-                    android:minWidth="0dp"
-                    android:paddingStart="16dp"
-                    android:paddingEnd="16dp"
-                    android:insetLeft="0dp"
-                    android:insetRight="0dp"
                     android:text="@string/psk_generate" />
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
@@ -144,40 +128,49 @@
         <!-- The two switches are named for HOW a peer is found, not for the route to it: a listed
              address is very often a LAN address too. Named that way, neither needs a subtitle.
 
-             Each switch is its own row at PAGE level, outside the card it governs, and the card
-             follows 4dp under it. That is the hierarchy: the switch turns a group on and off, so it
-             belongs one level up from the group's contents, next to the section title and flush with
-             the card's edge — page padding and nothing added. Inside the card, contents are one level
-             in. Trying instead to line a switch label up with the text inside the card's fields meant
-             hand-carrying a 12+16dp inset around, which is the kind of constant that goes stale.
-             It also means the whole card can hide when the switch is off, rather than a wrapper inside
-             a card that must stay visible to keep the switch on screen.
+             Each switch is its own card, outside the card it governs, with the group's card 2dp under
+             it — just a seam, so the two read as one unit while staying two surfaces. The switch turns
+             a whole group on and off, so it sits beside the group rather than inside it, which also
+             means the group's card is the hideable thing and the switch is never inside what it hides.
+             Its card takes the same fill as the group cards and the same 12dp body inset, applied here
+             as a margin on the switch itself rather than padding on a wrapper: that puts the label on
+             the fields' box-left edge and the track's right end on their box-right edge, for free.
+             The gap ABOVE a switch card is the 6dp the section title already leaves above its own
+             card — the switch introduces a group, so it is spaced like a heading. Anything larger made
+             the groups inside Connection look further apart than Connection is from Transfer limits.
 
              gravity is still spelled out: MaterialSwitch inherits center_vertical|start from
              android:Widget.CompoundButton, but SwitchCompat's layout falls back to TOP for any gravity
              missing a vertical bit, so a later "align the switch to the end" would silently drag the
-             label to the top. minHeight is the M3 one-line list-item height; the switch's own default
-             is the 48dp touch target, which is a minimum, not a row. -->
-        <com.google.android.material.materialswitch.MaterialSwitch
-            android:id="@+id/discovery"
+             label to the top. No minHeight: the switch's own 48dp touch target is the row height, and
+             a 56dp list-item height on top of it was what made these rows look oversized. -->
+        <com.google.android.material.card.MaterialCardView
+            style="?attr/materialCardViewFilledStyle"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:gravity="center_vertical|start"
-            android:minHeight="56dp"
-            android:text="@string/switch_discovery"
-            android:textAppearance="?attr/textAppearanceBodyLarge" />
+            android:layout_marginTop="6dp">
+
+            <com.google.android.material.materialswitch.MaterialSwitch
+                android:id="@+id/discovery"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="12dp"
+                android:gravity="center_vertical|start"
+                android:text="@string/switch_discovery"
+                android:textAppearance="?attr/textAppearanceBodyLarge" />
+        </com.google.android.material.card.MaterialCardView>
 
         <!-- mDNS stays on the slider under a switch named in plain words: the switch says what it is
-             for, the slider names the thing it actually times. The label takes the 16dp inset that an
-             outlined box gives its own text, so it shares that column; the slider does not, because its
-             track already insets itself by the thumb radius and is meant to span the card. -->
+             for, the slider names the thing it actually times. The label carries no inset of its own,
+             so it sits where the Parallel-connections label further down sits. Both sliders keep the
+             horizontal padding their own style gives them: that space is the thumb's, and a track run
+             out to the card body's edge would clip the thumb at 0 and at max. -->
         <com.google.android.material.card.MaterialCardView
             android:id="@+id/discovery_card"
             style="?attr/materialCardViewFilledStyle"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="4dp">
+            android:layout_marginTop="2dp">
 
             <LinearLayout style="@style/ClipSync.CardBody">
 
@@ -185,7 +178,6 @@
                     android:id="@+id/browse_label"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:paddingStart="16dp"
                     android:textAppearance="?attr/textAppearanceBodyMedium"
                     tools:text="mDNS browse timeout: 4000 ms" />
 
@@ -202,22 +194,28 @@
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
-        <com.google.android.material.materialswitch.MaterialSwitch
-            android:id="@+id/direct"
+        <com.google.android.material.card.MaterialCardView
+            style="?attr/materialCardViewFilledStyle"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:gravity="center_vertical|start"
-            android:minHeight="56dp"
-            android:text="@string/switch_direct"
-            android:textAppearance="?attr/textAppearanceBodyLarge" />
+            android:layout_marginTop="6dp">
+
+            <com.google.android.material.materialswitch.MaterialSwitch
+                android:id="@+id/direct"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="12dp"
+                android:gravity="center_vertical|start"
+                android:text="@string/switch_direct"
+                android:textAppearance="?attr/textAppearanceBodyLarge" />
+        </com.google.android.material.card.MaterialCardView>
 
         <com.google.android.material.card.MaterialCardView
             android:id="@+id/direct_card"
             style="?attr/materialCardViewFilledStyle"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="4dp">
+            android:layout_marginTop="2dp">
 
             <LinearLayout style="@style/ClipSync.CardBody">
 
@@ -228,19 +226,10 @@
                     android:layout_height="wrap_content"
                     android:orientation="vertical" />
 
-                <!-- Same five attributes and the same reasoning as the Generate button above. -->
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/peer_add"
-                    style="?attr/borderlessButtonStyle"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
+                    style="@style/ClipSync.SettingsTextButton"
                     android:layout_marginTop="4dp"
-                    android:gravity="start|center_vertical"
-                    android:minWidth="0dp"
-                    android:paddingStart="16dp"
-                    android:paddingEnd="16dp"
-                    android:insetLeft="0dp"
-                    android:insetRight="0dp"
                     android:text="@string/peer_add" />
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>

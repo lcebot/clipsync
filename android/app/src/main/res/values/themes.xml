@@ -33,6 +33,36 @@
     </style>
 
 
+    <!-- A low-emphasis action inside a settings card: "Generate random PSK key", "Add address".
+         Its label has to start where the fields' own labels do, which is 16dp into the card body.
+         Getting there took three tries, so the reason each item is here:
+           paddingLeft/Right  Widget.Material3.Button — the parent two levels up — sets
+                              android:paddingLeft/Right to m3_btn_padding_left = 24dp, and the
+                              Expressive child adds paddingStart/End WITHOUT clearing them. Both stay
+                              live in the merged attribute set, and the absolute pair is what was
+                              winning: 24dp on each side, which is why the label looked centred.
+                              Setting only paddingStart does nothing on its own.
+           paddingStart/End   the relative pair, for the RTL-aware path.
+           insetLeft/Right    MaterialButtonHelper folds insetLeft into paddingStart and draws the
+                              background inside it, so a non-zero inset offsets the label.
+           minWidth           the AppCompat button chain supplies one; a shorter label than that
+                              leaves the button stretched.
+           gravity            the inherited gravity is centre, so any stretch pushes the label right.
+         Named parent rather than ?attr/borderlessButtonStyle because a style cannot take an attribute
+         as its parent, and the padding being overridden is the parent's own. -->
+    <style name="ClipSync.SettingsTextButton" parent="Widget.Material3Expressive.Button.TextButton">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:minWidth">0dp</item>
+        <item name="android:gravity">start|center_vertical</item>
+        <item name="android:paddingStart">16dp</item>
+        <item name="android:paddingEnd">16dp</item>
+        <item name="android:paddingLeft">16dp</item>
+        <item name="android:paddingRight">16dp</item>
+        <item name="android:insetLeft">0dp</item>
+        <item name="android:insetRight">0dp</item>
+    </style>
+
     <!-- small group header above each block of settings -->
     <style name="ClipSync.SectionTitle" parent="android:Widget.TextView">
         <item name="android:layout_width">match_parent</item>
