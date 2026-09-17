@@ -42,8 +42,30 @@
                     android:id="@+id/toolbar"
                     android:layout_width="match_parent"
                     android:layout_height="?attr/actionBarSize"
-                    app:menu="@menu/toolbar"
-                    app:layout_collapseMode="pin" />
+                    app:layout_collapseMode="pin">
+
+                    <!-- Connection status. A direct Toolbar child, not a menu action view: the
+                         Toolbar measures and lays out its children with their margins, so 16dp
+                         here is simply honoured — the line M3 puts a top app bar's trailing
+                         element on, and the line the page content sits on. An action view would
+                         instead be re-parented into the ActionMenuView, which builds fresh
+                         LayoutParams and drops the margin. The dot is the chip's icon; it is
+                         tinted and pulsed from code. -->
+                    <com.google.android.material.chip.Chip
+                        android:id="@+id/status_chip"
+                        style="@style/Widget.Material3.Chip.Assist"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_gravity="end|center_vertical"
+                        android:layout_marginEnd="16dp"
+                        android:text="@string/state_stopped"
+                        app:chipIcon="@drawable/status_dot"
+                        app:chipIconSize="10dp"
+                        app:chipStartPadding="10dp"
+                        app:chipEndPadding="10dp"
+                        app:iconStartPadding="2dp"
+                        app:ensureMinTouchTargetSize="false" />
+                </com.google.android.material.appbar.MaterialToolbar>
             </com.google.android.material.appbar.CollapsingToolbarLayout>
         </com.google.android.material.appbar.AppBarLayout>
 

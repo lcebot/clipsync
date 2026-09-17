@@ -14,7 +14,6 @@ import android.os.Looper;
 import android.os.PowerManager;
 import android.provider.Settings;
 import android.text.Editable;
-import android.text.TextUtils;
 import android.text.TextWatcher;
 import android.view.View;
 import android.view.ViewGroup;
@@ -26,7 +25,6 @@ import androidx.transition.AutoTransition;
 import androidx.transition.TransitionManager;
 
 import com.google.android.material.appbar.AppBarLayout;
-import com.google.android.material.appbar.MaterialToolbar;
 import com.google.android.material.bottomnavigation.BottomNavigationView;
 import com.google.android.material.button.MaterialButtonToggleGroup;
 import com.google.android.material.chip.Chip;
@@ -78,7 +76,8 @@ public class MainActivity extends AppCompatActivity {
     // action state: which of Start / Stop + Apply is shown, and what we are waiting for
     private boolean serviceRunning, waitingForStop, waitingForStart;
     private boolean onLogTab, configValid;
-    private boolean logDirty;                               // new lines waiting behind a selection
+    private final Logger.Cursor logCursor = new Logger.Cursor();
+    private boolean logToBottom;                            // jump to the newest line once laid out
     // mirrors of the FABs' own shown/hidden state, so we only drive show()/hide() on a real change
     private boolean stopShown, applyShown = true, logFabsShown;
     private int applyIcon;                                  // 0 = never set, so the first pass applies
@@ -93,30 +92,45 @@ public class MainActivity extends AppCompatActivity {
     private final Runnable tick = new Runnable() {
         @Override
         public void run() {
-            if (Logger.refresh() || logDirty) showLog();
+            Logger.refresh();
+            showLog();
             refreshStatus();
             ui.postDelayed(this, 1000);
         }
     };
 
     /**
-     * Replaces the visible log.
+     * Brings the visible log up to date, appending where it can.
      *
-     * <p>Held back while text is selected: setText() drops the selection, and the whole point of
-     * the log being one TextView is that a report can be selected across many lines at once —
-     * losing it to a line that arrived meanwhile would make long selections impossible. The pending
-     * update is applied by the next tick after the selection goes away.
+     * <p>Appending is what makes the log usable in a bug report: the text is one TextView so a
+     * selection can span any number of lines, and appending leaves that selection, the scroll
+     * position and the already-laid-out text alone. Only a rebuild (the buffer was cleared, or has
+     * dropped enough old entries to be worth trimming) replaces the text.
+     *
+     * <p>While anything is selected the log is left frozen — nothing reflows under the reader's
+     * fingers, and nothing is lost either, because the cursor is only advanced by a read that
+     * actually happened; the next tick catches up.
      *
      * <p>Following the tail is likewise only automatic while the view is already at the bottom, so
      * reading further up is not yanked away by the next line.
      */
     private void showLog() {
-        logDirty = true;
         if (log.hasSelection()) return;
-        boolean atBottom = !pageLog.canScrollVertically(1);
-        log.setText(TextUtils.join("\n", Logger.snapshot()));
-        logDirty = false;
-        if (atBottom) pageLog.post(() -> pageLog.fullScroll(NestedScrollView.FOCUS_DOWN));
+        Logger.Tail tail = Logger.read(logCursor);
+        if (tail.isEmpty()) return;
+        // false both at the bottom and while the page is still GONE or unmeasured, which is what
+        // we want: a page that has not been shown yet starts at the end
+        if (!pageLog.canScrollVertically(1)) logToBottom = true;
+        String text = String.join("\n", tail.lines);
+        if (tail.replace) {
+            // EDITABLE from the outset: append() would otherwise convert the buffer on its first
+            // call, and that conversion is itself a setText that drops the selection
+            log.setText(text, TextView.BufferType.EDITABLE);
+        } else if (log.length() == 0) {
+            log.append(text);
+        } else {
+            log.append("\n" + text);
+        }
     }
 
     @Override
@@ -128,6 +142,12 @@ public class MainActivity extends AppCompatActivity {
         loadFields();
         wire();
         validate();
+        // Open with the title showing. What keeps it open is settings_root being
+        // focusableInTouchMode: without it the first text field takes focus on start and the
+        // scroll container scrolls to it, taking the bar with it. This is the belt to that
+        // braces, and only on a cold start — on a recreate the bar's own saved state is the
+        // user's scroll position and must win.
+        if (savedInstanceState == null) appbar.setExpanded(true, false);
 
         // an installed-but-never-started app is in the "stopped" state and gets no BOOT_COMPLETED;
         // opening the activity once (and starting the service) clears that.
@@ -176,9 +196,7 @@ public class MainActivity extends AppCompatActivity {
         copyFab = findViewById(R.id.log_copy);
         clearFab = findViewById(R.id.log_clear);
 
-        // the chip is the toolbar's single menu action; app:menu inflates it with the layout
-        MaterialToolbar toolbar = findViewById(R.id.toolbar);
-        statusChip = (Chip) toolbar.getMenu().findItem(R.id.action_status).getActionView();
+        statusChip = findViewById(R.id.status_chip);       // a plain Toolbar child
     }
 
     // ------------------------------------------------------------------ values <-> fields
@@ -301,7 +319,7 @@ public class MainActivity extends AppCompatActivity {
             refreshActions();                          // greys Stop out until the service is gone
             snack(R.string.snack_stopped);
         });
-        clearFab.setOnClickListener(v -> { Logger.clear(); log.setText(""); });
+        clearFab.setOnClickListener(v -> { Logger.clear(); showLog(); });
         copyFab.setOnClickListener(v -> {
             getSystemService(ClipboardManager.class).setPrimaryClip(ClipData.newPlainText("clipsync log", log.getText()));
             snack(R.string.snack_log_copied);
@@ -313,6 +331,16 @@ public class MainActivity extends AppCompatActivity {
         batteryFix.setOnClickListener(v -> {
             Intent i = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).setData(Uri.parse("package:" + getPackageName()));
             try { startActivity(i); } catch (Exception e) { startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)); }
+        });
+
+        // Scrolling to the end has to wait until the new text has actually been laid out; posting
+        // it is a race the layout pass usually wins, which is how the log ended up pinned at the
+        // top. scrollTo, not fullScroll: fullScroll moves focus into the (selectable) TextView,
+        // and the scroll container then scrolls that view's *top* into view.
+        log.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
+            if (!logToBottom) return;
+            logToBottom = false;
+            pageLog.scrollTo(0, log.getBottom());            // NestedScrollView clamps this
         });
 
         // shrink to the icons while the page scrolls down, extend again on the way up. The FABs'
@@ -333,7 +361,7 @@ public class MainActivity extends AppCompatActivity {
             appbar.setLiftOnScrollTargetViewId(toLog ? R.id.page_log : R.id.page_settings);
             onLogTab = toLog;
             refreshActions();
-            if (toLog) showLog();
+            if (toLog) { logToBottom = true; showLog(); }
             return true;
         });
 
@@ -443,8 +471,8 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
-        log.setText(TextUtils.join("\n", Logger.snapshot()));
-        pageLog.post(() -> pageLog.fullScroll(NestedScrollView.FOCUS_DOWN));
+        logToBottom = true;
+        showLog();
         Logger.addListener(logListener);
         wasConnected = false;
         ui.post(tick);
