@@ -31,7 +31,10 @@
          often a LAN address too. Named this way, neither needs a supporting line. -->
     <string name="switch_discovery">Local network discovery</string>
     <string name="switch_direct">Direct addresses</string>
-    <string name="hint_peer">Host name or address</string>
+    <!-- Numbered, because the list holds several identical-looking fields and a screen reader has
+         nothing else to tell them apart by. -->
+    <string name="hint_peer">Address %1$d</string>
+    <string name="peer_empty">Enter an address, or remove this row</string>
     <string name="peer_add">Add</string>
     <string name="peer_remove">Remove</string>
     <string name="peer_duplicate">Already listed above</string>

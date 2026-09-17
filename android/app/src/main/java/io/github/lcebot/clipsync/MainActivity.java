@@ -290,7 +290,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void removePeerRow(TextInputLayout row) {
-        if (peerRows.size() <= 1) return;                 // the icon is disabled, but be certain
+        if (peerRows.size() <= 1) return;                 // the icon is hidden, but be certain
         TransitionManager.beginDelayedTransition(settingsRoot, fieldMotion());
         peersBox.removeView(row);
         peerRows.remove(row);
@@ -298,12 +298,28 @@ public class MainActivity extends AppCompatActivity {
         validate();
     }
 
-    /** The lone row's remove icon is disabled rather than hidden: it exists, it just cannot apply. */
+    /**
+     * The lone row's remove icon is hidden: the row cannot go, because zero addresses is what the
+     * Direct switch expresses. Hidden rather than greyed out because TextInputLayout has no public
+     * way to disable only the trailing icon.
+     *
+     * <p>Hints are numbered here rather than in the layout: several rows carrying one identical hint
+     * give a screen reader nothing to tell them apart by, and an error names a row by its hint.
+     */
     private void refreshPeerRows() {
         boolean removable = peerRows.size() > 1;
-        for (TextInputLayout row : peerRows) row.setEndIconVisible(removable);
+        for (int i = 0; i < peerRows.size(); i++) {
+            TextInputLayout row = peerRows.get(i);
+            row.setEndIconVisible(removable);
+            row.setHint(getString(R.string.hint_peer, i + 1));
+        }
     }
 
+    /**
+     * The rows exactly as they read, with nothing filtered out: a blank row is either an error the
+     * user is looking at (Direct on) or already gone (Direct off, {@link #dropBlankRows()}), so the
+     * only blank that can reach here is a lone row, which joins to the empty string.
+     */
     private List<String> peerValues() {
         List<String> out = new ArrayList<>();
         for (TextInputLayout row : peerRows) {
@@ -340,6 +356,25 @@ public class MainActivity extends AppCompatActivity {
         int peersVisible = direct.isChecked() ? View.VISIBLE : View.GONE;
         peersBox.setVisibility(peersVisible);
         peerAdd.setVisibility(peersVisible);
+        if (!direct.isChecked()) dropBlankRows();
+    }
+
+    /**
+     * Drops the blank rows when the list goes out of sight, keeping one. While the list is showing a
+     * blank row is an error the user can see and fix; once hidden it could neither be seen nor
+     * fixed, so refusing to save on it would be a dead end. Removing it instead keeps the stored
+     * value clean — the rows that are left are all real addresses, so nothing empty is ever joined
+     * into {@code peers}.
+     */
+    private void dropBlankRows() {
+        for (int i = peerRows.size() - 1; i >= 0 && peerRows.size() > 1; i--) {
+            TextInputLayout row = peerRows.get(i);
+            if (text((TextInputEditText) row.findViewById(R.id.peer)).trim().isEmpty()) {
+                peersBox.removeView(row);
+                peerRows.remove(i);
+            }
+        }
+        refreshPeerRows();
     }
 
     /**
@@ -431,7 +466,11 @@ public class MainActivity extends AppCompatActivity {
         List<String> seen = new ArrayList<>();
         for (TextInputLayout row : peerRows) {
             String raw = text((TextInputEditText) row.findViewById(R.id.peer));
-            String problem = Config.checkPeer(raw);
+            // A blank row is refused rather than quietly dropped on save: a row the user left half
+            // finished is a mistake worth pointing at, and nothing blank ever reaches the file.
+            String problem = raw.trim().isEmpty()
+                    ? getString(R.string.peer_empty)
+                    : Config.checkPeer(raw);
             String normal = Config.normalisePeer(raw);
             if (problem == null && seen.contains(normal)) problem = getString(R.string.peer_duplicate);
             if (problem == null) seen.add(normal);
