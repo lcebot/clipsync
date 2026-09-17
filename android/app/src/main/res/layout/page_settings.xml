@@ -108,25 +108,35 @@
                      slot is the reveal toggle, and the leading slot — which does fit — puts an action
                      where a text field's leading icon is read as decoration.
 
-                     Start-aligned, flush with the card body, no margin, and NO ICON — that last part
-                     is what makes it line up. Measured from the card's edge: the button's left edge
-                     is at the body's 12dp, ?attr/borderlessButtonStyle under Expressive adds 16dp of
-                     content padding, so the label starts at 28dp — exactly where an outlined box puts
-                     its text, that box insetting by its own 16dp. Same column as every field and both
-                     switch titles, with no alignment constant anywhere.
-                     An icon breaks it, and not for a reason a layout can fix: Material Symbols are
-                     drawn on a 24dp grid with a trim area, so "add" spans x=5..19 of its viewport and
-                     its ink starts ~4dp inside the 20dp the button draws it at. Trimming the asset
-                     would put this one icon on a different optical grid from every other icon in the
-                     app, and a -4dp margin would hardcode a constant read off one drawable's path
-                     data that silently stops being right the moment the drawable changes. So the
-                     label holds the column and the icon goes. -->
+                     The label has to land in the same column as the fields' own labels above it —
+                     Port, PSK key — which an outlined box insets by 16dp. Three attributes make that
+                     true without depending on what the theme's text-button style happens to be:
+                       minWidth=0dp   a MaterialButton inherits a min width from the AppCompat button
+                                      chain, and a label shorter than it leaves the button stretched;
+                       gravity=start  because the inherited gravity is centre, so any stretch — from
+                                      minWidth or from a later match_parent — pushes the label right;
+                       paddingStart   stated as the field inset itself, rather than trusted to match.
+                     insetLeft is zeroed with it: MaterialButtonHelper adds insetLeft to paddingStart
+                     and draws the background inside it, so a non-zero inset would offset the content
+                     while leaving the touch target where it was.
+                     No icon, deliberately, and not for a reason a layout could fix: Material Symbols
+                     are drawn on a 24dp grid with a trim area, so "add" spans x=5..19 of its viewport
+                     and its ink begins ~4dp inside the 20dp the button draws it at. Trimming the asset
+                     would put that one icon on a different optical grid from every other icon in the
+                     app; a -4dp margin would hardcode a number read off one drawable's path data. An
+                     icon can come back once the row above is confirmed aligned. -->
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/psk_random"
                     style="?attr/borderlessButtonStyle"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="4dp"
+                    android:gravity="start|center_vertical"
+                    android:minWidth="0dp"
+                    android:paddingStart="16dp"
+                    android:paddingEnd="16dp"
+                    android:insetLeft="0dp"
+                    android:insetRight="0dp"
                     android:text="@string/psk_generate" />
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
@@ -134,80 +144,82 @@
         <!-- The two switches are named for HOW a peer is found, not for the route to it: a listed
              address is very often a LAN address too. Named that way, neither needs a subtitle.
 
-             Two things are spelled out on both switches rather than inherited:
-             - gravity. MaterialSwitch inherits center_vertical|start from android:Widget.CompoundButton,
-               but SwitchCompat's own layout falls back to TOP for any gravity missing a vertical bit,
-               so a later "align the switch to the end" would silently drag the label to the top.
-             - paddingStart of 16dp. A bare switch label starts at the view's edge, while every text
-               field on this page insets its text by 16dp, which left the switch titles hanging 16dp
-               to the left of every other line of text in the section. SwitchCompat positions the
-               track from getPaddingRight(), so a start padding moves the label without moving the
-               track off the right edge. -->
+             Each switch is its own row at PAGE level, outside the card it governs, and the card
+             follows 4dp under it. That is the hierarchy: the switch turns a group on and off, so it
+             belongs one level up from the group's contents, next to the section title and flush with
+             the card's edge — page padding and nothing added. Inside the card, contents are one level
+             in. Trying instead to line a switch label up with the text inside the card's fields meant
+             hand-carrying a 12+16dp inset around, which is the kind of constant that goes stale.
+             It also means the whole card can hide when the switch is off, rather than a wrapper inside
+             a card that must stay visible to keep the switch on screen.
+
+             gravity is still spelled out: MaterialSwitch inherits center_vertical|start from
+             android:Widget.CompoundButton, but SwitchCompat's layout falls back to TOP for any gravity
+             missing a vertical bit, so a later "align the switch to the end" would silently drag the
+             label to the top. minHeight is the M3 one-line list-item height; the switch's own default
+             is the 48dp touch target, which is a minimum, not a row. -->
+        <com.google.android.material.materialswitch.MaterialSwitch
+            android:id="@+id/discovery"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:gravity="center_vertical|start"
+            android:minHeight="56dp"
+            android:text="@string/switch_discovery"
+            android:textAppearance="?attr/textAppearanceBodyLarge" />
+
+        <!-- mDNS stays on the slider under a switch named in plain words: the switch says what it is
+             for, the slider names the thing it actually times. The label takes the 16dp inset that an
+             outlined box gives its own text, so it shares that column; the slider does not, because its
+             track already insets itself by the thumb radius and is meant to span the card. -->
         <com.google.android.material.card.MaterialCardView
+            android:id="@+id/discovery_card"
             style="?attr/materialCardViewFilledStyle"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp">
+            android:layout_marginTop="4dp">
 
-            <LinearLayout style="@style/ClipSync.CardBody.Rows">
+            <LinearLayout style="@style/ClipSync.CardBody">
 
-                <com.google.android.material.materialswitch.MaterialSwitch
-                    android:id="@+id/discovery"
+                <TextView
+                    android:id="@+id/browse_label"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:gravity="center_vertical|start"
                     android:paddingStart="16dp"
-                    android:text="@string/switch_discovery"
-                    android:textAppearance="?attr/textAppearanceBodyLarge" />
+                    android:textAppearance="?attr/textAppearanceBodyMedium"
+                    tools:text="mDNS browse timeout: 4000 ms" />
 
-                <!-- mDNS stays on the slider under a switch named in plain words: the switch says
-                     what it is for, the slider names the thing it actually times. The label takes the
-                     same 16dp inset as the switch title above it; the slider does not, because its
-                     track already insets itself by the thumb radius and it is meant to span the card. -->
-                <LinearLayout
-                    android:id="@+id/browse_row"
+                <com.google.android.material.slider.Slider
+                    android:id="@+id/browse"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:orientation="vertical">
-
-                    <TextView
-                        android:id="@+id/browse_label"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:paddingStart="16dp"
-                        android:textAppearance="?attr/textAppearanceBodyMedium"
-                        tools:text="mDNS browse timeout: 4000 ms" />
-
-                    <com.google.android.material.slider.Slider
-                        android:id="@+id/browse"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:valueFrom="0"
-                        android:valueTo="6"
-                        android:stepSize="1"
-                        android:value="3"
-                        app:labelBehavior="floating"
-                        app:tickVisible="true" />
-                </LinearLayout>
+                    android:valueFrom="0"
+                    android:valueTo="6"
+                    android:stepSize="1"
+                    android:value="3"
+                    app:labelBehavior="floating"
+                    app:tickVisible="true" />
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
+        <com.google.android.material.materialswitch.MaterialSwitch
+            android:id="@+id/direct"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:gravity="center_vertical|start"
+            android:minHeight="56dp"
+            android:text="@string/switch_direct"
+            android:textAppearance="?attr/textAppearanceBodyLarge" />
+
         <com.google.android.material.card.MaterialCardView
+            android:id="@+id/direct_card"
             style="?attr/materialCardViewFilledStyle"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp">
+            android:layout_marginTop="4dp">
 
-            <LinearLayout style="@style/ClipSync.CardBody.Rows">
-
-                <com.google.android.material.materialswitch.MaterialSwitch
-                    android:id="@+id/direct"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:gravity="center_vertical|start"
-                    android:paddingStart="16dp"
-                    android:text="@string/switch_direct"
-                    android:textAppearance="?attr/textAppearanceBodyLarge" />
+            <LinearLayout style="@style/ClipSync.CardBody">
 
                 <!-- rows are inflated from item_peer.xml; at least one always remains -->
                 <LinearLayout
@@ -216,15 +228,19 @@
                     android:layout_height="wrap_content"
                     android:orientation="vertical" />
 
-                <!-- No icon, for the reason given on the Generate button above: the label is what
-                     holds the 28dp text column, and a Material Symbol's own trim area would push the
-                     ink off it. The label carries the "+". -->
+                <!-- Same five attributes and the same reasoning as the Generate button above. -->
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/peer_add"
                     style="?attr/borderlessButtonStyle"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="4dp"
+                    android:gravity="start|center_vertical"
+                    android:minWidth="0dp"
+                    android:paddingStart="16dp"
+                    android:paddingEnd="16dp"
+                    android:insetLeft="0dp"
+                    android:insetRight="0dp"
                     android:text="@string/peer_add" />
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>

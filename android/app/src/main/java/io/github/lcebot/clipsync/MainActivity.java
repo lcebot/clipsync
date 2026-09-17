@@ -68,7 +68,8 @@ public class MainActivity extends AppCompatActivity {
     private ViewGroup peersBox;
     private final List<TextInputLayout> peerRows = new ArrayList<>();
     private MaterialButton peerAdd, pskRandom;
-    private View browseRow;
+    /** The group each switch governs. Whole cards now, because the switches sit outside them. */
+    private View discoveryCard, directCard;
     private Slider browse, threads;
     private TextView browseLabel, threadsLabel;
     private ViewGroup settingsRoot;
@@ -206,7 +207,8 @@ public class MainActivity extends AppCompatActivity {
         pathL = findViewById(R.id.path_layout);       path = findViewById(R.id.path);
         keepHoursL = findViewById(R.id.keep_hours_layout); keepHours = findViewById(R.id.keep_hours);
         keepMbL = findViewById(R.id.keep_mb_layout);  keepMb = findViewById(R.id.keep_mb);
-        browseRow = findViewById(R.id.browse_row);
+        discoveryCard = findViewById(R.id.discovery_card);
+        directCard = findViewById(R.id.direct_card);
         browse = findViewById(R.id.browse);
         browseLabel = findViewById(R.id.browse_label);
         threads = findViewById(R.id.threads);
@@ -343,9 +345,8 @@ public class MainActivity extends AppCompatActivity {
     }
 
     /**
-     * Show / hide each switch's dependent controls: the browse slider under Local network discovery,
-     * the address list and its Add button under Direct connections. The switches themselves, and the
-     * cards holding them, never hide.
+     * Show / hide the card each switch governs. The switches are rows at page level above their
+     * cards, so the card is the whole hideable unit and the switch is never inside what it hides.
      *
      * <p>MaterialFade is M3's own transition for an element entering or leaving inside a container
      * — the same motion vocabulary as the page cross-fade — but it only fades and scales the
@@ -354,10 +355,8 @@ public class MainActivity extends AppCompatActivity {
      */
     private void applySwitches(boolean animate) {
         if (animate) TransitionManager.beginDelayedTransition(settingsRoot, fieldMotion());
-        browseRow.setVisibility(discovery.isChecked() ? View.VISIBLE : View.GONE);
-        int peersVisible = direct.isChecked() ? View.VISIBLE : View.GONE;
-        peersBox.setVisibility(peersVisible);
-        peerAdd.setVisibility(peersVisible);
+        discoveryCard.setVisibility(discovery.isChecked() ? View.VISIBLE : View.GONE);
+        directCard.setVisibility(direct.isChecked() ? View.VISIBLE : View.GONE);
         if (!direct.isChecked()) dropBlankRows();
     }
 
