@@ -17,6 +17,7 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CompletionService;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorCompletionService;
@@ -125,33 +126,54 @@ public final class Connection implements AutoCloseable {
     }
 
     /**
-     * Path 1: DDNS name (fresh lookup, IPv6 first) — works on LAN and over the internet.
-     * Path 2: mDNS — last known LAN address, then a fresh {@code _clipsync._tcp} browse.
-     * Returns {socket, "ddns"|"mdns", peer name}.
+     * DDNS and mDNS are peers, not a preference and a fallback: whichever connects first is the
+     * connection. Returns {socket, "ddns"|"mdns", peer name}.
+     *
+     * <p>Two rounds, and the split is about cost rather than rank. The cheap half — a DNS lookup
+     * and a connect to the LAN address mDNS last reported — races both paths at once, which is
+     * where the ordering used to hurt: a stale DDNS record made the phone sit through a connect
+     * timeout before it would even look at the LAN. The expensive half is a fresh browse, seconds
+     * of multicast and a radio wake-up, so it stays behind both cheap paths failing rather than
+     * running on every reconnect that DDNS would have served instantly.
      */
     private static Object[] connectAny(Context ctx, Config cfg, boolean lan, Network net) throws IOException {
         IOException last = null;
+        // mDNS is link-local multicast: pointless (and a radio wake-up) on cellular
+        boolean useMdns = cfg.mdns && lan;
 
+        List<Callable<Object[]>> cheap = new ArrayList<>();
         if (!cfg.host.isEmpty()) {
+            cheap.add(() -> {
+                try {
+                    return new Object[]{connectDdns(cfg.host, cfg.port), "ddns", cfg.host};
+                } catch (IOException e) {
+                    Logger.i("ddns path failed: " + e);
+                    throw e;
+                }
+            });
+        }
+        InetSocketAddress cached = useMdns ? freshMdnsCache() : null;
+        if (cached != null) {
+            final String name = mdnsCachedName;
+            cheap.add(() -> {
+                try {
+                    return new Object[]{connectTo(cached, MDNS_CONNECT_TIMEOUT_MS), "mdns", name};
+                } catch (IOException e) {
+                    Logger.i("cached mdns address failed: " + e);
+                    throw e;
+                }
+            });
+        }
+        if (!cheap.isEmpty()) {
             try {
-                return new Object[]{connectDdns(cfg.host, cfg.port), "ddns", cfg.host};
+                return firstToConnect(cheap);
             } catch (IOException e) {
                 last = e;
-                Logger.i("ddns path failed: " + e);
+                mdnsCached = null;      // both failed, so the remembered address is no good either
             }
         }
 
-        // mDNS is link-local multicast: pointless (and a radio wake-up) on cellular
-        if (cfg.mdns && lan) {
-            InetSocketAddress cached = mdnsCached;
-            if (cached != null && System.currentTimeMillis() - mdnsCachedAt < MDNS_CACHE_MS) {
-                try {
-                    return new Object[]{connectTo(cached, MDNS_CONNECT_TIMEOUT_MS), "mdns", mdnsCachedName};
-                } catch (IOException e) {
-                    Logger.i("cached mdns address failed: " + e);
-                    mdnsCached = null;
-                }
-            }
+        if (useMdns) {
             Logger.i("mdns: browsing for " + cfg.mdnsTimeoutMs + "ms");
             List<Mdns.Candidate> cands = Mdns.discover(ctx, net, cfg.mdnsTimeoutMs);
             if (cands.isEmpty()) {
@@ -179,6 +201,48 @@ public final class Connection implements AutoCloseable {
         }
 
         throw last != null ? last : new IOException(lan ? "no host configured and mdns disabled" : "no host configured; mdns needs Wi-Fi");
+    }
+
+    private static InetSocketAddress freshMdnsCache() {
+        InetSocketAddress c = mdnsCached;
+        return c != null && System.currentTimeMillis() - mdnsCachedAt < MDNS_CACHE_MS ? c : null;
+    }
+
+    /**
+     * Runs every path at once and returns the first connection made. The losers are not cancelled:
+     * a connect interrupted halfway can still complete on the PC, which would leave it holding a
+     * client that will never say HELLO. They are collected on a background thread instead and
+     * whatever they opened is closed properly.
+     */
+    private static Object[] firstToConnect(List<Callable<Object[]>> paths) throws IOException {
+        CompletionService<Object[]> cs = new ExecutorCompletionService<>(RACE_POOL);
+        List<Future<Object[]>> futures = new ArrayList<>();
+        for (Callable<Object[]> p : paths) futures.add(cs.submit(p));
+        Object[] won = null;
+        String err = null;
+        try {
+            for (int done = 0; done < paths.size() && won == null; done++) {
+                try {
+                    won = cs.take().get();
+                } catch (ExecutionException e) {
+                    err = String.valueOf(e.getCause() != null ? e.getCause().getMessage() : e);
+                }
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        if (won == null) throw new IOException(err == null ? "no path answered" : err);
+        final Object[] winner = won;
+        RACE_POOL.submit(() -> {
+            for (Future<Object[]> f : futures) {
+                try {
+                    Object[] r = f.get();
+                    if (r != winner) ((Socket) r[0]).close();
+                } catch (Exception ignored) {
+                }
+            }
+        });
+        return won;
     }
 
     /** Resolve fresh every time (DDNS), prefer IPv6, try each address. */
