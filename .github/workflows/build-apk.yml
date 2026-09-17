@@ -11,7 +11,7 @@
 #   KEY_PASSWORD       - optional, defaults to KEYSTORE_PASSWORD (PKCS12 has one password)
 # Forks without secrets still build; the APK then reads /data/data/io.github.lcebot.clipsync/files/clipsync.conf at runtime.
 #
-# NOTE: this repo is public and the tag job attaches the APK to a public Release. CLIPSYNC_PSK and
+# NOTE: this repo is public and the release job attaches the APK to a public Release. CLIPSYNC_PSK and
 # CLIPSYNC_HOST are compiled into BuildConfig, so setting those secrets would publish them inside a
 # downloadable APK. Leave them unset and configure the app on the device instead.
 #
@@ -23,15 +23,23 @@
 # KEY_ALIAS may be left unset — the build reads the store's only alias.
 # Losing this file means no device can ever overwrite-install the app again.
 #
-# Output: workflow artifact "clipsync-apk"; on tags v* it is also attached to a GitHub Release.
+# Output: workflow artifact "clipsync" (app-release.apk + windows.zip). Publishing a release on
+# GitHub runs the same build and attaches both files to that release — create the release with no
+# files of your own and wait for the run to finish.
 # Without the keystore secrets the build still succeeds, but produces app-release-unsigned.apk,
 # which cannot be installed.
 name: build-apk
 on:
+  # Branch pushes: a CI build, artifact only. The paths filter keeps it off doc-only commits.
   push:
     branches: ["**"]
-    tags: ["v*"]
-    paths: ["android/**", ".github/workflows/build-apk.yml"]
+    paths: ["android/**", "windows/**", ".github/workflows/build-apk.yml"]
+  # Publishing a release is what attaches the files. This is the event to listen for, not a tag
+  # push: a release created in the web UI makes its tag through the API, and a "push" with both a
+  # tags and a paths filter is unreliable anyway — a tag pointing at an already-pushed commit has
+  # no changed files for the paths filter to match, so the run is skipped.
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
@@ -123,13 +131,41 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: gradle assembleRelease --no-daemon
 
+      # The PC side ships as a zip built from a named list — never by zipping the folder, which
+      # would sweep up clipsync.log, install-state.json and received/ as well.
+      #
+      # clipsync.ini comes from the checkout, where it is committed with an empty psk and no host.
+      # That is the file a release must contain, and it is also the one to be careful with: it is
+      # tracked, so .gitignore cannot protect it from a local edit. Keep your own values out of a
+      # commit with
+      #     git update-index --skip-worktree windows/clipsync.ini
+      # which leaves the clean version in the repository and stops your working copy being staged.
+      - name: package the PC side
+        working-directory: windows
+        run: |
+          # Fail on something that looks like a real key rather than demanding an exactly blank
+          # line, so a placeholder or a reworded comment never blocks a release by accident.
+          if grep -qiE '^[[:space:]]*psk[[:space:]]*=[[:space:]]*[0-9a-f]{32,}' clipsync.ini; then
+            echo "windows/clipsync.ini carries a real-looking psk — refusing to publish it."
+            echo "See the note above this step: the committed file must ship blank."
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/pc"
+          cp clipsync.py install.ps1 uninstall.ps1 requirements.txt clipsync.ini "$RUNNER_TEMP/pc/"
+          (cd "$RUNNER_TEMP/pc" && zip -q -r "$GITHUB_WORKSPACE/windows.zip" .)
+
       - uses: actions/upload-artifact@v4
         with:
-          name: clipsync-apk
-          path: android/app/build/outputs/apk/release/*.apk
+          name: clipsync
+          path: |
+            android/app/build/outputs/apk/release/*.apk
+            windows.zip
 
-      - name: release
-        if: startsWith(github.ref, 'refs/tags/v')
+      # On a release event this attaches to the release that was just published.
+      - name: attach to the release
+        if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
-          files: android/app/build/outputs/apk/release/*.apk
+          files: |
+            android/app/build/outputs/apk/release/*.apk
+            windows.zip
