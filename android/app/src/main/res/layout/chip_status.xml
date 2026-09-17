@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Connection status, as the app bar's only action. Being a menu action view means the toolbar
+     places it and the pinned toolbar keeps it in the corner whether the bar is open or collapsed —
+     no hand-computed offset. The dot is the chip's icon; it is tinted and pulsed from code. -->
+<com.google.android.material.chip.Chip xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/status_chip"
+    style="@style/Widget.Material3.Chip.Assist"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:layout_marginEnd="4dp"
+    android:text="@string/state_stopped"
+    app:chipIcon="@drawable/status_dot"
+    app:chipIconSize="10dp"
+    app:chipStartPadding="10dp"
+    app:chipEndPadding="10dp"
+    app:iconStartPadding="2dp"
+    app:ensureMinTouchTargetSize="false" />

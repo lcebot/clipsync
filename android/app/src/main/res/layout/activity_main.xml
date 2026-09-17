@@ -1,524 +1,131 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Surface ladder, so the three chrome surfaces never read as one block:
+       log pane   surfaceContainerLow   (recedes behind the text)
+       nav bar    surfaceContainer      (M3 navigation bar default)
+       lifted bar surfaceContainerHigh  (sits above both) -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
-    xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
     android:fitsSystemWindows="true">
 
-    <!-- Overlay host for the status chip. It stays outside the CoordinatorLayout because it is
-         positioned by hand against the app bar's own offset (placeStatus), not by a Behavior.
-         The action FABs do NOT need this: they are Coordinator children, which is what
-         shrink()/extend() is built for, and they do not disturb the collapsing title.
-
-         Surface ladder, so the three chrome surfaces never read as one block:
-           log pane   surfaceContainerLow   (recedes behind the text)
-           nav bar    surfaceContainer      (M3 navigation bar default)
-           lifted bar surfaceContainerHigh  (sits above both) -->
-    <FrameLayout
+    <androidx.coordinatorlayout.widget.CoordinatorLayout
+        android:id="@+id/coordinator"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1">
 
-        <androidx.coordinatorlayout.widget.CoordinatorLayout
-            android:id="@+id/coordinator"
+        <!-- ===== M3 "medium" collapsing top app bar: title scaling, insets and lift-on-scroll
+             are the component's own. The status chip is the toolbar's only menu action, so the
+             toolbar places it and pins it in the corner at every collapse offset. ===== -->
+        <com.google.android.material.appbar.AppBarLayout
+            android:id="@+id/appbar"
             android:layout_width="match_parent"
-            android:layout_height="match_parent">
+            android:layout_height="wrap_content"
+            app:liftOnScroll="true"
+            app:liftOnScrollColor="?attr/colorSurfaceContainerHigh"
+            app:liftOnScrollTargetViewId="@+id/page_settings">
 
-            <!-- ===== M3 "medium" collapsing top app bar: title scaling, insets and lift-on-scroll
-                 are the component's own. ===== -->
-            <com.google.android.material.appbar.AppBarLayout
-                android:id="@+id/appbar"
+            <com.google.android.material.appbar.CollapsingToolbarLayout
+                android:id="@+id/collapsing"
+                style="?attr/collapsingToolbarLayoutMediumStyle"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                app:liftOnScroll="true"
-                app:liftOnScrollColor="?attr/colorSurfaceContainerHigh"
-                app:liftOnScrollTargetViewId="@+id/page_settings">
+                android:layout_height="?attr/collapsingToolbarLayoutMediumSize"
+                app:layout_scrollFlags="scroll|exitUntilCollapsed|snap"
+                app:titleCollapseMode="scale"
+                app:contentScrim="?attr/colorSurfaceContainerHigh"
+                app:maxLines="1"
+                app:title="@string/app_name">
 
-                <com.google.android.material.appbar.CollapsingToolbarLayout
-                    android:id="@+id/collapsing"
-                    style="?attr/collapsingToolbarLayoutMediumStyle"
+                <com.google.android.material.appbar.MaterialToolbar
+                    android:id="@+id/toolbar"
                     android:layout_width="match_parent"
-                    android:layout_height="?attr/collapsingToolbarLayoutMediumSize"
-                    app:layout_scrollFlags="scroll|exitUntilCollapsed|snap"
-                    app:titleCollapseMode="scale"
-                    app:contentScrim="?attr/colorSurfaceContainerHigh"
-                    app:maxLines="1"
-                    app:title="@string/app_name">
+                    android:layout_height="?attr/actionBarSize"
+                    app:menu="@menu/toolbar"
+                    app:layout_collapseMode="pin" />
+            </com.google.android.material.appbar.CollapsingToolbarLayout>
+        </com.google.android.material.appbar.AppBarLayout>
 
-                    <com.google.android.material.appbar.MaterialToolbar
-                        android:id="@+id/toolbar"
-                        android:layout_width="match_parent"
-                        android:layout_height="?attr/actionBarSize"
-                        app:layout_collapseMode="pin" />
-                </com.google.android.material.appbar.CollapsingToolbarLayout>
-            </com.google.android.material.appbar.AppBarLayout>
-
-        <!-- ===== pages ===== -->
-        <FrameLayout
+        <!-- ===== pages: Settings and Log, swipeable, kept in step with the bottom bar ===== -->
+        <androidx.viewpager2.widget.ViewPager2
+            android:id="@+id/pager"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
-            app:layout_behavior="@string/appbar_scrolling_view_behavior">
+            app:layout_behavior="@string/appbar_scrolling_view_behavior" />
 
-            <!-- ===== page: Settings ===== -->
-            <androidx.core.widget.NestedScrollView
-                android:id="@+id/page_settings"
-                android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:clipToPadding="false"
-                android:paddingBottom="80dp">
+        <!-- ===== actions =====
+             Direct children of the CoordinatorLayout — the arrangement shrink()/extend() is built
+             for, and where the component's own Behavior can see the app bar. Each pair is pinned to
+             the bottom-end corner; the secondary one is slid left of the primary by a translation
+             that follows its animated width (translation, so it costs no layout).
 
-                <LinearLayout
-                    android:id="@+id/settings_root"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="vertical"
-                    android:paddingHorizontal="16dp">
-
-                    <!-- background permission (shown only while battery optimisation still applies) -->
-                    <com.google.android.material.card.MaterialCardView
-                        android:id="@+id/battery_row"
-                        style="?attr/materialCardViewFilledStyle"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp"
-                        app:cardBackgroundColor="?attr/colorErrorContainer">
-
-                        <LinearLayout
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:orientation="horizontal"
-                            android:gravity="center_vertical"
-                            android:paddingStart="12dp"
-                            android:paddingEnd="4dp">
-
-                            <TextView
-                                android:id="@+id/battery_text"
-                                android:layout_width="0dp"
-                                android:layout_weight="1"
-                                android:layout_height="wrap_content"
-                                android:paddingVertical="8dp"
-                                android:textAppearance="?attr/textAppearanceBodySmall"
-                                android:textColor="?attr/colorOnErrorContainer"
-                                android:text="@string/battery_on" />
-
-                            <com.google.android.material.button.MaterialButton
-                                android:id="@+id/battery_fix"
-                                style="?attr/borderlessButtonStyle"
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="@string/battery_allow" />
-                        </LinearLayout>
-                    </com.google.android.material.card.MaterialCardView>
-
-                    <!-- ===== Connection ===== -->
-                    <TextView style="@style/ClipSync.SectionTitle" android:text="@string/section_connection" />
-
-                    <com.google.android.material.button.MaterialButtonToggleGroup
-                        android:id="@+id/mode"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        app:singleSelection="true"
-                        app:selectionRequired="true"
-                        app:checkedButton="@+id/mode_both">
-
-                        <!-- compact labels: smaller type and padding, single line, never ellipsised;
-                             width is distributed by content (wrap_content + weight on the leftovers) -->
-                        <com.google.android.material.button.MaterialButton
-                            android:id="@+id/mode_both"
-                            style="@style/ClipSync.Segment"
-                            android:text="@string/mode_both" />
-
-                        <com.google.android.material.button.MaterialButton
-                            android:id="@+id/mode_ddns"
-                            style="@style/ClipSync.Segment"
-                            android:text="@string/mode_ddns" />
-
-                        <com.google.android.material.button.MaterialButton
-                            android:id="@+id/mode_mdns"
-                            style="@style/ClipSync.Segment"
-                            android:text="@string/mode_mdns" />
-                    </com.google.android.material.button.MaterialButtonToggleGroup>
-
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:orientation="horizontal"
-                        android:layout_marginTop="12dp">
-
-                        <com.google.android.material.textfield.TextInputLayout
-                            android:id="@+id/port_layout"
-                            style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
-                            android:layout_width="0dp"
-                            android:layout_weight="1"
-                            android:layout_height="wrap_content"
-                            android:hint="@string/hint_port">
-
-                            <com.google.android.material.textfield.TextInputEditText
-                                android:id="@+id/port"
-                                android:layout_width="match_parent"
-                                android:layout_height="wrap_content"
-                                android:inputType="number"
-                                android:singleLine="true" />
-                        </com.google.android.material.textfield.TextInputLayout>
-
-                        <com.google.android.material.textfield.TextInputLayout
-                            android:id="@+id/psk_layout"
-                            style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
-                            android:layout_width="0dp"
-                            android:layout_weight="2"
-                            android:layout_height="wrap_content"
-                            android:layout_marginStart="8dp"
-                            android:hint="@string/hint_psk"
-                            app:endIconMode="password_toggle">
-
-                            <com.google.android.material.textfield.TextInputEditText
-                                android:id="@+id/psk"
-                                android:layout_width="match_parent"
-                                android:layout_height="wrap_content"
-                                android:fontFamily="monospace"
-                                android:inputType="textPassword|textNoSuggestions"
-                                android:singleLine="true" />
-                        </com.google.android.material.textfield.TextInputLayout>
-                    </LinearLayout>
-
-                    <!-- shown while DDNS is part of the mode -->
-                    <com.google.android.material.textfield.TextInputLayout
-                        android:id="@+id/host_layout"
-                        style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp"
-                        android:hint="@string/hint_host">
-
-                        <com.google.android.material.textfield.TextInputEditText
-                            android:id="@+id/host"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:inputType="textUri"
-                            android:singleLine="true" />
-                    </com.google.android.material.textfield.TextInputLayout>
-
-                    <!-- shown while mDNS is part of the mode -->
-                    <LinearLayout
-                        android:id="@+id/browse_row"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:orientation="vertical"
-                        android:layout_marginTop="12dp">
-
-                        <TextView
-                            android:id="@+id/browse_label"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:textAppearance="?attr/textAppearanceBodyMedium"
-                            tools:text="mDNS browse: 4000 ms" />
-
-                        <com.google.android.material.slider.Slider
-                            android:id="@+id/browse"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:valueFrom="0"
-                            android:valueTo="6"
-                            android:stepSize="1"
-                            android:value="3"
-                            app:labelBehavior="floating"
-                            app:tickVisible="true" />
-                    </LinearLayout>
-
-                    <!-- ===== Transfer limits ===== -->
-                    <TextView style="@style/ClipSync.SectionTitle" android:text="@string/section_limits" />
-
-                    <com.google.android.material.textfield.TextInputLayout
-                        android:id="@+id/text_kb_layout"
-                        style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:hint="@string/hint_text_kb">
-
-                        <com.google.android.material.textfield.TextInputEditText
-                            android:id="@+id/text_kb"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:inputType="number"
-                            android:singleLine="true" />
-                    </com.google.android.material.textfield.TextInputLayout>
-
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:orientation="horizontal"
-                        android:layout_marginTop="8dp">
-
-                        <com.google.android.material.textfield.TextInputLayout
-                            android:id="@+id/file_mb_layout"
-                            style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
-                            android:layout_width="0dp"
-                            android:layout_weight="1"
-                            android:layout_height="wrap_content"
-                            android:hint="@string/hint_file_mb">
-
-                            <com.google.android.material.textfield.TextInputEditText
-                                android:id="@+id/file_mb"
-                                android:layout_width="match_parent"
-                                android:layout_height="wrap_content"
-                                android:inputType="number"
-                                android:singleLine="true" />
-                        </com.google.android.material.textfield.TextInputLayout>
-
-                        <com.google.android.material.textfield.TextInputLayout
-                            android:id="@+id/file_mb_local_layout"
-                            style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
-                            android:layout_width="0dp"
-                            android:layout_weight="1"
-                            android:layout_height="wrap_content"
-                            android:layout_marginStart="8dp"
-                            android:hint="@string/hint_file_mb_local">
-
-                            <com.google.android.material.textfield.TextInputEditText
-                                android:id="@+id/file_mb_local"
-                                android:layout_width="match_parent"
-                                android:layout_height="wrap_content"
-                                android:inputType="number"
-                                android:singleLine="true" />
-                        </com.google.android.material.textfield.TextInputLayout>
-                    </LinearLayout>
-
-                    <TextView
-                        android:id="@+id/threads_label"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="12dp"
-                        android:textAppearance="?attr/textAppearanceBodyMedium"
-                        tools:text="Parallel connections per file: 8" />
-
-                    <com.google.android.material.slider.Slider
-                        android:id="@+id/threads"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:valueFrom="0"
-                        android:valueTo="4"
-                        android:stepSize="1"
-                        android:value="3"
-                        app:labelBehavior="floating"
-                        app:tickVisible="true" />
-
-                    <!-- ===== Received files ===== -->
-                    <TextView style="@style/ClipSync.SectionTitle" android:text="@string/section_files" />
-
-                    <com.google.android.material.textfield.TextInputLayout
-                        android:id="@+id/path_layout"
-                        style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:hint="@string/hint_path"
-                        app:helperText="@string/helper_path">
-
-                        <com.google.android.material.textfield.TextInputEditText
-                            android:id="@+id/path"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:inputType="textUri"
-                            android:singleLine="true" />
-                    </com.google.android.material.textfield.TextInputLayout>
-
-                    <com.google.android.material.textfield.TextInputLayout
-                        android:id="@+id/keep_hours_layout"
-                        style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp"
-                        android:hint="@string/hint_keep_hours">
-
-                        <com.google.android.material.textfield.TextInputEditText
-                            android:id="@+id/keep_hours"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:inputType="number"
-                            android:singleLine="true" />
-                    </com.google.android.material.textfield.TextInputLayout>
-
-                    <com.google.android.material.textfield.TextInputLayout
-                        android:id="@+id/keep_mb_layout"
-                        style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp"
-                        android:layout_marginBottom="16dp"
-                        android:hint="@string/hint_keep_mb">
-
-                        <com.google.android.material.textfield.TextInputEditText
-                            android:id="@+id/keep_mb"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:inputType="number"
-                            android:singleLine="true" />
-                    </com.google.android.material.textfield.TextInputLayout>
-                </LinearLayout>
-            </androidx.core.widget.NestedScrollView>
-
-            <!-- ===== page: Log ===== -->
-            <LinearLayout
-                android:id="@+id/page_log"
-                android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:orientation="vertical"
-                android:visibility="gone">
-
-                <!-- Copy / Clear live in the FAB pair below, next to the CoordinatorLayout -->
-                <androidx.core.widget.NestedScrollView
-                    android:id="@+id/log_scroll"
-                    android:layout_width="match_parent"
-                    android:layout_height="0dp"
-                    android:layout_weight="1"
-                    android:background="?attr/colorSurfaceContainerLow"
-                    android:clipToPadding="false"
-                    android:paddingBottom="80dp"
-                    android:scrollbars="vertical">
-
-                    <TextView
-                        android:id="@+id/log"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:padding="12dp"
-                        android:fontFamily="monospace"
-                        android:textIsSelectable="true"
-                        android:textSize="11sp"
-                        android:textColor="?attr/colorOnSurface" />
-                </androidx.core.widget.NestedScrollView>
-            </LinearLayout>
-
-            </FrameLayout>
-
-            <!-- ===== actions: extended FABs, bottom-right, Settings tab only =====
-                 Direct children of the CoordinatorLayout — the arrangement shrink()/extend() is
-                 built for. Both are pinned to the bottom-end corner; Stop is slid left of Apply by
-                 a translation that follows Apply's animated width (translation, so it costs no
-                 layout). Sizes come from the component's own motion specs.
-
-                 minWidth=0dp is required, not cosmetic: the extend target is computed as
-                 measuredWidth - collapsedPadding*2 + extendedPadding*2. When the default minWidth
-                 floors that measurement, the subtraction removes padding that was never in the
-                 measurement, so the animation overshoots and then snaps back to the settled
-                 wrap-content width at the end. extendStrategy is pinned to wrap_content so the
-                 target never depends on a remembered pre-shrink width. -->
-            <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
-                android:id="@+id/apply"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_gravity="bottom|end"
-                android:layout_margin="16dp"
-                android:minWidth="0dp"
-                app:extendStrategy="wrap_content"
-                android:text="@string/action_apply"
-                android:textColor="@color/fab_fg_primary"
-                app:icon="@drawable/ic_restart"
-                app:iconTint="@color/fab_fg_primary"
-                app:backgroundTint="@color/fab_bg_primary" />
-
-            <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
-                android:id="@+id/stop"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_gravity="bottom|end"
-                android:layout_margin="16dp"
-                android:minWidth="0dp"
-                app:extendStrategy="wrap_content"
-                android:visibility="gone"
-                android:text="@string/action_stop"
-                android:textColor="@color/fab_fg_surface"
-                app:icon="@drawable/ic_stop"
-                app:iconTint="@color/fab_fg_surface"
-                app:backgroundTint="@color/fab_bg_surface" />
-
-            <!-- ===== actions: Log tab =====
-                 Same corner, same pairing and the same scroll-driven shrink/extend as the pair
-                 above; these two are always usable, so nothing here is ever hidden or disabled. -->
-            <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
-                android:id="@+id/log_copy"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_gravity="bottom|end"
-                android:layout_margin="16dp"
-                android:minWidth="0dp"
-                app:extendStrategy="wrap_content"
-                android:visibility="gone"
-                android:text="@string/log_copy"
-                android:textColor="@color/fab_fg_primary"
-                app:icon="@drawable/ic_copy"
-                app:iconTint="@color/fab_fg_primary"
-                app:backgroundTint="@color/fab_bg_primary" />
-
-            <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
-                android:id="@+id/log_clear"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_gravity="bottom|end"
-                android:layout_margin="16dp"
-                android:minWidth="0dp"
-                app:extendStrategy="wrap_content"
-                android:visibility="gone"
-                android:text="@string/log_clear"
-                android:textColor="@color/fab_fg_surface"
-                app:icon="@drawable/ic_clear"
-                app:iconTint="@color/fab_fg_surface"
-                app:backgroundTint="@color/fab_bg_surface" />
-        </androidx.coordinatorlayout.widget.CoordinatorLayout>
-
-        <!-- ===== connection status, top-right, sitting on the app bar =====
-             One line only — "Stopped" or the connection kind — plus the pulsing dot. The block
-             sizes to its text (the longest label, "DDNS (Internet)", is far narrower than the bar),
-             so nothing is ever ellipsised. Peer and address are one tap away (dialog_status).
-             Bounded rounded ripple: a borderless one would spill over the bar. -->
-        <LinearLayout
-            android:id="@+id/status_block"
+             minWidth=0dp is required, not cosmetic: the extend target is computed as
+             measuredWidth - collapsedPadding*2 + extendedPadding*2. When the default minWidth
+             floors that measurement, the subtraction removes padding that was never in the
+             measurement, so the animation overshoots and then snaps back to the settled
+             wrap-content width at the end. extendStrategy is pinned to wrap_content so the
+             target never depends on a remembered pre-shrink width. -->
+        <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
+            android:id="@+id/apply"
             android:layout_width="wrap_content"
-            android:layout_height="36dp"
-            android:layout_gravity="top|end"
-            android:layout_marginEnd="12dp"
-            android:orientation="horizontal"
-            android:gravity="center_vertical"
-            android:minWidth="96dp"
-            android:paddingStart="14dp"
-            android:paddingEnd="14dp"
-            android:background="@drawable/status_ripple"
-            android:clickable="true"
-            android:focusable="true">
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|end"
+            android:layout_margin="16dp"
+            android:minWidth="0dp"
+            app:extendStrategy="wrap_content"
+            android:text="@string/action_apply"
+            android:textColor="@color/fab_fg_primary"
+            app:icon="@drawable/ic_restart"
+            app:iconTint="@color/fab_fg_primary"
+            app:backgroundTint="@color/fab_bg_primary" />
 
-            <TextView
-                android:id="@+id/status_title"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:textAppearance="?attr/textAppearanceLabelLarge"
-                android:textColor="?attr/colorOnSurface"
-                android:gravity="end"
-                android:singleLine="true"
-                android:ellipsize="none"
-                android:text="@string/state_stopped" />
+        <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
+            android:id="@+id/stop"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|end"
+            android:layout_margin="16dp"
+            android:minWidth="0dp"
+            app:extendStrategy="wrap_content"
+            android:visibility="gone"
+            android:text="@string/action_stop"
+            android:textColor="@color/fab_fg_surface"
+            app:icon="@drawable/ic_stop"
+            app:iconTint="@color/fab_fg_surface"
+            app:backgroundTint="@color/fab_bg_surface" />
 
-            <FrameLayout
-                android:layout_width="20dp"
-                android:layout_height="20dp"
-                android:layout_marginStart="10dp">
+        <!-- Log tab: always usable, so neither is ever hidden or disabled by state -->
+        <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
+            android:id="@+id/log_copy"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|end"
+            android:layout_margin="16dp"
+            android:minWidth="0dp"
+            app:extendStrategy="wrap_content"
+            android:visibility="gone"
+            android:text="@string/log_copy"
+            android:textColor="@color/fab_fg_primary"
+            app:icon="@drawable/ic_copy"
+            app:iconTint="@color/fab_fg_primary"
+            app:backgroundTint="@color/fab_bg_primary" />
 
-                <View
-                    android:id="@+id/status_halo"
-                    android:layout_width="20dp"
-                    android:layout_height="20dp"
-                    android:background="@drawable/status_dot"
-                    android:alpha="0.35" />
-
-                <View
-                    android:id="@+id/status_dot"
-                    android:layout_width="12dp"
-                    android:layout_height="12dp"
-                    android:layout_gravity="center"
-                    android:background="@drawable/status_dot" />
-            </FrameLayout>
-        </LinearLayout>
-
-    </FrameLayout>
+        <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
+            android:id="@+id/log_clear"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|end"
+            android:layout_margin="16dp"
+            android:minWidth="0dp"
+            app:extendStrategy="wrap_content"
+            android:visibility="gone"
+            android:text="@string/log_clear"
+            android:textColor="@color/fab_fg_surface"
+            app:icon="@drawable/ic_clear"
+            app:iconTint="@color/fab_fg_surface"
+            app:backgroundTint="@color/fab_bg_surface" />
+    </androidx.coordinatorlayout.widget.CoordinatorLayout>
 
     <com.google.android.material.bottomnavigation.BottomNavigationView
         android:id="@+id/nav"
