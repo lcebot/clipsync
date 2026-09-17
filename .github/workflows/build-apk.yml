@@ -53,6 +53,8 @@ jobs:
         working-directory: android
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # tags, so a branch build can name itself after the latest one
 
       - uses: actions/setup-java@v4
         with:
@@ -124,12 +126,60 @@ jobs:
           echo "KEYSTORE_FILE=$RUNNER_TEMP/clipsync.p12" >> "$GITHUB_ENV"
           echo "signing with the keystore secret ($(wc -c < "$RUNNER_TEMP/clipsync.p12") bytes)"
 
+      # Tags are the single source of truth for versions. A release builds its own tag; anything
+      # else is a debug build and borrows the newest tag plus the short commit — 1.0.3+a1b2c3d —
+      # so a CI APK says which release it sits after and which commit it actually is.
+      #
+      # The format is fixed at vA.B.C, where A and B are one digit and C may be two, which is
+      # exactly what versionCode = A*1000 + B*100 + C can represent without two tags ever colliding.
+      # A release on a malformed tag is an error; a branch build just falls back, because CI must
+      # not break over the state of some old tag.
+      - name: derive the version
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "release" ]; then
+            tag="$GITHUB_REF_NAME"
+          else
+            tag=$(git describe --tags --abbrev=0 2>/dev/null || true)
+            if [ -z "$tag" ]; then
+              echo "no tag in this repository yet: using the fallback in build.gradle.kts"
+              exit 0
+            fi
+          fi
+
+          if ! printf '%s' "$tag" | grep -qE '^v[0-9]\.[0-9]\.[0-9]{1,2}$'; then
+            if [ "$GITHUB_EVENT_NAME" = "release" ]; then
+              echo "tag '$tag' is not vA.B.C (A and B one digit, C one or two) — refusing to guess"
+              exit 1
+            fi
+            echo "latest tag '$tag' is not vA.B.C: using the fallback in build.gradle.kts"
+            exit 0
+          fi
+
+          name="${tag#v}"
+          # 10# so that a two-digit patch written as 08 or 09 is read as decimal, not bad octal
+          major=$((10#$(printf '%s' "$name" | cut -d. -f1)))
+          minor=$((10#$(printf '%s' "$name" | cut -d. -f2)))
+          patch=$((10#$(printf '%s' "$name" | cut -d. -f3)))
+          code=$(( major * 1000 + minor * 100 + patch ))
+
+          # A build that is not the release itself is a debug build sitting somewhere after that
+          # tag, so it says so: 1.0.3+a1b2c3d. The build metadata is only in versionName —
+          # versionCode stays the tag's, because it is an ordering, not an identity, and giving a
+          # CI build a higher one would let it silently overwrite the release on a device.
+          if [ "$GITHUB_EVENT_NAME" != "release" ]; then
+            name="$name+$(git rev-parse --short HEAD)"
+          fi
+
+          echo "VERSION_ARGS=-Pclipsync.versionName=$name -Pclipsync.versionCode=$code" >> "$GITHUB_ENV"
+          echo "$tag -> versionName $name, versionCode $code"
+
       - name: build
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        run: gradle assembleRelease --no-daemon
+        # unquoted on purpose: empty on a branch build, two -P flags on a release
+        run: gradle assembleRelease --no-daemon $VERSION_ARGS
 
       # The PC side ships as a zip built from a named list — never by zipping the folder, which
       # would sweep up clipsync.log, install-state.json and received/ as well.
@@ -143,11 +193,13 @@ jobs:
       - name: package the PC side
         working-directory: windows
         run: |
-          # Fail on something that looks like a real key rather than demanding an exactly blank
-          # line, so a placeholder or a reworded comment never blocks a release by accident.
-          if grep -qiE '^[[:space:]]*psk[[:space:]]*=[[:space:]]*[0-9a-f]{32,}' clipsync.ini; then
+          # Fail on a key that looks real rather than demanding an exactly blank line, so wording
+          # changes never block a release. The committed default is 64 zeros — long, but obviously
+          # not a key — so length alone is not the test: it must also contain a non-zero digit.
+          psk=$(sed -nE 's/^[[:space:]]*psk[[:space:]]*=[[:space:]]*([0-9A-Fa-f]*).*/\1/p' clipsync.ini | head -n1)
+          if [ "${#psk}" -ge 32 ] && printf '%s' "$psk" | grep -q '[^0]'; then
             echo "windows/clipsync.ini carries a real-looking psk — refusing to publish it."
-            echo "See the note above this step: the committed file must ship blank."
+            echo "See the note above this step: the committed file must ship blank or all zeros."
             exit 1
           fi
           mkdir -p "$RUNNER_TEMP/pc"
