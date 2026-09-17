@@ -11,6 +11,8 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -22,9 +24,16 @@ import java.util.Map;
  * Answers OFFERs with HAVE when the content is already here, and is the ground truth for
  * housekeeping ("last used" is tracked here, since MediaStore dates are not ours to set).
  * Persisted as files/cache.json so it survives process death.
+ *
+ * <p>The digests are only ever computed once, when the content passes through, and are read back
+ * from this file afterwards — nothing is ever re-hashed at start-up. (The Windows side had to grow
+ * a digest index in %TMP% to reach the same position: it owns a folder rather than a set of
+ * MediaStore rows, so it cannot assume the folder only changes through it.)
  */
 public final class FileCache {
     private static final String FILE = "cache.json";
+    /** Shortest gap between two disk writes made only to refresh a "last used" stamp. */
+    private static final long FLUSH_MS = 10_000;
 
     private static final class Entry {
         String uri, name, mime;
@@ -34,6 +43,7 @@ public final class FileCache {
     private final Context ctx;
     private final File file;
     private final Map<String, Entry> entries = new LinkedHashMap<>();
+    private long lastStore;
 
     public FileCache(Context ctx) {
         this.ctx = ctx.getApplicationContext();
@@ -62,6 +72,11 @@ public final class FileCache {
         }
     }
 
+    /**
+     * Writes the index. Never straight onto the live file: this process can be killed at any
+     * moment, and a half-written cache.json is an index lost in full, since load() can only start
+     * over from empty. Write beside it, then move over it.
+     */
     private synchronized void store() {
         try {
             JSONObject root = new JSONObject();
@@ -70,12 +85,27 @@ public final class FileCache {
                 root.put(me.getKey(), new JSONObject().put("uri", e.uri).put("name", e.name)
                         .put("mime", e.mime).put("size", e.size).put("used", e.used));
             }
-            try (FileOutputStream out = new FileOutputStream(file)) {
+            File tmp = new File(file.getPath() + ".tmp");
+            try (FileOutputStream out = new FileOutputStream(tmp)) {
                 out.write(root.toString().getBytes(StandardCharsets.UTF_8));
+                out.getFD().sync();
             }
+            Files.move(tmp.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING);
+            lastStore = System.currentTimeMillis();
         } catch (Exception e) {
             Logger.w("cache: cannot save index: " + e);
         }
+    }
+
+    /**
+     * For changes that are not worth a disk write of their own — currently only the "last used"
+     * stamp, which get() bumps on every OFFER we can answer from the cache. Rewriting the whole
+     * index each time put a synchronous file write on the network path to save a timestamp whose
+     * only consumer is the ordering inside prune(). Losing the last few seconds of it to a kill
+     * costs nothing: entries are still there, just fractionally staler in the LRU order.
+     */
+    private synchronized void storeSoon() {
+        if (System.currentTimeMillis() - lastStore >= FLUSH_MS) store();
     }
 
     public synchronized void put(String sha, Uri uri, String name, String mime, long size) {
@@ -100,7 +130,7 @@ public final class FileCache {
             return null;
         }
         e.used = System.currentTimeMillis();
-        store();
+        storeSoon();
         return u;
     }
 
