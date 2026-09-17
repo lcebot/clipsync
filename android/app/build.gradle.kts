@@ -21,6 +21,10 @@ val keystoreProps = Properties().apply {
 }
 fun signingValue(key: String, env: String): String? =
     (keystoreProps.getProperty(key) ?: System.getenv(env))?.takeIf { it.isNotBlank() }
+// Set by the release workflow from the tag name; absent everywhere else.
+val releaseVersionName = (findProperty("clipsync.versionName") as String?)?.takeIf { it.isNotBlank() }
+val releaseVersionCode = (findProperty("clipsync.versionCode") as String?)?.toIntOrNull()
+
 val keystoreFile = signingValue("storeFile", "KEYSTORE_FILE")?.let { rootProject.file(it) }
 val keystorePassword = signingValue("storePassword", "KEYSTORE_PASSWORD")
 // A .p12 written by PowerShell's Export-PfxCertificate takes its entry name from the certificate's
@@ -41,11 +45,16 @@ android {
         applicationId = "io.github.lcebot.clipsync"
         minSdk = 35
         targetSdk = 35
-        // versionCode encodes versionName: major * 1000 + minor * 100 + patch.
-        // 1.0 -> 1000, 1.0.1 -> 1001, 1.1 -> 1100, 2.0 -> 2000. Both are edited by hand; nothing
-        // derives them from a tag. Android only requires that this number never decreases.
-        versionCode = 1000
-        versionName = "1.0"
+        // Both come from a git tag, which the workflow parses and passes in as -P: a release uses
+        // its own tag, any other build uses the newest one plus the short commit in versionName
+        // (1.0.3+a1b2c3d) while keeping that tag's versionCode. The values below are only the
+        // fallback for a build with no tag in reach (a fresh clone with no tags, or a local build).
+        //
+        // Tags are vA.B.C with A and B one digit and C up to two, and versionCode is
+        // A*1000 + B*100 + C — so 1.0.0 -> 1000, 1.0.12 -> 1012, 1.1.0 -> 1100, 2.0.0 -> 2000.
+        // Android only requires that the number never decreases, which that ordering guarantees.
+        versionCode = releaseVersionCode ?: 1000
+        versionName = releaseVersionName ?: "1.0"
         buildConfigField("String", "HOST", "\"${props.getProperty("host", "")}\"")
         buildConfigField("int", "PORT", props.getProperty("port", "47521"))
         buildConfigField("String", "PSK", "\"${props.getProperty("psk", "")}\"")
