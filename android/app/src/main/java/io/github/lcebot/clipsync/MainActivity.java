@@ -30,10 +30,14 @@ import androidx.transition.TransitionManager;
 import androidx.transition.TransitionSet;
 
 import com.google.android.material.appbar.AppBarLayout;
+import com.google.android.material.appbar.CollapsingToolbarLayout;
+import com.google.android.material.appbar.MaterialToolbar;
 import com.google.android.material.bottomnavigation.BottomNavigationView;
 import com.google.android.material.bottomsheet.BottomSheetDialog;
-import com.google.android.material.button.MaterialButtonToggleGroup;
+import com.google.android.material.button.MaterialButton;
 import com.google.android.material.chip.Chip;
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
+import com.google.android.material.materialswitch.MaterialSwitch;
 import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton;
 import com.google.android.material.color.MaterialColors;
 import com.google.android.material.slider.Slider;
@@ -43,6 +47,8 @@ import com.google.android.material.textfield.TextInputLayout;
 import com.google.android.material.transition.MaterialFade;
 import com.google.android.material.transition.MaterialFadeThrough;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Properties;
 
 /**
@@ -56,15 +62,22 @@ import java.util.Properties;
  */
 public class MainActivity extends AppCompatActivity {
     // fields
-    private MaterialButtonToggleGroup mode;
-    private TextInputLayout hostL, portL, pskL, textKbL, fileMbL, fileMbLocalL, pathL, keepHoursL, keepMbL;
-    private TextInputEditText host, port, psk, textKb, fileMb, fileMbLocal, path, keepHours, keepMb;
+    private TextInputLayout portL, pskL, textKbL, fileMbL, fileMbLocalL, pathL, keepHoursL, keepMbL;
+    private TextInputEditText port, psk, textKb, fileMb, fileMbLocal, path, keepHours, keepMb;
+    private MaterialSwitch discovery, direct;
+    private ViewGroup peersBox;
+    private final List<TextInputLayout> peerRows = new ArrayList<>();
+    private MaterialButton peerAdd, pskRandom;
     private View browseRow;
     private Slider browse, threads;
     private TextView browseLabel, threadsLabel;
     private ViewGroup settingsRoot;
     // app bar / actions
     private AppBarLayout appbar;
+    private MaterialToolbar toolbar;
+    private CollapsingToolbarLayout collapsing;
+    // the layout's own paddings and margins, kept so insets are added to them and not to themselves
+    private int basePadSettings, basePadLog, baseTitleStart, baseTitleEnd, baseFabMargin;
     private View coordinator;
     private BottomNavigationView nav;
     private ExtendedFloatingActionButton stopFab, applyFab;      // Settings tab
@@ -180,8 +193,11 @@ public class MainActivity extends AppCompatActivity {
     private void bind() {
         // the two pages live in their own layout files and are pulled in with <include>, so this
         // stays one flat findViewById pass over the whole tree
-        mode = findViewById(R.id.mode);
-        hostL = findViewById(R.id.host_layout);       host = findViewById(R.id.host);
+        discovery = findViewById(R.id.discovery);
+        direct = findViewById(R.id.direct);
+        peersBox = findViewById(R.id.peers_box);
+        peerAdd = findViewById(R.id.peer_add);
+        pskRandom = findViewById(R.id.psk_random);
         portL = findViewById(R.id.port_layout);       port = findViewById(R.id.port);
         pskL = findViewById(R.id.psk_layout);         psk = findViewById(R.id.psk);
         textKbL = findViewById(R.id.text_kb_layout);  textKb = findViewById(R.id.text_kb);
@@ -212,15 +228,26 @@ public class MainActivity extends AppCompatActivity {
         copyFab = findViewById(R.id.log_copy);
         clearFab = findViewById(R.id.log_clear);
 
+        toolbar = findViewById(R.id.toolbar);
+        collapsing = findViewById(R.id.collapsing);
         statusChip = findViewById(R.id.status_chip);       // a plain Toolbar child
+
+        // The paddings and margins the layout starts with, read before any inset is added to them:
+        // the inset listener runs repeatedly (rotation, a cutout coming into play) and has to add
+        // to the designed value each time, not to whatever it left behind last time.
+        basePadSettings = settingsRoot.getPaddingLeft();
+        basePadLog = log.getPaddingLeft();
+        baseTitleStart = collapsing.getExpandedTitleMarginStart();
+        baseTitleEnd = collapsing.getExpandedTitleMarginEnd();
+        baseFabMargin = ((ViewGroup.MarginLayoutParams) applyFab.getLayoutParams()).getMarginEnd();
     }
 
     // ------------------------------------------------------------------ values <-> fields
     private void loadFields() {
         Properties p = Config.raw(this);
-        String m = p.getProperty("mode", Config.MODE_BOTH).trim();
-        mode.check(Config.MODE_DDNS.equals(m) ? R.id.mode_ddns : Config.MODE_MDNS.equals(m) ? R.id.mode_mdns : R.id.mode_both);
-        host.setText(p.getProperty("host", ""));
+        discovery.setChecked(bool(p.getProperty("discovery", "true")));
+        direct.setChecked(bool(p.getProperty("direct", "false")));
+        setPeerRows(Config.peerList(p.getProperty("peers", "")));
         port.setText(p.getProperty("port", "47521"));
         psk.setText(p.getProperty("psk", ""));
         textKb.setText(String.valueOf(longOf(p, "max_bytes", 1048576) / 1024));
@@ -235,16 +262,56 @@ public class MainActivity extends AppCompatActivity {
         int b = Config.snapBrowse((int) longOf(p, "mdns_timeout_ms", 4000));
         browse.setValue(indexOf(Config.BROWSE_STEPS_MS, b));
         browseLabel.setText(getString(R.string.browse_label, b));
-        applyMode(false);
+        applySwitches(false);
     }
 
-    private String modeValue() {
-        int id = mode.getCheckedButtonId();
-        return id == R.id.mode_ddns ? Config.MODE_DDNS : id == R.id.mode_mdns ? Config.MODE_MDNS : Config.MODE_BOTH;
+    // ------------------------------------------------------------------ the peers list
+    /**
+     * Rebuilds the rows from a list. One row always remains: zero addresses is expressed by turning
+     * the Direct switch off, which says the same thing without a list that looks broken.
+     */
+    private void setPeerRows(List<String> peers) {
+        peersBox.removeAllViews();
+        peerRows.clear();
+        if (peers.isEmpty()) peers = List.of("");
+        for (String s : peers) addPeerRow(s, false);
     }
 
-    private boolean modeHasDdns() { return !Config.MODE_MDNS.equals(modeValue()); }
-    private boolean modeHasMdns() { return !Config.MODE_DDNS.equals(modeValue()); }
+    private void addPeerRow(String value, boolean animate) {
+        if (animate) TransitionManager.beginDelayedTransition(settingsRoot, fieldMotion());
+        TextInputLayout row = (TextInputLayout) getLayoutInflater().inflate(R.layout.item_peer, peersBox, false);
+        TextInputEditText field = row.findViewById(R.id.peer);
+        field.setText(value);
+        field.addTextChangedListener(revalidate);
+        row.setEndIconOnClickListener(v -> removePeerRow(row));
+        peersBox.addView(row);
+        peerRows.add(row);
+        refreshPeerRows();
+    }
+
+    private void removePeerRow(TextInputLayout row) {
+        if (peerRows.size() <= 1) return;                 // the icon is disabled, but be certain
+        TransitionManager.beginDelayedTransition(settingsRoot, fieldMotion());
+        peersBox.removeView(row);
+        peerRows.remove(row);
+        refreshPeerRows();
+        validate();
+    }
+
+    /** The lone row's remove icon is disabled rather than hidden: it exists, it just cannot apply. */
+    private void refreshPeerRows() {
+        boolean removable = peerRows.size() > 1;
+        for (TextInputLayout row : peerRows) row.setEndIconVisible(removable);
+    }
+
+    private List<String> peerValues() {
+        List<String> out = new ArrayList<>();
+        for (TextInputLayout row : peerRows) {
+            TextInputEditText f = row.findViewById(R.id.peer);
+            out.add(text(f));
+        }
+        return out;
+    }
 
     private static int indexOf(int[] steps, int v) {
         for (int i = 0; i < steps.length; i++) if (steps[i] == v) return i;
@@ -267,21 +334,57 @@ public class MainActivity extends AppCompatActivity {
      * element itself, so ChangeBounds is paired with it to close the gap it leaves. One duration
      * for both, or the fade and the reflow drift apart.
      */
-    private void applyMode(boolean animate) {
-        if (animate) {
-            TransitionManager.beginDelayedTransition(settingsRoot, new TransitionSet()
-                    .addTransition(new MaterialFade())
-                    .addTransition(new ChangeBounds())
-                    .setDuration(220));
+    private void applySwitches(boolean animate) {
+        if (animate) TransitionManager.beginDelayedTransition(settingsRoot, fieldMotion());
+        browseRow.setVisibility(discovery.isChecked() ? View.VISIBLE : View.GONE);
+        int peersVisible = direct.isChecked() ? View.VISIBLE : View.GONE;
+        peersBox.setVisibility(peersVisible);
+        peerAdd.setVisibility(peersVisible);
+    }
+
+    /**
+     * A fresh key, straight into the field. Asked about first when one is already there: it
+     * invalidates every other device at once, and a mis-tap that costs re-pairing the household is
+     * not something to find out about afterwards.
+     */
+    private void newPsk() {
+        if (Config.checkPsk(text(psk)) != null) {          // nothing usable there to lose
+            psk.setText(randomPskHex());
+            return;
         }
-        hostL.setVisibility(modeHasDdns() ? View.VISIBLE : View.GONE);
-        browseRow.setVisibility(modeHasMdns() ? View.VISIBLE : View.GONE);
+        new MaterialAlertDialogBuilder(this)
+                .setTitle(R.string.psk_replace_title)
+                .setMessage(R.string.psk_replace_body)
+                .setNegativeButton(android.R.string.cancel, null)
+                .setPositiveButton(R.string.psk_replace_ok, (d, w) -> psk.setText(randomPskHex()))
+                .show();
+    }
+
+    private static String randomPskHex() {
+        byte[] b = new byte[32];
+        Crypto.RNG.nextBytes(b);
+        StringBuilder sb = new StringBuilder(64);
+        for (byte x : b) sb.append(String.format("%02x", x));
+        return sb.toString();
+    }
+
+    private static boolean bool(String s) {
+        String t = s.trim().toLowerCase();
+        return t.equals("true") || t.equals("1") || t.equals("yes") || t.equals("on");
+    }
+
+    private TransitionSet fieldMotion() {
+        return new TransitionSet()
+                .addTransition(new MaterialFade())
+                .addTransition(new ChangeBounds())
+                .setDuration(220);
     }
 
     private Properties values() {
         Properties v = new Properties();
-        v.setProperty("mode", modeValue());
-        v.setProperty("host", text(host));
+        v.setProperty("discovery", String.valueOf(discovery.isChecked()));
+        v.setProperty("direct", String.valueOf(direct.isChecked()));
+        v.setProperty("peers", Config.storePeers(peerValues()));
         v.setProperty("port", text(port));
         v.setProperty("psk", text(psk));
         v.setProperty("mdns_timeout_ms", String.valueOf(browseValue()));
@@ -301,8 +404,7 @@ public class MainActivity extends AppCompatActivity {
     // ------------------------------------------------------------------ live validation
     /** Runs every field check, shows errors, and gates Apply. Returns true when everything is valid. */
     private boolean validate() {
-        boolean ok = true;
-        ok &= show(hostL, modeHasDdns() ? Config.checkHost(text(host)) : null);
+        boolean ok = validatePeers();
         ok &= show(portL, Config.checkPort(text(port)));
         ok &= show(pskL, Config.checkPsk(text(psk)));
         ok &= show(textKbL, Config.checkRange(text(textKb), 1, 65536, "KB"));
@@ -313,6 +415,28 @@ public class MainActivity extends AppCompatActivity {
         ok &= show(keepMbL, Config.checkRange(text(keepMb), 0, 1024 * 1024, "MB"));
         configValid = ok;
         refreshActions();
+        return ok;
+    }
+
+    /**
+     * Each row carries its own error, and a repeat is reported on the second one — the first is not
+     * wrong, and marking both would leave the user with no clue which to change.
+     */
+    private boolean validatePeers() {
+        if (!direct.isChecked()) {
+            for (TextInputLayout row : peerRows) show(row, null);
+            return true;
+        }
+        boolean ok = true;
+        List<String> seen = new ArrayList<>();
+        for (TextInputLayout row : peerRows) {
+            String raw = text((TextInputEditText) row.findViewById(R.id.peer));
+            String problem = Config.checkPeer(raw);
+            String normal = Config.normalisePeer(raw);
+            if (problem == null && seen.contains(normal)) problem = getString(R.string.peer_duplicate);
+            if (problem == null) seen.add(normal);
+            ok &= show(row, problem);
+        }
         return ok;
     }
 
@@ -330,9 +454,12 @@ public class MainActivity extends AppCompatActivity {
 
     // ------------------------------------------------------------------ wiring
     private void wire() {
-        for (TextInputEditText e : new TextInputEditText[]{host, port, psk, textKb, fileMb, fileMbLocal, path, keepHours, keepMb})
+        for (TextInputEditText e : new TextInputEditText[]{port, psk, textKb, fileMb, fileMbLocal, path, keepHours, keepMb})
             e.addTextChangedListener(revalidate);
-        mode.addOnButtonCheckedListener((g, id, checked) -> { if (checked) { applyMode(true); validate(); } });
+        discovery.setOnCheckedChangeListener((b, checked) -> { applySwitches(true); validate(); });
+        direct.setOnCheckedChangeListener((b, checked) -> { applySwitches(true); validate(); });
+        peerAdd.setOnClickListener(v -> { addPeerRow("", true); validate(); });
+        pskRandom.setOnClickListener(v -> newPsk());
         threads.setLabelFormatter(v -> String.valueOf(Config.THREAD_STEPS[Math.max(0, Math.min(4, Math.round(v)))]));
         threads.addOnChangeListener((s, v, u) -> threadsLabel.setText(getString(R.string.threads_label, threadsValue())));
         browse.setLabelFormatter(v -> Config.BROWSE_STEPS_MS[Math.max(0, Math.min(6, Math.round(v)))] + " ms");
@@ -385,11 +512,38 @@ public class MainActivity extends AppCompatActivity {
         // Edge-to-edge. Both children are handed the full insets rather than left to the default
         // serial dispatch, where the first one to consume them starves the other: the app bar
         // needs the top, the navigation bar needs the bottom, and each applies its own (the root
-        // consumes nothing). The horizontal pair is only ever non-zero next to a cutout.
+        // consumes nothing).
+        //
+        // The horizontal pair is only non-zero beside a display cutout, and M3's rule there is that
+        // a container may run under the cutout while anything readable or touchable steps aside. So
+        // it is never applied to a view that paints a surface — not the CoordinatorLayout, not the
+        // app bar, not the log pane — only to the content inside them. BottomNavigationView already
+        // does exactly this for itself, which is why its bar spans the screen while its items sit
+        // clear of the camera; everything else here now matches it.
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.root), (v, insets) -> {
             Insets bars = insets.getInsets(
                     WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout());
-            coordinator.setPadding(bars.left, 0, bars.right, 0);
+            settingsRoot.setPadding(basePadSettings + bars.left, settingsRoot.getPaddingTop(),
+                    basePadSettings + bars.right, settingsRoot.getPaddingBottom());
+            log.setPadding(basePadLog + bars.left, log.getPaddingTop(),
+                    basePadLog + bars.right, log.getPaddingBottom());
+            toolbar.setPadding(bars.left, toolbar.getPaddingTop(), bars.right, toolbar.getPaddingBottom());
+            // the expanded title is drawn by the CollapsingToolbarLayout itself and never sees the
+            // toolbar's padding, so it needs the same offset stated separately — without it the
+            // title jumps sideways between its expanded and collapsed positions beside a cutout
+            collapsing.setExpandedTitleMarginStart(baseTitleStart + bars.left);
+            collapsing.setExpandedTitleMarginEnd(baseTitleEnd + bars.right);
+            // setLayoutParams always requests a layout, and this listener also runs whenever the
+            // IME opens or closes — so only when the value really changed, or a keyboard appearing
+            // mid-animation would drop a stray measure into a shrink or extend
+            int margin = baseFabMargin + bars.right;
+            for (ExtendedFloatingActionButton f : new ExtendedFloatingActionButton[]{applyFab, stopFab, copyFab, clearFab}) {
+                ViewGroup.MarginLayoutParams lp = (ViewGroup.MarginLayoutParams) f.getLayoutParams();
+                if (lp.getMarginEnd() != margin) {
+                    lp.setMarginEnd(margin);
+                    f.setLayoutParams(lp);
+                }
+            }
             ViewCompat.dispatchApplyWindowInsets(coordinator, insets);
             ViewCompat.dispatchApplyWindowInsets(nav, insets);
             return insets;
@@ -626,7 +780,7 @@ public class MainActivity extends AppCompatActivity {
         String titleText;
         if (connected) {
             connectionKind = "mdns".equals(s.via) ? getString(R.string.kind_mdns)
-                    : getString(R.string.kind_ddns, getString(s.lan ? R.string.link_lan : R.string.link_internet));
+                    : getString(R.string.kind_direct, getString(s.lan ? R.string.link_lan : R.string.link_internet));
             titleText = connectionKind;
             peerName = s.host;
             peerAddr = s.addr;
@@ -705,15 +859,17 @@ public class MainActivity extends AppCompatActivity {
                 waitingSince = System.currentTimeMillis();
                 refreshActions();
             }
-            Logger.i("config applied: mode " + c.mode + (c.host.isEmpty() ? "" : ", " + c.host) + ":" + c.port
-                    + (c.mdns ? ", browse " + c.mdnsTimeoutMs + " ms" : "") + ", " + c.threads + " streams, files -> " + c.filesDir);
+            Logger.i("config applied: " + (c.peers.isEmpty() ? "no addresses" : String.join(", ", c.peers) + ":" + c.port)
+                    + (c.discovery ? " + discovery (browse " + c.mdnsTimeoutMs + " ms)" : "")
+                    + ", " + c.threads + " streams, files -> " + c.filesDir);
             snack(R.string.snack_applied);
         } catch (IllegalArgumentException e) {
             // should not happen (live validation), but map it back to a field anyway
             String msg = e.getMessage() == null ? "invalid value" : e.getMessage();
             String key = msg.contains(":") ? msg.substring(0, msg.indexOf(':')) : "";
             TextInputLayout target = switch (key) {
-                case "host" -> hostL; case "port" -> portL; case "psk" -> pskL;
+                case "peers", "discovery" -> peerRows.isEmpty() ? portL : peerRows.get(0);
+                case "port" -> portL; case "psk" -> pskL;
                 case "max_bytes" -> textKbL; case "max_file_bytes" -> fileMbL; case "max_file_bytes_local" -> fileMbLocalL;
                 case "files_dir" -> pathL; case "keep_hours" -> keepHoursL; case "keep_max_mb" -> keepMbL;
                 default -> portL;

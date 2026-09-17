@@ -6,46 +6,54 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Properties;
 
 /**
- * Compile-time defaults (BuildConfig, from android/clipsync.properties) overridden by
- * files/clipsync.conf, which MainActivity writes.
+ * Everything is configured at runtime, in files/clipsync.conf, which MainActivity writes. There are
+ * no compile-time defaults: a released APK carries no configuration at all, which is also why it
+ * cannot carry anybody's key.
  *
- * Keys: mode (ddns+mdns | ddns | mdns), host, port, psk, mdns_timeout_ms, threads, max_bytes,
+ * <p>Keys: peers, discovery, direct, port, psk, mdns_timeout_ms, threads, max_bytes,
  * max_file_bytes, max_file_bytes_local, files_dir, keep_hours, keep_max_mb.
- * Every value is validated in {@link #from(Properties)}; the UI runs the same checks live
- * through the {@code check*} helpers.
+ * Every value is validated in {@link #from(Properties)}; the UI runs the same checks live through
+ * the {@code check*} helpers.
+ *
+ * <p>Peers are found two ways, and the two are independent switches rather than a mode: {@code
+ * discovery} asks the local network (mDNS), {@code direct} works through the {@code peers} list.
+ * They are named for how a peer is found, not for the route taken to it — a listed address is very
+ * often a LAN address too. At least one of them has to be on.
  */
 public final class Config {
     public static final String FILE = "clipsync.conf";
 
-    public static final String MODE_BOTH = "ddns+mdns", MODE_DDNS = "ddns", MODE_MDNS = "mdns";
     public static final String DEFAULT_FILES_DIR = "/storage/emulated/0/Download/ClipSync";
     public static final int[] THREAD_STEPS = {1, 2, 4, 8, 16};
     public static final int[] BROWSE_STEPS_MS = {1000, 2000, 3000, 4000, 6000, 8000, 10000};
 
-    public final String mode;
-    public final String host;           // DDNS name; "" when mode == mdns
+    public final List<String> peers;    // host names or literal addresses, in the order entered
+    public final boolean direct;        // dial the list at all
+    public final boolean discovery;     // look for peers on the local network (mDNS)
     public final int port;
     public final byte[] psk;
     public final String pskHex;
     public final int maxBytes;          // text limit
-    public final long maxFileBytes;     // image / file limit when the PC is reached over the internet
-    public final long maxFileBytesLocal;// ... and when it is on the LAN (mDNS, or on-link address)
+    public final long maxFileBytes;     // image / file limit for a peer reached over the internet
+    public final long maxFileBytesLocal;// ... and for one on the LAN (mDNS, or on-link address)
     public final int keepHours;         // received files unused for this long are deleted (0 = never)
     public final long keepMaxBytes;     // and LRU-first above this total (0 = unlimited)
-    public final boolean mdns;          // LAN discovery allowed (mode != ddns)
     public final int mdnsTimeoutMs;     // how long one browse may take
     public final int threads;           // parallel data connections per file transfer (1,2,4,8,16)
     public final String filesDir;       // absolute path on internal storage where received files go
     public final String relativePath;   // the same as a MediaStore RELATIVE_PATH ("Download/ClipSync")
 
     private Config(Properties p) {
-        mode = p.getProperty("mode").trim();
-        String h = p.getProperty("host", "").trim();
-        host = MODE_MDNS.equals(mode) ? "" : h;
-        mdns = !MODE_DDNS.equals(mode);
+        direct = bool(p.getProperty("direct", "true"));
+        discovery = bool(p.getProperty("discovery", "true"));
+        peers = direct ? peerList(p.getProperty("peers", "")) : List.of();
         port = Integer.parseInt(p.getProperty("port").trim());
         pskHex = p.getProperty("psk").trim().toLowerCase();
         psk = hex(pskHex);
@@ -69,14 +77,41 @@ public final class Config {
         return Math.max(Connection.CHUNK, maxBytes * 2) + 64 * 1024;
     }
 
+    // ------------------------------------------------------------------ peers list
+    /**
+     * Splits the stored form. Comma-separated and not colon-separated for a reason: an IPv6 literal
+     * is nothing but colons. Blanks are dropped and repeats collapse, so a list that round-trips
+     * through the UI cannot grow empty rows.
+     */
+    public static List<String> peerList(String stored) {
+        LinkedHashSet<String> out = new LinkedHashSet<>();
+        for (String s : stored.split(",")) {
+            String t = normalisePeer(s);
+            if (!t.isEmpty()) out.add(t);
+        }
+        return new ArrayList<>(out);
+    }
+
+    public static String storePeers(List<String> peers) {
+        return String.join(",", peers);
+    }
+
+    /** Trims, drops a bracketed IPv6's brackets, and lower-cases so duplicates compare equal. */
+    public static String normalisePeer(String s) {
+        String t = s.trim();
+        if (t.startsWith("[") && t.endsWith("]") && t.length() > 2) t = t.substring(1, t.length() - 1);
+        return t.toLowerCase();
+    }
+
     // ------------------------------------------------------------------ load / save
     /** Raw merged properties (defaults + file), without validation. */
     public static Properties raw(Context ctx) {
         Properties p = new Properties();
-        p.setProperty("mode", BuildConfig.MODE);
-        p.setProperty("host", BuildConfig.HOST);
-        p.setProperty("port", String.valueOf(BuildConfig.PORT));
-        p.setProperty("psk", BuildConfig.PSK);
+        p.setProperty("peers", "");
+        p.setProperty("direct", "false");      // nothing to dial until the user adds an address
+        p.setProperty("discovery", "true");    // works with no configuration at all
+        p.setProperty("port", "47521");
+        p.setProperty("psk", "");
         p.setProperty("mdns_timeout_ms", "4000");
         p.setProperty("threads", "8");
         p.setProperty("max_bytes", "1048576");
@@ -92,13 +127,6 @@ public final class Config {
             } catch (Exception ignored) {
             }
         }
-        // pre-"mode" files: derive it from the old boolean + host
-        if (p.getProperty("mode") == null || p.getProperty("mode").trim().isEmpty()) {
-            String m = p.getProperty("mdns", "true").trim().toLowerCase();
-            boolean mdns = m.equals("true") || m.equals("1") || m.equals("yes") || m.equals("on");
-            boolean host = !p.getProperty("host", "").trim().isEmpty();
-            p.setProperty("mode", !host ? MODE_MDNS : mdns ? MODE_BOTH : MODE_DDNS);
-        }
         return p;
     }
 
@@ -108,10 +136,12 @@ public final class Config {
     }
 
     public static Config from(Properties p) {
-        String mode = p.getProperty("mode", MODE_BOTH).trim();
-        if (!mode.equals(MODE_BOTH) && !mode.equals(MODE_DDNS) && !mode.equals(MODE_MDNS))
-            throw new IllegalArgumentException("mode: must be ddns+mdns, ddns or mdns");
-        fail("host", MODE_MDNS.equals(mode) ? null : checkHost(p.getProperty("host", "")));
+        boolean direct = bool(p.getProperty("direct", "true"));
+        boolean discovery = bool(p.getProperty("discovery", "true"));
+        // the old three-way mode made this impossible to express; two switches can, so it is checked
+        if (!direct && !discovery)
+            throw new IllegalArgumentException("discovery: turn on local network discovery or direct addresses");
+        if (direct) fail("peers", checkPeers(p.getProperty("peers", "")));
         fail("port", checkPort(p.getProperty("port", "")));
         fail("psk", checkPsk(p.getProperty("psk", "")));
         fail("mdns_timeout_ms", checkRange(p.getProperty("mdns_timeout_ms", ""), 500, 60000, "ms"));
@@ -141,11 +171,60 @@ public final class Config {
     }
 
     // ------------------------------------------------------------------ field checks (null = ok)
-    public static String checkHost(String s) {
-        s = s.trim();
-        if (s.isEmpty()) return "required for DDNS";
-        if (s.length() > 253 || !s.matches("[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?")) return "not a valid host name";
+    /**
+     * One entry of the peers list: a host name, an IPv4 literal or an IPv6 literal. The field never
+     * required dynamic DNS — a static address, a LAN address, a {@code .local} name or a VPN address
+     * are all equally valid, and the code always resolved them the same way.
+     */
+    public static String checkPeer(String s) {
+        String t = normalisePeer(s);
+        if (t.isEmpty()) return "required";
+        if (t.contains("://")) return "just the host or address, without http://";
+        if (t.contains("%")) return "an interface name means nothing on another device";
+        if (isIpLiteral(t)) return null;                 // covers IPv4 and every IPv6 form
+        // only now can a colon mean a port: an IPv6 literal is nothing but colons
+        if (t.matches(".+:\\d+")) return "the port has its own field";
+        String h = t.endsWith(".") ? t.substring(0, t.length() - 1) : t;   // a trailing dot is legal
+        if (h.length() > 253) return "too long for a host name";
+        for (String label : h.split("\\.", -1)) {
+            if (label.isEmpty() || label.length() > 63) return "not a valid host name";
+            if (label.startsWith("-") || label.endsWith("-")) return "not a valid host name";
+            if (!label.matches("[a-z0-9-]+")) return "not a valid host name";
+        }
         return null;
+    }
+
+    /** The whole list: every entry valid, at least one entry, no repeats. */
+    public static String checkPeers(String stored) {
+        List<String> seen = new ArrayList<>();
+        boolean any = false;
+        for (String s : stored.split(",")) {
+            if (s.trim().isEmpty()) continue;
+            any = true;
+            String problem = checkPeer(s);
+            if (problem != null) return problem;
+            String t = normalisePeer(s);
+            if (seen.contains(t)) return "listed twice: " + t;
+            seen.add(t);
+        }
+        return any ? null : "add an address, or turn direct addresses off";
+    }
+
+    /**
+     * Literal address in any form the platform accepts — dotted quad, full or compressed IPv6 —
+     * brackets already stripped.
+     *
+     * <p>{@link android.net.InetAddresses#isNumericAddress} and not {@code InetAddress.getByName}:
+     * the latter performs a DNS lookup for anything that is not a literal, and this runs on the UI
+     * thread on every keystroke. "abc" is all hex digits and also a perfectly good host name, so no
+     * amount of pattern-matching first makes that safe.
+     */
+    private static boolean isIpLiteral(String s) {
+        try {
+            return android.net.InetAddresses.isNumericAddress(s);
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
     }
 
     public static String checkPort(String s) {
@@ -217,6 +296,10 @@ public final class Config {
         if (!top.equals("Download") && !top.equals("Documents"))
             throw new IllegalArgumentException("must be under Download/ or Documents/");
         return s;
+    }
+
+    private static boolean bool(String s) {
+        return Arrays.asList("true", "1", "yes", "on").contains(s.trim().toLowerCase());
     }
 
     private static byte[] hex(String s) {

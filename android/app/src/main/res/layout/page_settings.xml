@@ -57,61 +57,36 @@
         <!-- ===== Connection ===== -->
         <TextView style="@style/ClipSync.SectionTitle" android:text="@string/section_connection" />
 
-        <com.google.android.material.button.MaterialButtonToggleGroup
-            android:id="@+id/mode"
+        <!-- Port and PSK first: the PSK row needs room on its right for the dice, and the two
+             identity fields above the two discovery blocks read as "who we are, then how we find
+             each other". -->
+        <com.google.android.material.textfield.TextInputLayout
+            android:id="@+id/port_layout"
+            style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            app:singleSelection="true"
-            app:selectionRequired="true"
-            app:checkedButton="@+id/mode_both">
+            android:hint="@string/hint_port">
 
-            <!-- single line, never ellipsised; the width each segment takes is its content's,
-                 with the leftover space shared out by weight (see ClipSync.Segment) -->
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/mode_both"
-                style="@style/ClipSync.Segment"
-                android:text="@string/mode_both" />
-
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/mode_ddns"
-                style="@style/ClipSync.Segment"
-                android:text="@string/mode_ddns" />
-
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/mode_mdns"
-                style="@style/ClipSync.Segment"
-                android:text="@string/mode_mdns" />
-        </com.google.android.material.button.MaterialButtonToggleGroup>
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/port"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="number"
+                android:singleLine="true" />
+        </com.google.android.material.textfield.TextInputLayout>
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
-            android:layout_marginTop="12dp">
-
-            <com.google.android.material.textfield.TextInputLayout
-                android:id="@+id/port_layout"
-                style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
-                android:layout_width="0dp"
-                android:layout_weight="1"
-                android:layout_height="wrap_content"
-                android:hint="@string/hint_port">
-
-                <com.google.android.material.textfield.TextInputEditText
-                    android:id="@+id/port"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:inputType="number"
-                    android:singleLine="true" />
-            </com.google.android.material.textfield.TextInputLayout>
+            android:layout_marginTop="8dp">
 
             <com.google.android.material.textfield.TextInputLayout
                 android:id="@+id/psk_layout"
                 style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
                 android:layout_width="0dp"
-                android:layout_weight="2"
+                android:layout_weight="1"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="8dp"
                 android:hint="@string/hint_psk"
                 app:endIconMode="password_toggle">
 
@@ -123,32 +98,38 @@
                     android:inputType="textPassword|textNoSuggestions"
                     android:singleLine="true" />
             </com.google.android.material.textfield.TextInputLayout>
+
+            <!-- Beside the field, not inside it: a TextInputLayout has one trailing slot and this
+                 one spends it on the reveal toggle. -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/psk_random"
+                style="?attr/materialIconButtonStyle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center_vertical"
+                android:layout_marginStart="4dp"
+                android:contentDescription="@string/psk_random"
+                app:icon="@drawable/ic_dice" />
         </LinearLayout>
 
-        <!-- shown while DDNS is part of the mode -->
-        <com.google.android.material.textfield.TextInputLayout
-            android:id="@+id/host_layout"
-            style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
+        <!-- The two switches are named for HOW a peer is found, not for the route to it: a listed
+             address is very often a LAN address too. Named that way, neither needs a subtitle. -->
+        <com.google.android.material.materialswitch.MaterialSwitch
+            android:id="@+id/discovery"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:hint="@string/hint_host">
+            android:layout_marginTop="16dp"
+            android:minHeight="48dp"
+            android:text="@string/switch_discovery"
+            android:textAppearance="?attr/textAppearanceBodyLarge" />
 
-            <com.google.android.material.textfield.TextInputEditText
-                android:id="@+id/host"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:inputType="textUri"
-                android:singleLine="true" />
-        </com.google.android.material.textfield.TextInputLayout>
-
-        <!-- shown while mDNS is part of the mode -->
+        <!-- mDNS stays on the slider under a section named in plain words: the section says what it
+             is for, the slider names the thing it actually times. -->
         <LinearLayout
             android:id="@+id/browse_row"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:layout_marginTop="12dp">
+            android:orientation="vertical">
 
             <TextView
                 android:id="@+id/browse_label"
@@ -168,6 +149,30 @@
                 app:labelBehavior="floating"
                 app:tickVisible="true" />
         </LinearLayout>
+
+        <com.google.android.material.materialswitch.MaterialSwitch
+            android:id="@+id/direct"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:minHeight="48dp"
+            android:text="@string/switch_direct"
+            android:textAppearance="?attr/textAppearanceBodyLarge" />
+
+        <!-- rows are inflated from item_peer.xml; at least one always remains -->
+        <LinearLayout
+            android:id="@+id/peers_box"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/peer_add"
+            style="?attr/materialButtonTextButtonStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/peer_add"
+            app:icon="@drawable/ic_add" />
 
         <!-- ===== Transfer limits ===== -->
         <TextView style="@style/ClipSync.SectionTitle" android:text="@string/section_limits" />

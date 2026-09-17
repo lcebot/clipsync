@@ -85,7 +85,9 @@ pip install -r requirements.txt
 
 > `pillow` is optional. Without it, received images arrive as files instead of pasting as pictures.
 
-Next, open `clipsync.ini`, paste the key into `psk`, and enter your DDNS name at `host` if you have one.
+Next, open `clipsync.ini`, paste the key into `psk`, and put the address your devices will use to
+reach this PC into `peers` — a DDNS name, a static address, whatever applies. Leave it empty for a
+LAN-only setup: `discovery = 1` is enough to be found on the local network.
 
 Then, in an **elevated** PowerShell:
 
@@ -103,12 +105,13 @@ received files are left alone.
 1. Install `app-release.apk`.
 2. *(rooted devices)* In **LSPosed**, enable **ClipSync** with scope **System Framework**, then
    **reboot**. On a device without root, everything except background clipboard *reading* works anyway.
-3. Open the app. Fill in the **PSK** and, if you have one, the **DDNS name**, then press
-   **Apply** or **start**.
+3. Open the app. Fill in the **PSK** — the dice beside the field generates one on the first device —
+   and, to reach a PC that is not on this network, turn on **Direct addresses** and add its address.
+   **Local network discovery** needs nothing configured. Then press **Apply** or **Start**.
 4. If the app shows a battery card, tap **Allow**. It keeps Android from suspending the connection.
 
 The status chip in the top-right corner tells you where you stand: `Stopped`, or the kind of
-connection that is live (`mDNS`, `DDNS (LAN)`, `DDNS (Internet)`). Tap it for the PC's name and
+connection that is live (`mDNS`, `Direct (LAN)`, `Direct (Internet)`). Tap it for the PC's name and
 address. The **Log** tab shows everything as it happens.
 
 ---
@@ -135,10 +138,10 @@ the PC. Fields are validated as you type, and the **Apply** button stays disable
 
 | Setting | Default | Notes |
 |---|---|---|
-| Connection mode | `Both` | `Both`, `DDNS only` or `mDNS only` |
-| DDNS name | — | The name that resolves to your PC's IPv6 address |
 | Port | `47521` | Must match the PC |
-| PSK | — | 64 hex characters, identical on both sides |
+| PSK | — | 64 hex characters, identical on every device. The dice generates one |
+| Local network discovery | on | Find peers on this network by mDNS. Needs no configuration |
+| Direct addresses | off | Connect to addresses you list. A host name or a literal IPv4/IPv6 address — dynamic DNS is one option, not a requirement |
 | mDNS browse time | 4 s | How long to look for the PC on the LAN before giving up |
 | Max text | 1 MB | Larger clips are not sent |
 | Max file (Internet) | 10 MB | |

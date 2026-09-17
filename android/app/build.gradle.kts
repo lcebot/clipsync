@@ -5,10 +5,9 @@ plugins {
     id("com.android.application")
 }
 
-val props = Properties().apply {
-    val f = rootProject.file("clipsync.properties")
-    if (f.exists()) f.inputStream().use { load(it) }
-}
+// Nothing is configured at build time. The app is set up on the device, which is also why a
+// published APK cannot contain anybody's pre-shared key — not "should not": there is no field for
+// it. See docs/p2p-plan.md §10.
 
 // Release signing, PKCS12. Locally: android/keystore.properties (gitignored) with storeFile /
 // storePassword and optionally keyAlias / keyPassword; storeFile is absolute, or relative to
@@ -55,14 +54,7 @@ android {
         // Android only requires that the number never decreases, which that ordering guarantees.
         versionCode = releaseVersionCode ?: 1000
         versionName = releaseVersionName ?: "1.0"
-        buildConfigField("String", "HOST", "\"${props.getProperty("host", "")}\"")
-        buildConfigField("int", "PORT", props.getProperty("port", "47521"))
-        buildConfigField("String", "PSK", "\"${props.getProperty("psk", "")}\"")
-        // ddns+mdns | ddns | mdns  (an empty host with the default mode makes the app fall back to mdns)
-        buildConfigField("String", "MODE", "\"${props.getProperty("mode", if (props.getProperty("host", "").isBlank()) "mdns" else "ddns+mdns")}\"")
     }
-
-    buildFeatures { buildConfig = true }
 
     signingConfigs {
         if (keystoreAlias != null) create("release") {

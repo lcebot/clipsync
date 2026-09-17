@@ -31,11 +31,13 @@ a file (CF_HDROP: Ctrl+V in Explorer or any app that accepts dropped files); ima
 as "PNG" and, when Pillow is installed, CF_DIB so image editors / chat apps paste them as pictures.
 Locally, a copied file (Explorer) or image (screenshot, browser) is offered; text goes as CLIP.
 
-Discovery: besides the DDNS name baked into the app, the server advertises itself on the
-LAN as _clipsync._tcp via mDNS (python-zeroconf) so a client can find it when the DDNS path
-is unavailable (no IPv6, no internet, router firewall).  When `host` (the DDNS name) is set,
-only the PC that actually owns the name advertises (see is_ddns_host).  The network side
-starts `start_delay` seconds after logon to give the DDNS updater time.
+Discovery has two independent halves, named for how a peer is found rather than for the route
+taken to it.  `peers` is a list of host names or literal addresses that devices connect to
+directly — a dynamic DNS name, a static address, a LAN address, all the same to the code.
+`discovery` advertises this PC on the LAN as _clipsync._tcp via mDNS (python-zeroconf), so a
+device can find it with nothing configured at all.  When addresses are listed, only a PC that
+actually owns one of them advertises (see owns_a_listed_name).  The network side starts
+`start_delay` seconds after logon, which is 0 by default.
 """
 import ctypes
 import ctypes.wintypes as wt
@@ -89,7 +91,7 @@ class Cfg:
         raw = {"port": "47521", "psk": "", "max_bytes": str(1024 * 1024),
                "max_file_bytes": str(10 * 1024 * 1024), "max_file_bytes_local": str(100 * 1024 * 1024),
                "files_dir": os.path.join(HERE, "received"), "keep_hours": "2", "keep_max_mb": "256",
-               "mdns": "1", "mdns_name": "", "host": "", "start_delay": "0"}
+               "discovery": "1", "mdns_name": "", "peers": "", "start_delay": "0"}
         with open(CONFIG_PATH, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
@@ -109,9 +111,12 @@ class Cfg:
             self.files_dir = os.path.join(HERE, self.files_dir)
         self.keep_hours = float(raw["keep_hours"])          # 0 = keep forever
         self.keep_max_bytes = int(float(raw["keep_max_mb"]) * 1024 * 1024)   # 0 = unlimited
-        self.mdns = raw["mdns"].lower() in ("1", "true", "yes", "on")
+        self.discovery = raw["discovery"].lower() in ("1", "true", "yes", "on")
         self.mdns_name = raw["mdns_name"]
-        self.host = raw["host"]
+        # Host names or literal addresses of peers to reach directly. Comma-separated, because an
+        # IPv6 literal is nothing but colons. Used by the advertiser to tell whether this PC is the
+        # one a shared config points at; from phase 3 it is also what this PC dials.
+        self.peers = [p.strip() for p in raw["peers"].split(",") if p.strip()]
         self.start_delay = int(raw["start_delay"])
         # largest frame we accept: a DATA chunk, or a CLIP whose JSON escaping doubled the text
         self.max_frame = max(CHUNK, self.max_bytes * 2) + 64 * 1024
@@ -1233,12 +1238,15 @@ MDNS_PROBE = 60            # seconds between DDNS-owner probes (hits the network
 MDNS_PROBE_FIRST = 10      # and how long the first one waits for the resolver to be up
 
 
-def is_ddns_host(host: str, port: int) -> bool:
+def owns_a_listed_name(peers: list, port: int) -> bool:
     """
-    Am I the machine the DDNS name points at?  Only ever used to *withdraw* an mDNS advertisement,
-    so that when several PCs share one clipsync.ini the ones that do not own the name stop
-    announcing themselves and devices cannot reach the wrong hub.  A single-PC setup always
-    answers True here.  Without a host name every PC is the host.
+    Am I one of the machines the configured addresses point at?  Only ever used to *withdraw* an
+    mDNS advertisement, so that when several PCs share one clipsync.ini the ones that own none of
+    the names stop announcing themselves and devices cannot reach the wrong hub.  A single-PC setup
+    always answers True here.  With no addresses listed, every PC is a host.
+
+    (This whole mechanism disappears in phase 3 of docs/p2p-plan.md: with many peers, several nodes
+    advertising is normal rather than a conflict.)
 
     Decision:
       * name resolves to one of my IPv6 addresses            -> host
@@ -1251,29 +1259,34 @@ def is_ddns_host(host: str, port: int) -> bool:
                                                                          up yet — exactly when clients need
                                                                          mDNS to find me)
     """
-    if not host:
-        return True
-    try:
-        remote = {ipaddress.ip_address(sa[0].split("%")[0]).packed
-                  for _, _, _, _, sa in socket.getaddrinfo(host, None, socket.AF_INET6)}
-    except socket.gaierror as e:
-        _say(log.warning, "cannot resolve %s (%s); assuming this PC is the host" % (host, e))
+    if not peers:
         return True
     local = {p for p in local_addresses() if len(p) == 16 and not ipaddress.ip_address(p).is_link_local}
-    if remote & local:
-        return True
-    for p in remote:
-        addr = str(ipaddress.ip_address(p))
+    answered_elsewhere = []
+    for host in peers:
         try:
-            with socket.create_connection((addr, port), timeout=2) as s:
-                if s.getsockname()[0].split("%")[0] == addr:
-                    return True          # connected to myself (address not listed by getaddrinfo)
-                _say(log.info, "%s -> %s answers on port %d: that PC is the host" % (host, addr, port))
-                return False
-        except OSError:
-            pass
-    _say(log.warning, "%s -> %s is not me and nothing answers there: stale DDNS record, acting as host"
-         % (host, ", ".join(str(ipaddress.ip_address(p)) for p in remote)))
+            remote = {ipaddress.ip_address(sa[0].split("%")[0]).packed
+                      for _, _, _, _, sa in socket.getaddrinfo(host, None, socket.AF_INET6)}
+        except socket.gaierror as e:
+            _say(log.warning, "cannot resolve %s (%s); assuming this PC is a host" % (host, e))
+            return True
+        if remote & local:
+            return True              # one of the listed names is mine: I am a host
+        for p in remote:
+            addr = str(ipaddress.ip_address(p))
+            try:
+                with socket.create_connection((addr, port), timeout=2) as s:
+                    if s.getsockname()[0].split("%")[0] == addr:
+                        return True  # connected to myself (address not listed by getaddrinfo)
+                    answered_elsewhere.append("%s -> %s" % (host, addr))
+            except OSError:
+                pass
+    if answered_elsewhere:
+        _say(log.info, "%s answers on port %d: that PC is the host"
+             % ("; ".join(answered_elsewhere), port))
+        return False
+    _say(log.warning, "none of %s is me and nothing answers there: stale record, acting as host"
+         % ", ".join(peers))
     return True
 
 
@@ -1395,10 +1408,10 @@ def mdns_thread(cfg: Cfg):
         time.sleep(MDNS_PROBE_FIRST)
         while True:
             try:
-                probed = is_ddns_host(cfg.host, cfg.port)
+                probed = owns_a_listed_name(cfg.peers, cfg.port)
                 if probed != was_host:
-                    log.info("this PC %s the DDNS host (%s)", "is" if probed else "is NOT",
-                             cfg.host or "no host configured")
+                    log.info("this PC %s a listed host (%s)", "is" if probed else "is NOT",
+                             ", ".join(cfg.peers) or "no addresses listed")
                     was_host = probed
                 host_now = probed
             except Exception as e:
@@ -1439,7 +1452,7 @@ def main():
 
     def start_network():
         threading.Thread(target=server_thread, args=(cfg, state), daemon=True).start()
-        if cfg.mdns:
+        if cfg.discovery:
             threading.Thread(target=mdns_thread, args=(cfg,), daemon=True).start()
 
     # Reading the clipboard can mean writing a screenshot to disk, and handling the result means

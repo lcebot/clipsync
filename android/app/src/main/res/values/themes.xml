@@ -7,8 +7,10 @@
         <item name="windowNoTitle">true</item>
     </style>
 
-    <!-- segmented-button segment: normal button type (labelLarge); the three labels fit a phone
-         width once minWidth is dropped and the default button padding is trimmed a little -->
+    <!-- Segmented-button segment: normal button type (labelLarge); three labels fit a phone width
+         once minWidth is dropped and the default button padding is trimmed a little.
+         Currently unused — the connection mode it served became two switches — and kept for the
+         device-type selector of docs/p2p-plan.md §2. -->
     <style name="ClipSync.Segment" parent="Widget.Material3.Button.OutlinedButton">
         <item name="android:layout_width">wrap_content</item>
         <item name="android:layout_height">wrap_content</item>

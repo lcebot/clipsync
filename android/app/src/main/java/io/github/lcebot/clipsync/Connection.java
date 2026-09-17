@@ -64,7 +64,7 @@ public final class Connection implements AutoCloseable {
     private final int maxFrame;
     private long txCtr = 0, rxCtr = 0;
     private final Object sendLock = new Object();
-    /** "ddns" or "mdns" — which path this session came up on (for logs). */
+    /** "direct" or "mdns" — which path this session came up on (for logs and the UI). */
     public final String via;
     /** Human-readable peer: DDNS name or mDNS service name, plus the address actually used. */
     public final String peer;
@@ -126,28 +126,31 @@ public final class Connection implements AutoCloseable {
     }
 
     /**
-     * DDNS and mDNS are peers, not a preference and a fallback: whichever connects first is the
-     * connection. Returns {socket, "ddns"|"mdns", peer name}.
+     * Listed addresses and local discovery are peers, not a preference and a fallback: whichever
+     * connects first is the connection. Returns {socket, "direct"|"mdns", peer name}.
      *
-     * <p>Two rounds, and the split is about cost rather than rank. The cheap half — a DNS lookup
-     * and a connect to the LAN address mDNS last reported — races both paths at once, which is
-     * where the ordering used to hurt: a stale DDNS record made the phone sit through a connect
-     * timeout before it would even look at the LAN. The expensive half is a fresh browse, seconds
-     * of multicast and a radio wake-up, so it stays behind both cheap paths failing rather than
-     * running on every reconnect that DDNS would have served instantly.
+     * <p>Two rounds, and the split is about cost rather than rank. The cheap half — a lookup and a
+     * connect per listed address, plus a connect to the LAN address mDNS last reported — races all
+     * of them at once, which is where the ordering used to hurt: a stale record made the phone sit
+     * through a connect timeout before it would even look at the LAN. The expensive half is a fresh
+     * browse, seconds of multicast and a radio wake-up, so it stays behind every cheap path failing
+     * rather than running on every reconnect a listed address would have served instantly.
+     *
+     * <p>Racing the whole list also means a peer list acts as failover for free: an address that is
+     * down costs nothing but its own connect timeout, in parallel with the others.
      */
     private static Object[] connectAny(Context ctx, Config cfg, boolean lan, Network net) throws IOException {
         IOException last = null;
         // mDNS is link-local multicast: pointless (and a radio wake-up) on cellular
-        boolean useMdns = cfg.mdns && lan;
+        boolean useMdns = cfg.discovery && lan;
 
         List<Callable<Object[]>> cheap = new ArrayList<>();
-        if (!cfg.host.isEmpty()) {
+        for (String peer : cfg.peers) {
             cheap.add(() -> {
                 try {
-                    return new Object[]{connectDdns(cfg.host, cfg.port), "ddns", cfg.host};
+                    return new Object[]{connectDirect(peer, cfg.port), "direct", peer};
                 } catch (IOException e) {
-                    Logger.i("ddns path failed: " + e);
+                    Logger.i("direct path failed (" + peer + "): " + e);
                     throw e;
                 }
             });
@@ -177,8 +180,8 @@ public final class Connection implements AutoCloseable {
             Logger.i("mdns: browsing for " + cfg.mdnsTimeoutMs + "ms");
             List<Mdns.Candidate> cands = Mdns.discover(ctx, net, cfg.mdnsTimeoutMs);
             if (cands.isEmpty()) {
-                Logger.i("mdns: no _clipsync._tcp service found (PC not advertising, UDP 5353 blocked, or AP client isolation)");
-                last = new IOException((last != null ? "ddns: " + last.getMessage() + "; " : "") + "mdns: no service found");
+                Logger.i("mdns: no _clipsync._tcp service found (peer not advertising, UDP 5353 blocked, or AP client isolation)");
+                last = new IOException((last != null ? "direct: " + last.getMessage() + "; " : "") + "mdns: no service found");
             } else {
                 // A PC typically advertises every adapter it has (VMware/Hyper-V/WSL/hotspot
                 // subnets included). Put addresses on the phone's own subnet first, then race
@@ -196,11 +199,13 @@ public final class Connection implements AutoCloseable {
                     last = e;
                 }
             }
-        } else if (cfg.mdns) {
+        } else if (cfg.discovery) {
             Logger.i("mdns: skipped (not on Wi-Fi/Ethernet)");
         }
 
-        throw last != null ? last : new IOException(lan ? "no host configured and mdns disabled" : "no host configured; mdns needs Wi-Fi");
+        throw last != null ? last
+                : new IOException(lan ? "no addresses listed and discovery is off"
+                                      : "no addresses listed; discovery needs Wi-Fi");
     }
 
     private static InetSocketAddress freshMdnsCache() {
@@ -245,8 +250,12 @@ public final class Connection implements AutoCloseable {
         return won;
     }
 
-    /** Resolve fresh every time (DDNS), prefer IPv6, try each address. */
-    private static Socket connectDdns(String host, int port) throws IOException {
+    /**
+     * Resolve fresh every time — the address behind a name can move, which is the whole point of a
+     * dynamic one — prefer IPv6, try each address. A literal is returned by getAllByName without a
+     * lookup, so an address entered directly costs nothing extra here.
+     */
+    private static Socket connectDirect(String host, int port) throws IOException {
         InetAddress[] all = InetAddress.getAllByName(host);
         List<InetAddress> ordered = new ArrayList<>();
         for (InetAddress a : all) if (a instanceof Inet6Address) ordered.add(a);

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- One entry of the direct-addresses list. The remove control is the field's own trailing icon
+     rather than a button in a column beside it: it belongs to this row and to nothing else.
+     On the last remaining row MainActivity disables it — the control still exists, it just cannot
+     apply, and zero addresses is what the Direct switch is for. -->
+<com.google.android.material.textfield.TextInputLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginTop="4dp"
+    android:hint="@string/hint_peer"
+    app:endIconMode="custom"
+    app:endIconDrawable="@drawable/ic_remove"
+    app:endIconContentDescription="@string/peer_remove">
+
+    <com.google.android.material.textfield.TextInputEditText
+        android:id="@+id/peer"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:inputType="textUri"
+        android:singleLine="true" />
+</com.google.android.material.textfield.TextInputLayout>

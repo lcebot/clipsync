@@ -8,7 +8,8 @@
      instead of its own container colour running to the screen edge, and would hide the top inset
      from the app bar. Instead each component that knows what to do with an inset gets it: the
      AppBarLayout and CollapsingToolbarLayout take the top one (fitsSystemWindows below), and
-     BottomNavigationView pads itself for the bottom one on its own. -->
+     BottomNavigationView pads itself for the bottom one on its own. Nothing in between handles
+     insets, so nothing in between is displaced by them. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:id="@+id/root"
@@ -16,12 +17,17 @@
     android:layout_height="match_parent"
     android:orientation="vertical">
 
+    <!-- Deliberately NOT fitsSystemWindows. A CoordinatorLayout that handles insets lays out every
+         child that does not handle them itself *inside* those insets — bottom included. The FABs
+         are such children, so the bottom inset would lift them off the navigation bar, and when the
+         IME opens it would lift them by the whole keyboard a second time, on top of the resize that
+         has already moved them. The top inset is what the app bar needs, and it takes that itself
+         (fitsSystemWindows below); the bottom belongs to the navigation bar view alone. -->
     <androidx.coordinatorlayout.widget.CoordinatorLayout
         android:id="@+id/coordinator"
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1"
-        android:fitsSystemWindows="true">
+        android:layout_weight="1">
 
         <!-- ===== M3 "medium" collapsing top app bar: title scaling, insets and lift-on-scroll
              are the component's own. The status chip is the toolbar's only menu action, so the

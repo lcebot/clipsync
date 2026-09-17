@@ -124,8 +124,16 @@ public class SyncService extends Service {
         Thread ka = new Thread(() -> Logger.i(Root.keepAlive(getPackageName())), "clipsync-root");
         ka.setDaemon(true);
         ka.start();
-        Logger.i("service started, target " + (cfg.host.isEmpty() ? "(none)" : cfg.host + ":" + cfg.port)
-                + (cfg.mdns ? " + mdns" : ""));
+        Logger.i("service started, " + targets(cfg));
+    }
+
+    /** How this device looks for peers, for one line of log: the two switches and what they hold. */
+    private static String targets(Config cfg) {
+        StringBuilder sb = new StringBuilder();
+        if (!cfg.peers.isEmpty()) sb.append(String.join(", ", cfg.peers)).append(":").append(cfg.port);
+        else sb.append("no addresses listed");
+        if (cfg.discovery) sb.append(" + discovery (browse ").append(cfg.mdnsTimeoutMs).append(" ms)");
+        return sb.toString();
     }
 
     /** Clips pushed by the system_server hook (xposed.Entry): the ClipData rides in the intent. */
@@ -160,8 +168,7 @@ public class SyncService extends Service {
             return;
         }
         cfg = next;
-        Logger.i("config reloaded: " + (cfg.host.isEmpty() ? "(no host)" : cfg.host + ":" + cfg.port)
-                + " mode " + cfg.mode + (cfg.mdns ? ", browse " + cfg.mdnsTimeoutMs + " ms" : "")
+        Logger.i("config reloaded: " + targets(cfg)
                 + ", " + cfg.threads + " streams, files -> " + cfg.filesDir);
         abortTransfers(conn, "configuration changed", null);
         Connection.forgetMdns();

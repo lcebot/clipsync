@@ -1,19 +1,15 @@
 # Builds the Android module APK. Repo layout: android/ (Gradle project), windows/ (Python daemon).
 #
-# Secrets (Settings > Secrets and variables > Actions):
-#   CLIPSYNC_HOST  - your PC's DDNS hostname
-#   CLIPSYNC_PSK   - 64 hex chars, same as windows/clipsync.ini
-#   CLIPSYNC_PORT  - optional, default 47521
-#   CLIPSYNC_MODE  - optional: ddns+mdns (default) | ddns | mdns
+# The APK carries NO configuration. There is no build-time config and no CLIPSYNC_* secret: the app
+# is set up on the device, which is what makes it safe to attach a build to a public release — there
+# is no field in it that could hold anybody's key. (The PSK guard further down covers clipsync.ini,
+# which really does ship inside windows.zip.)
+#
+# Secrets (Settings > Secrets and variables > Actions), signing only:
 #   KEYSTORE_B64       - base64 of your personal keystore (see below)
 #   KEYSTORE_PASSWORD  - store password
 #   KEY_ALIAS          - optional, defaults to the store's only alias
 #   KEY_PASSWORD       - optional, defaults to KEYSTORE_PASSWORD (PKCS12 has one password)
-# Forks without secrets still build; the APK then reads /data/data/io.github.lcebot.clipsync/files/clipsync.conf at runtime.
-#
-# NOTE: this repo is public and the release job attaches the APK to a public Release. CLIPSYNC_PSK and
-# CLIPSYNC_HOST are compiled into BuildConfig, so setting those secrets would publish them inside a
-# downloadable APK. Leave them unset and configure the app on the device instead.
 #
 # Make the keystore once, keep it offline, never commit it. No JDK needed — PowerShell writes a
 # PKCS12 directly (see README / the commands below), then base64 it into KEYSTORE_B64:
@@ -73,23 +69,6 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "9.6.0"          # AGP 9.x needs Gradle 9.x; 9.6 covers the whole line
-
-      # Secrets win; otherwise a committed android/clipsync.properties (private repos) is used as-is.
-      - name: write clipsync.properties from secrets
-        env:
-          HOST: ${{ secrets.CLIPSYNC_HOST }}
-          PORT: ${{ secrets.CLIPSYNC_PORT }}
-          PSK: ${{ secrets.CLIPSYNC_PSK }}
-          MODE: ${{ secrets.CLIPSYNC_MODE }}
-        run: |
-          if [ -n "$PSK" ]; then
-            printf 'host=%s\nport=%s\npsk=%s\nmode=%s\n' "$HOST" "${PORT:-47521}" "$PSK" "${MODE:-ddns+mdns}" > clipsync.properties
-            echo "using secrets"
-          elif [ -f clipsync.properties ]; then
-            echo "using committed clipsync.properties"
-          else
-            echo "no config: APK will need /data/data/io.github.lcebot.clipsync/files/clipsync.conf at runtime"
-          fi
 
       # Decoded into RUNNER_TEMP, never into the workspace: nothing here can end up in an artifact.
       - name: decode keystore
