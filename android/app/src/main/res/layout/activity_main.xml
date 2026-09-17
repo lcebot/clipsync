@@ -47,12 +47,21 @@
             </com.google.android.material.appbar.CollapsingToolbarLayout>
         </com.google.android.material.appbar.AppBarLayout>
 
-        <!-- ===== pages: Settings and Log, swipeable, kept in step with the bottom bar ===== -->
-        <androidx.viewpager2.widget.ViewPager2
-            android:id="@+id/pager"
+        <!-- ===== pages: Settings and Log =====
+             Siblings swapped by the bottom bar, with a MaterialFadeThrough between them. Not a
+             ViewPager2: M3 says a navigation bar's destinations are not swiped between and must
+             not move laterally, because lateral motion implies they are peers in a sequence. The
+             cross-fade is the transition the spec calls for. -->
+        <FrameLayout
+            android:id="@+id/pages"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
-            app:layout_behavior="@string/appbar_scrolling_view_behavior" />
+            app:layout_behavior="@string/appbar_scrolling_view_behavior">
+
+            <include layout="@layout/page_settings" />
+
+            <include layout="@layout/page_log" />
+        </FrameLayout>
 
         <!-- ===== actions =====
              Direct children of the CoordinatorLayout — the arrangement shrink()/extend() is built

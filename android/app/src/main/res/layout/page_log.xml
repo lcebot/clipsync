@@ -1,14 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Page 2 of the ViewPager2. A RecyclerView, not one long TextView: the buffer holds up to 500
-     lines and only the visible handful is ever measured. The bottom padding clears the FAB pair. -->
-<androidx.recyclerview.widget.RecyclerView xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
+<!-- The Log page. One selectable TextView on purpose: a log is only useful in a bug report if it
+     can be selected and copied by hand. The buffer is capped at 512 entries (Logger.MAX_ENTRIES),
+     which is what keeps a single TextView from becoming a layout problem.
+     The bottom padding clears the FAB pair. -->
+<androidx.core.widget.NestedScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/page_log"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="?attr/colorSurfaceContainerLow"
     android:clipToPadding="false"
-    android:paddingTop="6dp"
     android:paddingBottom="80dp"
     android:scrollbars="vertical"
-    app:layoutManager="androidx.recyclerview.widget.LinearLayoutManager" />
+    android:visibility="gone">
+
+    <TextView
+        android:id="@+id/log"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:padding="12dp"
+        android:fontFamily="monospace"
+        android:textIsSelectable="true"
+        android:textSize="11sp"
+        android:textColor="?attr/colorOnSurface" />
+</androidx.core.widget.NestedScrollView>

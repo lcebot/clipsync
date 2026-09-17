@@ -1,14 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Connection status, as the app bar's only action. Being a menu action view means the toolbar
      places it and the pinned toolbar keeps it in the corner whether the bar is open or collapsed —
-     no hand-computed offset. The dot is the chip's icon; it is tinted and pulsed from code. -->
+     no hand-computed offset. The dot is the chip's icon; it is tinted and pulsed from code.
+
+     16dp end margin, not 4dp: the action view is laid out by the ActionMenuView, which adds no
+     inset of its own, so the margin IS the page margin. M3 puts a top app bar's trailing icon
+     16dp from the edge (a 48dp touch target with 4dp padding around a 24dp glyph), which is the
+     same line the page content sits on — so the chip's box, not its label, ends at 16dp. -->
 <com.google.android.material.chip.Chip xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:id="@+id/status_chip"
     style="@style/Widget.Material3.Chip.Assist"
     android:layout_width="wrap_content"
     android:layout_height="wrap_content"
-    android:layout_marginEnd="4dp"
+    android:layout_marginEnd="16dp"
     android:text="@string/state_stopped"
     app:chipIcon="@drawable/status_dot"
     app:chipIconSize="10dp"

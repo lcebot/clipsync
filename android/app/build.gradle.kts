@@ -98,7 +98,5 @@ dependencies {
     // newer version explicitly collides with AGP's runtime/compile consistent resolution.
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.core:core:1.13.1")
-    implementation("androidx.recyclerview:recyclerview:1.3.2")      // the Log page
-    implementation("androidx.viewpager2:viewpager2:1.1.0")          // Settings / Log, swipeable
     implementation("com.google.android.material:material:1.14.0")   // Material 3 Expressive themes (1.14+)
 }
