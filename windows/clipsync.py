@@ -42,13 +42,18 @@ import ctypes.wintypes as wt
 import hashlib
 import hmac
 import io
+import ipaddress
 import json
 import logging
+import mimetypes
 import os
+import pathlib
+import queue
 import re
 import socket
 import struct
 import sys
+import tempfile
 import threading
 import time
 
@@ -84,7 +89,7 @@ class Cfg:
         raw = {"port": "47521", "psk": "", "max_bytes": str(1024 * 1024),
                "max_file_bytes": str(10 * 1024 * 1024), "max_file_bytes_local": str(100 * 1024 * 1024),
                "files_dir": os.path.join(HERE, "received"), "keep_hours": "2", "keep_max_mb": "256",
-               "mdns": "1", "mdns_name": "", "host": "", "start_delay": "30"}
+               "mdns": "1", "mdns_name": "", "host": "", "start_delay": "0"}
         with open(CONFIG_PATH, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
@@ -257,7 +262,18 @@ class Partial:
         os.replace(tmp, self.map_path(self.part))
         self.unsaved = 0
 
-    def write(self, idx: int, data: bytes):
+    def open_writer(self):
+        """
+        A file handle for one data connection to keep for its lifetime.
+
+        Two reasons not to open the file per chunk. It is a syscall and a handle allocation for
+        every 512 KiB — 200 of them for a 100 MB file — and, worse, doing it inside the lock made
+        the eight parallel streams take turns at the disk, which is the opposite of what opening
+        eight of them was for. Chunks occupy disjoint ranges, so a handle each is safe.
+        """
+        return open(self.part, "r+b")
+
+    def write(self, f, idx: int, data: bytes):
         if idx < 0 or idx >= self.n:
             raise ValueError(f"chunk {idx} out of range")
         expect = CHUNK if idx < self.n - 1 else self.size - idx * CHUNK
@@ -266,9 +282,14 @@ class Partial:
         with self.lock:
             if idx in self.have:
                 return
-            with open(self.part, "r+b") as f:
-                f.seek(idx * CHUNK)
-                f.write(data)
+        # outside the lock: this is the only slow part, and no two chunks share a byte. Two streams
+        # racing on the same index would write identical bytes, which costs a little work and
+        # nothing else.
+        f.seek(idx * CHUNK)
+        f.write(data)
+        with self.lock:
+            if idx in self.have:
+                return
             self.have.add(idx)
             self.unsaved += 1
             if self.unsaved >= MAP_SAVE_EVERY:
@@ -581,7 +602,6 @@ _MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif
 
 
 def guess_mime(name: str) -> str:
-    import mimetypes
     ext = os.path.splitext(name)[1].lower()
     return _MIME.get(ext) or mimetypes.guess_type(name)[0] or "application/octet-stream"
 
@@ -607,21 +627,66 @@ class FileCache:
     """
     sha256 -> local path of every file we have (received into files_dir, or copied locally).
     Lets an OFFER be answered with HAVE instead of transferring the bytes again, and serves WANTs.
-    files_dir is scanned once at start-up; mtime doubles as "last used" for housekeeping.
+
+    The digests are remembered between runs in %TMP%, keyed by name + size + mtime. Without that,
+    every logon re-hashed the whole folder — up to keep_max_mb of reading before the clipboard
+    listener was even registered. The index is a cache in the strict sense: delete it and the only
+    consequence is one slow start. It lives in %TMP% and not next to the files for exactly that
+    reason, and because the folder it describes is the user's, not ours to litter.
     """
+
+    INDEX_VERSION = 1
 
     def __init__(self, cfg: Cfg):
         self.cfg = cfg
         self.lock = threading.Lock()
         self.by_sha = {}
-        os.makedirs(cfg.files_dir, exist_ok=True)
+        self.dir = pathlib.Path(cfg.files_dir)
+        self.dir.mkdir(parents=True, exist_ok=True)
         self.partials = {}                     # sha -> Partial (interrupted transfers, resumable)
-        for n in os.listdir(cfg.files_dir):
-            p = os.path.join(cfg.files_dir, n)
+        self.index_path = self._index_path()
+        self.index = self._load_index()        # name -> [sha, size, mtime_ns]
+        self._scan()
+
+    def _index_path(self) -> pathlib.Path:
+        # one index per files_dir: the same %TMP% may serve several folders over time, and an
+        # index describing a different folder is worse than none
+        key = hashlib.sha256(str(self.dir.resolve()).lower().encode("utf-8")).hexdigest()[:16]
+        return pathlib.Path(tempfile.gettempdir()) / f"clipsync-index-{key}.json"
+
+    def _load_index(self) -> dict:
+        try:
+            doc = json.loads(self.index_path.read_text(encoding="utf-8"))
+            if doc.get("v") == self.INDEX_VERSION and doc.get("dir") == str(self.dir.resolve()):
+                return {k: list(v) for k, v in doc.get("files", {}).items()}
+        except (OSError, ValueError, TypeError):
+            pass
+        return {}
+
+    def _save_index(self):
+        try:
+            tmp = self.index_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps({"v": self.INDEX_VERSION, "dir": str(self.dir.resolve()),
+                                       "files": self.index}), encoding="utf-8")
+            os.replace(tmp, self.index_path)
+        except OSError as e:
+            log.info("cannot write the digest index (%s); it will be rebuilt next time", e)
+
+    def _scan(self):
+        """One pass over files_dir: resume partials, drop orphans, digest what is new or changed."""
+        fresh, hashed = {}, 0
+        try:
+            entries = list(os.scandir(self.dir))
+        except OSError as e:
+            log.warning("cannot read %s: %s", self.dir, e)
+            return
+        for e in entries:
+            n = p = None
             try:
+                n, p = e.name, e.path
                 if n.endswith(".part"):
                     try:
-                        pt = Partial(cfg.files_dir, part=p)
+                        pt = Partial(str(self.dir), part=p)
                         self.partials[pt.sha] = pt
                         log.info("resumable transfer found: %s", pt)
                     except Exception:
@@ -633,16 +698,43 @@ class FileCache:
                 elif n.endswith(".part.json") or n.endswith(".part.json.tmp"):
                     if not os.path.exists(p[:-5] if n.endswith(".json") else p[:-9]):
                         os.remove(p)
-                elif os.path.isfile(p) and os.path.getsize(p) <= cfg.max_file_any:
-                    self.by_sha[sha256_file(p)] = p
+                elif e.is_file():
+                    st = e.stat()
+                    if st.st_size > self.cfg.max_file_any:
+                        continue
+                    known = self.index.get(n)
+                    # size and mtime together: a file whose content changed but kept both is a
+                    # file someone built to be mistaken for another one, and it would have to
+                    # survive our own writes, which always produce a new name
+                    if known and known[1] == st.st_size and known[2] == st.st_mtime_ns:
+                        sha = known[0]
+                    else:
+                        sha = sha256_file(p)
+                        hashed += 1
+                    fresh[n] = [sha, st.st_size, st.st_mtime_ns]
+                    self.by_sha[sha] = p
             except OSError:
                 pass
+        self.index = fresh                      # entries whose file is gone die here
+        self._save_index()
         if self.by_sha:
-            log.info("file cache: %d file(s) in %s", len(self.by_sha), cfg.files_dir)
+            log.info("file cache: %d file(s) in %s (%d digested, %d from the index)",
+                     len(self.by_sha), self.dir, hashed, len(self.by_sha) - hashed)
+
+    def _remember(self, sha: str, path: str):
+        """Record a digest we already know, so the next start does not recompute it."""
+        try:
+            st = os.stat(path)
+        except OSError:
+            return
+        self.index[os.path.basename(path)] = [sha, st.st_size, st.st_mtime_ns]
+        self._save_index()
 
     def put(self, sha: str, path: str):
         with self.lock:
             self.by_sha[sha] = path
+        if os.path.dirname(os.path.abspath(path)) == str(self.dir.resolve()):
+            self._remember(sha, path)
 
     def get(self, sha: str):
         """Path if we still have that content, else None (stale entries are dropped)."""
@@ -653,12 +745,17 @@ class FileCache:
             self.by_sha.pop(sha, None)
             return None
 
-    @staticmethod
-    def touch(path: str):
+    def touch(self, path: str):
+        """Mark a file as used just now. mtime doubles as "last used" for housekeeping."""
         try:
             os.utime(path, None)
         except OSError:
-            pass
+            return
+        # touching is exactly the case where mtime moves without the content changing, so the
+        # index has to be told — otherwise every re-use of a cached file costs a re-hash next start
+        name = os.path.basename(path)
+        if name in self.index:
+            self._remember(self.index[name][0], path)
 
     def prune(self, keep: str):
         """
@@ -667,13 +764,19 @@ class FileCache:
         """
         cfg = self.cfg
         try:
+            # scandir, not listdir + stat: the directory entry already carries size and mtime on
+            # Windows, so this is one syscall for the whole folder instead of one per file.
+            #
+            # The digest index is deliberately NOT used as the file list here. It knows only what
+            # we put there; the folder is the user's and may hold files we never saw, and the
+            # keep_max_mb budget has to count those too.
             entries = []
-            for n in os.listdir(cfg.files_dir):
-                p = os.path.join(cfg.files_dir, n)
+            for e in os.scandir(cfg.files_dir):
+                n, p = e.name, e.path
                 if n.endswith(".part.json") or n.endswith(".json.tmp"):
                     continue                                # handled with their .part
-                if os.path.isfile(p) and p != keep:
-                    st = os.stat(p)
+                if e.is_file() and p != keep:
+                    st = e.stat()
                     entries.append((st.st_mtime, st.st_size, p))
             entries.sort()                                  # oldest first
             now = time.time()
@@ -699,6 +802,7 @@ class FileCache:
                     os.remove(p)
                     total -= size
                     removed += 1
+                    self.index.pop(os.path.basename(p), None)
                     with self.lock:
                         for k, v in list(self.by_sha.items()):
                             if v == p:
@@ -706,6 +810,7 @@ class FileCache:
                 except OSError as e:
                     log.info("prune: cannot remove %s: %s", p, e)
             if removed:
+                self._save_index()
                 log.info("prune: removed %d old file(s) from %s", removed, cfg.files_dir)
         except Exception as e:
             log.info("prune failed: %s", e)
@@ -877,9 +982,10 @@ class SyncState:
             pt.streams += 1
         return pt
 
-    def on_chunk(self, pt: Partial, payload: bytes):
+    @staticmethod
+    def on_chunk(pt: Partial, f, payload: bytes):
         (idx,) = struct.unpack(">I", payload[:4])
-        pt.write(idx, payload[4:])
+        pt.write(f, idx, payload[4:])
 
     def on_push_close(self, pt: Partial, ch: SecureChannel, clean: bool):
         """A push stream ended (END frame or connection loss).  Finalize when complete, re-ask otherwise."""
@@ -1065,6 +1171,7 @@ def data_thread(ch: SecureChannel, hello: dict, state: SyncState):
     else:
         pt = None
     clean = False
+    fh = None                                    # this connection's own handle on the .part file
     try:
         while True:
             typ, payload = ch.recv()
@@ -1078,7 +1185,9 @@ def data_thread(ch: SecureChannel, hello: dict, state: SyncState):
                 if state.is_aborted(sha):
                     ch.send_json(T_ABORT, {"sha256": sha, "reason": "aborted"})
                     break
-                state.on_chunk(pt, payload)
+                if fh is None:
+                    fh = pt.open_writer()
+                state.on_chunk(pt, fh, payload)
             elif typ == T_END:
                 clean = True
                 break
@@ -1092,6 +1201,11 @@ def data_thread(ch: SecureChannel, hello: dict, state: SyncState):
         if not clean:
             log.info("data connection from %s (%s) dropped: %s", ch.device, sha[:12], e)
     finally:
+        if fh is not None:
+            try:
+                fh.close()                       # before on_push_close, which may finalize the file
+            except OSError:
+                pass
         if pt is not None:
             state.on_push_close(pt, ch, clean)
         try:
@@ -1114,13 +1228,17 @@ def server_thread(cfg: Cfg, state: SyncState):
 
 # ----------------------------------------------------------------------------- mDNS (LAN fallback path)
 MDNS_TYPE = "_clipsync._tcp.local."
-MDNS_REFRESH = 60          # seconds between local-address / DDNS rescans
+MDNS_SCAN = 5              # seconds between local-address rescans (local only, cheap)
+MDNS_PROBE = 60            # seconds between DDNS-owner probes (hits the network, can be slow)
+MDNS_PROBE_FIRST = 10      # and how long the first one waits for the resolver to be up
 
 
 def is_ddns_host(host: str, port: int) -> bool:
     """
-    Am I the machine the DDNS name points at?  Used so that only one PC on a LAN advertises
-    itself when several share the same clipsync.ini.  Without a host name every PC is the host.
+    Am I the machine the DDNS name points at?  Only ever used to *withdraw* an mDNS advertisement,
+    so that when several PCs share one clipsync.ini the ones that do not own the name stop
+    announcing themselves and devices cannot reach the wrong hub.  A single-PC setup always
+    answers True here.  Without a host name every PC is the host.
 
     Decision:
       * name resolves to one of my IPv6 addresses            -> host
@@ -1133,14 +1251,13 @@ def is_ddns_host(host: str, port: int) -> bool:
                                                                          up yet — exactly when clients need
                                                                          mDNS to find me)
     """
-    import ipaddress
     if not host:
         return True
     try:
         remote = {ipaddress.ip_address(sa[0].split("%")[0]).packed
                   for _, _, _, _, sa in socket.getaddrinfo(host, None, socket.AF_INET6)}
     except socket.gaierror as e:
-        log.warning("cannot resolve %s (%s); assuming this PC is the host", host, e)
+        _say(log.warning, "cannot resolve %s (%s); assuming this PC is the host" % (host, e))
         return True
     local = {p for p in local_addresses() if len(p) == 16 and not ipaddress.ip_address(p).is_link_local}
     if remote & local:
@@ -1151,18 +1268,29 @@ def is_ddns_host(host: str, port: int) -> bool:
             with socket.create_connection((addr, port), timeout=2) as s:
                 if s.getsockname()[0].split("%")[0] == addr:
                     return True          # connected to myself (address not listed by getaddrinfo)
-                log.info("%s -> %s answers on port %d: that PC is the host", host, addr, port)
+                _say(log.info, "%s -> %s answers on port %d: that PC is the host" % (host, addr, port))
                 return False
         except OSError:
             pass
-    log.warning("%s -> %s is not me and nothing answers there: stale DDNS record, acting as host", host,
-                ", ".join(str(ipaddress.ip_address(p)) for p in remote))
+    _say(log.warning, "%s -> %s is not me and nothing answers there: stale DDNS record, acting as host"
+         % (host, ", ".join(str(ipaddress.ip_address(p)) for p in remote)))
     return True
+
+
+def _say(level, msg):
+    """Log `msg` only when it differs from the last one said this way.
+
+    The host probe repeats every MDNS_PROBE seconds and its findings are usually unchanged — a
+    stale DDNS record stays stale until the updater runs. Saying so once per minute forever buries
+    the events that do matter; saying it when the answer changes is the whole of its value.
+    """
+    if getattr(_say, "last", None) != msg:
+        _say.last = msg
+        level(msg)
 
 
 def local_addresses():
     """All non-loopback unicast addresses of this host (IPv4 + IPv6), packed."""
-    import ipaddress
     out = []
     try:
         infos = socket.getaddrinfo(socket.gethostname(), None)
@@ -1175,6 +1303,12 @@ def local_addresses():
             continue
         if ip.is_loopback or ip.is_multicast or ip.is_unspecified:
             continue
+        # 169.254/16 means the adapter never got a lease. Nothing can reach us there, and it would
+        # otherwise be advertised *first*: the ranking below only demotes link-local for IPv6, so
+        # an APIPA address counts as a plain IPv4 one. (fe80::/10 is kept but ranked last — it is
+        # at least usable by a device on the same segment.)
+        if ip.version == 4 and ip.is_link_local:
+            continue
         if ip.packed not in out:
             out.append(ip.packed)
     # IPv4 first (most reliable on a LAN), then global IPv6, link-local last
@@ -1186,6 +1320,20 @@ def local_addresses():
 
 
 def mdns_thread(cfg: Cfg):
+    """
+    Advertise _clipsync._tcp on every network this PC is attached to.
+
+    Two cadences, on two threads, because the two questions cost very different amounts:
+
+      * "what are my addresses?" is local and instant, so it is asked every MDNS_SCAN seconds and
+        is what drives the advertisement;
+      * "does someone else own the DDNS name?" resolves a name and may sit out a TCP timeout — tens
+        of seconds on a slow or broken resolver — so it runs on its own thread every MDNS_PROBE
+        seconds and can only ever *withdraw* the advertisement.
+
+    Keeping the slow question off the publishing path is the point: a device on the LAN is looking
+    for us during exactly the seconds a broken DDNS setup would otherwise make us wait.
+    """
     try:
         from zeroconf import IPVersion, ServiceInfo, Zeroconf
     except ImportError:
@@ -1195,48 +1343,91 @@ def mdns_thread(cfg: Cfg):
     name = cfg.mdns_name or f"ClipSync on {host}"
     props = {"v": str(PROTOCOL_VERSION)}
 
-    def make_info(addrs):
-        return ServiceInfo(MDNS_TYPE, f"{name}.{MDNS_TYPE}", addresses=addrs, port=cfg.port,
-                           properties=props, server=f"{host}.local.")
-
     zc = None
-    try:
-        zc = Zeroconf(ip_version=IPVersion.All)
-    except Exception as e:
-        log.warning("mDNS dual-stack init failed (%s), retrying IPv4 only", e)
-        try:
-            zc = Zeroconf(ip_version=IPVersion.V4Only)
-        except Exception as e2:
-            log.warning("mDNS disabled: %s", e2)
-            return
-    current = None
     info = None
+    published = None            # the address set currently being advertised
+
+    def stop(why=None):
+        nonlocal zc, info, published
+        if zc is None:
+            return
+        try:
+            if info is not None:
+                zc.unregister_service(info)
+            zc.close()
+        except Exception as e:
+            log.warning("mDNS teardown: %s", e)
+        if why:                 # a republish passes no reason: it is not an outage
+            log.info("mDNS advertising stopped (%s)", why)
+        zc, info, published = None, None, None
+
+    def publish(addrs):
+        """(Re)announce on `addrs`, from a Zeroconf bound to the interfaces that exist right now."""
+        nonlocal zc, info, published
+        again = published is not None       # read it before stop() clears it
+        # A Zeroconf instance binds its sockets when it is created, so an adapter that comes up
+        # later is invisible to it — re-registering on the old instance would keep announcing on
+        # the old sockets only. Recreating it is what makes a new network actually see us.
+        stop()
+        try:
+            zc = Zeroconf(ip_version=IPVersion.All)
+        except Exception as e:
+            log.warning("mDNS dual-stack init failed (%s), retrying IPv4 only", e)
+            zc = Zeroconf(ip_version=IPVersion.V4Only)
+        info = ServiceInfo(MDNS_TYPE, f"{name}.{MDNS_TYPE}", addresses=addrs, port=cfg.port,
+                           properties=props, server=f"{host}.local.")
+        zc.register_service(info, allow_name_change=True)
+        published = addrs
+        # Two wordings, because the two events mean different things to someone reading the log:
+        # the first is "the LAN path is up", a later one is "the network moved and we followed it".
+        if again:
+            log.info("mDNS re-advertising %s after a network change (%d addresses)", name, len(addrs))
+        else:
+            log.info("mDNS advertising %s on port %d (%d addresses)", name, cfg.port, len(addrs))
+
+    host_now = True             # advertise by default; only a positive probe takes it away
     was_host = None
+
+    def probe_loop():
+        nonlocal host_now, was_host
+        # Nothing depends on the first answer, so it waits for the resolver to come up rather than
+        # racing it at logon and logging a "cannot resolve" warning on every single boot.
+        time.sleep(MDNS_PROBE_FIRST)
+        while True:
+            try:
+                probed = is_ddns_host(cfg.host, cfg.port)
+                if probed != was_host:
+                    log.info("this PC %s the DDNS host (%s)", "is" if probed else "is NOT",
+                             cfg.host or "no host configured")
+                    was_host = probed
+                host_now = probed
+            except Exception as e:
+                log.warning("mDNS host probe: %s", e)
+            time.sleep(MDNS_PROBE)
+
+    threading.Thread(target=probe_loop, daemon=True, name="clipsync-mdns-probe").start()
+
+    seen = None
     while True:
         try:
-            host_now = is_ddns_host(cfg.host, cfg.port)
-            if host_now != was_host:
-                log.info("this PC %s the DDNS host (%s)", "is" if host_now else "is NOT", cfg.host or "no host configured")
-                was_host = host_now
+            addrs = local_addresses()
+            # Announce only once two consecutive scans agree. The scheduled task fires at logon,
+            # when adapters are still coming up and the first enumeration is usually short a few
+            # addresses — announcing that set would advertise a PC that is not reachable at some of
+            # them, and would miss the network that appears a second later. Waiting for the list to
+            # settle costs one scan when the network is already up, and exactly as long as it takes
+            # when it is not.
+            settled = addrs == seen
+            seen = addrs
+
             if not host_now:
-                if info is not None:
-                    zc.unregister_service(info)
-                    log.info("mDNS advertising stopped")
-                    info, current = None, None
-            else:
-                addrs = local_addresses()
-                if addrs and addrs != current:
-                    new_info = make_info(addrs)
-                    if info is None:
-                        zc.register_service(new_info, allow_name_change=True)
-                        log.info("mDNS advertising %s on port %d (%d addresses)", name, cfg.port, len(addrs))
-                    else:
-                        zc.update_service(new_info)
-                        log.info("mDNS addresses updated (%d)", len(addrs))
-                    info, current = new_info, addrs
+                if zc is not None:
+                    stop("another PC owns the DDNS name")
+            elif addrs and settled and addrs != published:
+                publish(addrs)
         except Exception as e:
             log.warning("mDNS error: %s", e)
-        time.sleep(MDNS_REFRESH)
+        time.sleep(MDNS_SCAN)
 
 
 # ----------------------------------------------------------------------------- main
@@ -1251,24 +1442,37 @@ def main():
         if cfg.mdns:
             threading.Thread(target=mdns_thread, args=(cfg,), daemon=True).start()
 
-    # The clipboard listener starts right away (so nothing copied meanwhile is lost); the network
-    # side waits start_delay seconds after logon so the DDNS updater has run first.
-    if cfg.start_delay > 0:
-        log.info("network start delayed by %ds", cfg.start_delay)
-        threading.Timer(cfg.start_delay, start_network).start()
-    else:
-        start_network()
+    # Reading the clipboard can mean writing a screenshot to disk, and handling the result means
+    # hashing a file that may be 100 MB — none of which belongs on the thread that pumps the
+    # window's messages. A listener window that stops answering is one Windows may drop from the
+    # clipboard chain, and it would stall every other message besides. So the callback does the one
+    # thing it must do quickly: note that something changed.
+    changed = queue.Queue()
 
     def wndproc(hwnd, msg, wparam, lparam):
         if msg == WM_CLIPBOARDUPDATE:
+            changed.put(None)
+            return 0
+        return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+
+    def clipboard_worker():
+        while True:
+            changed.get()
+            # Several updates in a row need one read, not one each: an app that writes text and
+            # then an image raises two, and only the final state is worth sending.
+            while True:
+                try:
+                    changed.get_nowait()
+                except queue.Empty:
+                    break
             try:
                 item = clipboard_read(cfg, state.last_set_path)
                 if item is not None:
                     state.on_local_change(item)
             except Exception as e:
                 log.warning("clipboard read failed: %s", e)
-            return 0
-        return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+
+    threading.Thread(target=clipboard_worker, daemon=True, name="clipsync-clipboard").start()
 
     proc = WNDPROC(wndproc)  # keep a reference alive
     wc = WNDCLASSW()
@@ -1284,6 +1488,19 @@ def main():
     if not user32.AddClipboardFormatListener(hwnd):
         raise ctypes.WinError(ctypes.get_last_error())
     log.info("clipboard listener ready, files go to %s", cfg.files_dir)
+
+    # Only now: a device that connects can immediately be sent a clip, and answering one means
+    # writing this PC's clipboard, so the listener window has to exist first. The network side
+    # needs no delay of its own — the listening socket is a wildcard bind and serves interfaces
+    # that appear later anyway, and the mDNS advertiser waits for the address list to settle.
+    # start_delay remains for the one case that still wants it: several PCs sharing one
+    # clipsync.ini, where starting before the DDNS client has published makes the PC that does not
+    # own the name advertise for one probe interval before withdrawing.
+    if cfg.start_delay > 0:
+        log.info("network start delayed by %ds", cfg.start_delay)
+        threading.Timer(cfg.start_delay, start_network).start()
+    else:
+        start_network()
 
     msg = wt.MSG()
     while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
