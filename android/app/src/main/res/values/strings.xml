@@ -46,7 +46,6 @@
     <string name="log_clear">Clear</string>
 
     <!-- status chip in the app bar -->
-    <string name="status_action">Connection status</string>
     <string name="state_stopped">Stopped</string>
     <string name="state_connecting">Connecting…</string>
     <string name="state_disconnected">Disconnected</string>
