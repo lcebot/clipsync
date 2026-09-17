@@ -23,6 +23,15 @@
         <item name="android:ellipsize">none</item>
     </style>
 
+    <!-- Inside of every settings card. The card is the boundary between one group of controls and
+         the next; this is just the padding that keeps the controls off its edge. -->
+    <style name="ClipSync.CardBody" parent="">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:orientation">vertical</item>
+        <item name="android:padding">12dp</item>
+    </style>
+
     <!-- small group header above each block of settings -->
     <style name="ClipSync.SectionTitle" parent="android:Widget.TextView">
         <item name="android:layout_width">match_parent</item>

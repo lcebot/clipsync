@@ -54,92 +54,88 @@
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
-        <!-- ===== Connection ===== -->
+        <!-- ===== Connection =====
+             Every group of controls on this page sits in one filled card, with the section title
+             outside it. A card marks where one group ends and the next begins, which is what makes
+             a switch and the controls it governs read as one thing rather than as neighbours that
+             happen to be adjacent. The cards holding a switch never hide — they hold the switch —
+             only the dependent content inside them does. -->
         <TextView style="@style/ClipSync.SectionTitle" android:text="@string/section_connection" />
 
-        <!-- Port and PSK first: the PSK row needs room on its right for the dice, and the two
-             identity fields above the two discovery blocks read as "who we are, then how we find
-             each other". -->
-        <com.google.android.material.textfield.TextInputLayout
-            android:id="@+id/port_layout"
-            style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
+        <!-- Port and PSK first: the two identity fields above the two discovery blocks read as
+             "who we are, then how we find each other". -->
+        <com.google.android.material.card.MaterialCardView
+            style="?attr/materialCardViewFilledStyle"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="@string/hint_port">
+            android:layout_height="wrap_content">
 
-            <com.google.android.material.textfield.TextInputEditText
-                android:id="@+id/port"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:inputType="number"
-                android:singleLine="true" />
-        </com.google.android.material.textfield.TextInputLayout>
+            <LinearLayout style="@style/ClipSync.CardBody">
 
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:layout_marginTop="8dp">
-
-            <com.google.android.material.textfield.TextInputLayout
-                android:id="@+id/psk_layout"
-                style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
-                android:layout_width="0dp"
-                android:layout_weight="1"
-                android:layout_height="wrap_content"
-                android:hint="@string/hint_psk"
-                app:endIconMode="password_toggle">
-
-                <com.google.android.material.textfield.TextInputEditText
-                    android:id="@+id/psk"
+                <com.google.android.material.textfield.TextInputLayout
+                    android:id="@+id/port_layout"
+                    style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:fontFamily="monospace"
-                    android:inputType="textPassword|textNoSuggestions"
-                    android:singleLine="true" />
-            </com.google.android.material.textfield.TextInputLayout>
+                    android:hint="@string/hint_port">
 
-            <!-- Beside the field, not inside it: a TextInputLayout has one trailing slot and this
-                 one spends it on the reveal toggle.
-                 Aligned to the top, not centred: an error under the field grows the row, and a
-                 centred button would then drift below the box it belongs to. A dense outlined box
-                 and an icon button are both 48dp, so the two line up exactly. -->
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/psk_random"
-                style="?attr/materialIconButtonStyle"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_gravity="top"
-                android:layout_marginStart="4dp"
-                android:contentDescription="@string/psk_random"
-                app:icon="@drawable/ic_dice" />
-        </LinearLayout>
+                    <com.google.android.material.textfield.TextInputEditText
+                        android:id="@+id/port"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:inputType="number"
+                        android:singleLine="true" />
+                </com.google.android.material.textfield.TextInputLayout>
+
+                <!-- The dice is the field's own LEADING icon, not a button beside the field.
+                     TextInputLayout centres the leading and trailing icons on the box and lays the
+                     error text out in a separate row below it, so the dice and the reveal toggle are
+                     aligned with each other by the widget and stay put when an error appears. A
+                     sibling button outside the field cannot be: it would have to guess the box
+                     height, and it would drift as soon as the row grew. setStartIconOnClickListener
+                     is the documented way to make the leading icon interactive; checkable is off
+                     because the icon runs an action once and holds no state, and left on it would be
+                     announced as a checkbox. -->
+                <com.google.android.material.textfield.TextInputLayout
+                    android:id="@+id/psk_layout"
+                    style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:hint="@string/hint_psk"
+                    app:startIconDrawable="@drawable/ic_dice"
+                    app:startIconContentDescription="@string/psk_random"
+                    app:startIconCheckable="false"
+                    app:endIconMode="password_toggle">
+
+                    <com.google.android.material.textfield.TextInputEditText
+                        android:id="@+id/psk"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:fontFamily="monospace"
+                        android:inputType="textPassword|textNoSuggestions"
+                        android:singleLine="true" />
+                </com.google.android.material.textfield.TextInputLayout>
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
 
         <!-- The two switches are named for HOW a peer is found, not for the route to it: a listed
              address is very often a LAN address too. Named that way, neither needs a subtitle.
-
-             Each switch and the controls it governs live in one filled card. Without the card the
-             whole section is a single column of equally indented controls and nothing says that the
-             browse slider belongs to the switch above it rather than to the section; the card's
-             surface is the boundary. The card itself never hides — it holds the switch — only the
-             dependent content inside it does. -->
+             gravity is spelled out on both: MaterialSwitch inherits center_vertical|start from
+             android:Widget.CompoundButton, and SwitchCompat's own layout falls back to TOP for any
+             gravity without a vertical bit — so the value is worth stating rather than inheriting. -->
         <com.google.android.material.card.MaterialCardView
             style="?attr/materialCardViewFilledStyle"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp">
+            android:layout_marginTop="8dp">
 
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:padding="12dp">
+            <LinearLayout style="@style/ClipSync.CardBody">
 
                 <com.google.android.material.materialswitch.MaterialSwitch
                     android:id="@+id/discovery"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:minHeight="48dp"
+                    android:gravity="center_vertical|start"
                     android:text="@string/switch_discovery"
                     android:textAppearance="?attr/textAppearanceBodyLarge" />
 
@@ -178,17 +174,13 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp">
 
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:padding="12dp">
+            <LinearLayout style="@style/ClipSync.CardBody">
 
                 <com.google.android.material.materialswitch.MaterialSwitch
                     android:id="@+id/direct"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:minHeight="48dp"
+                    android:gravity="center_vertical|start"
                     android:text="@string/switch_direct"
                     android:textAppearance="?attr/textAppearanceBodyLarge" />
 
@@ -213,130 +205,148 @@
         <!-- ===== Transfer limits ===== -->
         <TextView style="@style/ClipSync.SectionTitle" android:text="@string/section_limits" />
 
-        <com.google.android.material.textfield.TextInputLayout
-            android:id="@+id/text_kb_layout"
-            style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
+        <com.google.android.material.card.MaterialCardView
+            style="?attr/materialCardViewFilledStyle"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="@string/hint_text_kb">
+            android:layout_height="wrap_content">
 
-            <com.google.android.material.textfield.TextInputEditText
-                android:id="@+id/text_kb"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:inputType="number"
-                android:singleLine="true" />
-        </com.google.android.material.textfield.TextInputLayout>
+            <LinearLayout style="@style/ClipSync.CardBody">
 
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:layout_marginTop="8dp">
-
-            <com.google.android.material.textfield.TextInputLayout
-                android:id="@+id/file_mb_layout"
-                style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
-                android:layout_width="0dp"
-                android:layout_weight="1"
-                android:layout_height="wrap_content"
-                android:hint="@string/hint_file_mb">
-
-                <com.google.android.material.textfield.TextInputEditText
-                    android:id="@+id/file_mb"
+                <com.google.android.material.textfield.TextInputLayout
+                    android:id="@+id/text_kb_layout"
+                    style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:inputType="number"
-                    android:singleLine="true" />
-            </com.google.android.material.textfield.TextInputLayout>
+                    android:hint="@string/hint_text_kb">
 
-            <com.google.android.material.textfield.TextInputLayout
-                android:id="@+id/file_mb_local_layout"
-                style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
-                android:layout_width="0dp"
-                android:layout_weight="1"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="8dp"
-                android:hint="@string/hint_file_mb_local">
+                    <com.google.android.material.textfield.TextInputEditText
+                        android:id="@+id/text_kb"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:inputType="number"
+                        android:singleLine="true" />
+                </com.google.android.material.textfield.TextInputLayout>
 
-                <com.google.android.material.textfield.TextInputEditText
-                    android:id="@+id/file_mb_local"
+                <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:inputType="number"
-                    android:singleLine="true" />
-            </com.google.android.material.textfield.TextInputLayout>
-        </LinearLayout>
+                    android:orientation="horizontal"
+                    android:layout_marginTop="8dp">
 
-        <TextView
-            android:id="@+id/threads_label"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:textAppearance="?attr/textAppearanceBodyMedium"
-            tools:text="Parallel connections per file: 8" />
+                    <com.google.android.material.textfield.TextInputLayout
+                        android:id="@+id/file_mb_layout"
+                        style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
+                        android:layout_width="0dp"
+                        android:layout_weight="1"
+                        android:layout_height="wrap_content"
+                        android:hint="@string/hint_file_mb">
 
-        <com.google.android.material.slider.Slider
-            android:id="@+id/threads"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:valueFrom="0"
-            android:valueTo="4"
-            android:stepSize="1"
-            android:value="3"
-            app:labelBehavior="floating"
-            app:tickVisible="true" />
+                        <com.google.android.material.textfield.TextInputEditText
+                            android:id="@+id/file_mb"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:inputType="number"
+                            android:singleLine="true" />
+                    </com.google.android.material.textfield.TextInputLayout>
+
+                    <com.google.android.material.textfield.TextInputLayout
+                        android:id="@+id/file_mb_local_layout"
+                        style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
+                        android:layout_width="0dp"
+                        android:layout_weight="1"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="8dp"
+                        android:hint="@string/hint_file_mb_local">
+
+                        <com.google.android.material.textfield.TextInputEditText
+                            android:id="@+id/file_mb_local"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:inputType="number"
+                            android:singleLine="true" />
+                    </com.google.android.material.textfield.TextInputLayout>
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/threads_label"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:textAppearance="?attr/textAppearanceBodyMedium"
+                    tools:text="Parallel connections per file: 8" />
+
+                <com.google.android.material.slider.Slider
+                    android:id="@+id/threads"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:valueFrom="0"
+                    android:valueTo="4"
+                    android:stepSize="1"
+                    android:value="3"
+                    app:labelBehavior="floating"
+                    app:tickVisible="true" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
 
         <!-- ===== Received files ===== -->
         <TextView style="@style/ClipSync.SectionTitle" android:text="@string/section_files" />
 
-        <com.google.android.material.textfield.TextInputLayout
-            android:id="@+id/path_layout"
-            style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
+        <com.google.android.material.card.MaterialCardView
+            style="?attr/materialCardViewFilledStyle"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:hint="@string/hint_path"
-            app:helperText="@string/helper_path">
+            android:layout_marginBottom="16dp">
 
-            <com.google.android.material.textfield.TextInputEditText
-                android:id="@+id/path"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:inputType="textUri"
-                android:singleLine="true" />
-        </com.google.android.material.textfield.TextInputLayout>
+            <LinearLayout style="@style/ClipSync.CardBody">
 
-        <com.google.android.material.textfield.TextInputLayout
-            android:id="@+id/keep_hours_layout"
-            style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:hint="@string/hint_keep_hours">
+                <com.google.android.material.textfield.TextInputLayout
+                    android:id="@+id/path_layout"
+                    style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:hint="@string/hint_path"
+                    app:helperText="@string/helper_path">
 
-            <com.google.android.material.textfield.TextInputEditText
-                android:id="@+id/keep_hours"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:inputType="number"
-                android:singleLine="true" />
-        </com.google.android.material.textfield.TextInputLayout>
+                    <com.google.android.material.textfield.TextInputEditText
+                        android:id="@+id/path"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:inputType="textUri"
+                        android:singleLine="true" />
+                </com.google.android.material.textfield.TextInputLayout>
 
-        <com.google.android.material.textfield.TextInputLayout
-            android:id="@+id/keep_mb_layout"
-            style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:layout_marginBottom="16dp"
-            android:hint="@string/hint_keep_mb">
+                <com.google.android.material.textfield.TextInputLayout
+                    android:id="@+id/keep_hours_layout"
+                    style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:hint="@string/hint_keep_hours">
 
-            <com.google.android.material.textfield.TextInputEditText
-                android:id="@+id/keep_mb"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:inputType="number"
-                android:singleLine="true" />
-        </com.google.android.material.textfield.TextInputLayout>
+                    <com.google.android.material.textfield.TextInputEditText
+                        android:id="@+id/keep_hours"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:inputType="number"
+                        android:singleLine="true" />
+                </com.google.android.material.textfield.TextInputLayout>
+
+                <com.google.android.material.textfield.TextInputLayout
+                    android:id="@+id/keep_mb_layout"
+                    style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:hint="@string/hint_keep_mb">
+
+                    <com.google.android.material.textfield.TextInputEditText
+                        android:id="@+id/keep_mb"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:inputType="number"
+                        android:singleLine="true" />
+                </com.google.android.material.textfield.TextInputLayout>
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
     </LinearLayout>
 </androidx.core.widget.NestedScrollView>

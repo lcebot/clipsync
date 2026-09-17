@@ -67,7 +67,7 @@ public class MainActivity extends AppCompatActivity {
     private MaterialSwitch discovery, direct;
     private ViewGroup peersBox;
     private final List<TextInputLayout> peerRows = new ArrayList<>();
-    private MaterialButton peerAdd, pskRandom;
+    private MaterialButton peerAdd;
     private View browseRow;
     private Slider browse, threads;
     private TextView browseLabel, threadsLabel;
@@ -197,7 +197,6 @@ public class MainActivity extends AppCompatActivity {
         direct = findViewById(R.id.direct);
         peersBox = findViewById(R.id.peers_box);
         peerAdd = findViewById(R.id.peer_add);
-        pskRandom = findViewById(R.id.psk_random);
         portL = findViewById(R.id.port_layout);       port = findViewById(R.id.port);
         pskL = findViewById(R.id.psk_layout);         psk = findViewById(R.id.psk);
         textKbL = findViewById(R.id.text_kb_layout);  textKb = findViewById(R.id.text_kb);
@@ -498,7 +497,7 @@ public class MainActivity extends AppCompatActivity {
         discovery.setOnCheckedChangeListener((b, checked) -> { applySwitches(true); validate(); });
         direct.setOnCheckedChangeListener((b, checked) -> { applySwitches(true); validate(); });
         peerAdd.setOnClickListener(v -> { addPeerRow("", true); validate(); });
-        pskRandom.setOnClickListener(v -> newPsk());
+        pskL.setStartIconOnClickListener(v -> newPsk());
         threads.setLabelFormatter(v -> String.valueOf(Config.THREAD_STEPS[Math.max(0, Math.min(4, Math.round(v)))]));
         threads.addOnChangeListener((s, v, u) -> threadsLabel.setText(getString(R.string.threads_label, threadsValue())));
         browse.setLabelFormatter(v -> Config.BROWSE_STEPS_MS[Math.max(0, Math.min(6, Math.round(v)))] + " ms");
