@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- One log line. textIsSelectable would cost a selection controller per row, so selection is
+     per line via long-press-free Copy on the FAB instead. -->
+<TextView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/line"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:paddingHorizontal="12dp"
+    android:paddingVertical="1dp"
+    android:fontFamily="monospace"
+    android:textSize="11sp"
+    android:textColor="?attr/colorOnSurface" />

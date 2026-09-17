@@ -1,0 +1,299 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Page 1 of the ViewPager2. The bottom padding clears the FAB pair. -->
+<androidx.core.widget.NestedScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/page_settings"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:clipToPadding="false"
+    android:paddingBottom="80dp">
+
+    <LinearLayout
+        android:id="@+id/settings_root"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingHorizontal="16dp">
+
+        <!-- background permission (shown only while battery optimisation still applies) -->
+        <com.google.android.material.card.MaterialCardView
+            android:id="@+id/battery_row"
+            style="?attr/materialCardViewFilledStyle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            app:cardBackgroundColor="?attr/colorErrorContainer">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:paddingStart="12dp"
+                android:paddingEnd="4dp">
+
+                <TextView
+                    android:id="@+id/battery_text"
+                    android:layout_width="0dp"
+                    android:layout_weight="1"
+                    android:layout_height="wrap_content"
+                    android:paddingVertical="8dp"
+                    android:textAppearance="?attr/textAppearanceBodySmall"
+                    android:textColor="?attr/colorOnErrorContainer"
+                    android:text="@string/battery_on" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/battery_fix"
+                    style="?attr/borderlessButtonStyle"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/battery_allow" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <!-- ===== Connection ===== -->
+        <TextView style="@style/ClipSync.SectionTitle" android:text="@string/section_connection" />
+
+        <com.google.android.material.button.MaterialButtonToggleGroup
+            android:id="@+id/mode"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            app:singleSelection="true"
+            app:selectionRequired="true"
+            app:checkedButton="@+id/mode_both">
+
+            <!-- single line, never ellipsised; the width each segment takes is its content's,
+                 with the leftover space shared out by weight (see ClipSync.Segment) -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/mode_both"
+                style="@style/ClipSync.Segment"
+                android:text="@string/mode_both" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/mode_ddns"
+                style="@style/ClipSync.Segment"
+                android:text="@string/mode_ddns" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/mode_mdns"
+                style="@style/ClipSync.Segment"
+                android:text="@string/mode_mdns" />
+        </com.google.android.material.button.MaterialButtonToggleGroup>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginTop="12dp">
+
+            <com.google.android.material.textfield.TextInputLayout
+                android:id="@+id/port_layout"
+                style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:layout_height="wrap_content"
+                android:hint="@string/hint_port">
+
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/port"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:inputType="number"
+                    android:singleLine="true" />
+            </com.google.android.material.textfield.TextInputLayout>
+
+            <com.google.android.material.textfield.TextInputLayout
+                android:id="@+id/psk_layout"
+                style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
+                android:layout_width="0dp"
+                android:layout_weight="2"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:hint="@string/hint_psk"
+                app:endIconMode="password_toggle">
+
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/psk"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="monospace"
+                    android:inputType="textPassword|textNoSuggestions"
+                    android:singleLine="true" />
+            </com.google.android.material.textfield.TextInputLayout>
+        </LinearLayout>
+
+        <!-- shown while DDNS is part of the mode -->
+        <com.google.android.material.textfield.TextInputLayout
+            android:id="@+id/host_layout"
+            style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:hint="@string/hint_host">
+
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/host"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="textUri"
+                android:singleLine="true" />
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <!-- shown while mDNS is part of the mode -->
+        <LinearLayout
+            android:id="@+id/browse_row"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:layout_marginTop="12dp">
+
+            <TextView
+                android:id="@+id/browse_label"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textAppearance="?attr/textAppearanceBodyMedium"
+                tools:text="mDNS browse: 4000 ms" />
+
+            <com.google.android.material.slider.Slider
+                android:id="@+id/browse"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:valueFrom="0"
+                android:valueTo="6"
+                android:stepSize="1"
+                android:value="3"
+                app:labelBehavior="floating"
+                app:tickVisible="true" />
+        </LinearLayout>
+
+        <!-- ===== Transfer limits ===== -->
+        <TextView style="@style/ClipSync.SectionTitle" android:text="@string/section_limits" />
+
+        <com.google.android.material.textfield.TextInputLayout
+            android:id="@+id/text_kb_layout"
+            style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="@string/hint_text_kb">
+
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/text_kb"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="number"
+                android:singleLine="true" />
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginTop="8dp">
+
+            <com.google.android.material.textfield.TextInputLayout
+                android:id="@+id/file_mb_layout"
+                style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:layout_height="wrap_content"
+                android:hint="@string/hint_file_mb">
+
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/file_mb"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:inputType="number"
+                    android:singleLine="true" />
+            </com.google.android.material.textfield.TextInputLayout>
+
+            <com.google.android.material.textfield.TextInputLayout
+                android:id="@+id/file_mb_local_layout"
+                style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:hint="@string/hint_file_mb_local">
+
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/file_mb_local"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:inputType="number"
+                    android:singleLine="true" />
+            </com.google.android.material.textfield.TextInputLayout>
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/threads_label"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:textAppearance="?attr/textAppearanceBodyMedium"
+            tools:text="Parallel connections per file: 8" />
+
+        <com.google.android.material.slider.Slider
+            android:id="@+id/threads"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:valueFrom="0"
+            android:valueTo="4"
+            android:stepSize="1"
+            android:value="3"
+            app:labelBehavior="floating"
+            app:tickVisible="true" />
+
+        <!-- ===== Received files ===== -->
+        <TextView style="@style/ClipSync.SectionTitle" android:text="@string/section_files" />
+
+        <com.google.android.material.textfield.TextInputLayout
+            android:id="@+id/path_layout"
+            style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="@string/hint_path"
+            app:helperText="@string/helper_path">
+
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/path"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="textUri"
+                android:singleLine="true" />
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <com.google.android.material.textfield.TextInputLayout
+            android:id="@+id/keep_hours_layout"
+            style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:hint="@string/hint_keep_hours">
+
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/keep_hours"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="number"
+                android:singleLine="true" />
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <com.google.android.material.textfield.TextInputLayout
+            android:id="@+id/keep_mb_layout"
+            style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:layout_marginBottom="16dp"
+            android:hint="@string/hint_keep_mb">
+
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/keep_mb"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="number"
+                android:singleLine="true" />
+        </com.google.android.material.textfield.TextInputLayout>
+    </LinearLayout>
+</androidx.core.widget.NestedScrollView>

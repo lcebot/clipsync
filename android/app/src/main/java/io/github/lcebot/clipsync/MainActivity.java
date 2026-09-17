@@ -1,6 +1,5 @@
 package io.github.lcebot.clipsync;
 
-import android.animation.ObjectAnimator;
 import android.animation.ValueAnimator;
 import android.content.ClipData;
 import android.content.ClipboardManager;
@@ -15,20 +14,23 @@ import android.os.Looper;
 import android.os.PowerManager;
 import android.provider.Settings;
 import android.text.Editable;
-import android.text.TextUtils;
 import android.text.TextWatcher;
 import android.transition.AutoTransition;
 import android.transition.TransitionManager;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.TextView;
 
 import androidx.appcompat.app.AppCompatActivity;
-import androidx.core.widget.NestedScrollView;
+import androidx.recyclerview.widget.RecyclerView;
+import androidx.viewpager2.widget.ViewPager2;
 
 import com.google.android.material.appbar.AppBarLayout;
+import com.google.android.material.appbar.MaterialToolbar;
 import com.google.android.material.bottomnavigation.BottomNavigationView;
 import com.google.android.material.button.MaterialButtonToggleGroup;
+import com.google.android.material.chip.Chip;
 import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton;
 import com.google.android.material.color.MaterialColors;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
@@ -40,11 +42,11 @@ import com.google.android.material.textfield.TextInputLayout;
 import java.util.Properties;
 
 /**
- * Two pages behind a bottom navigation bar — Settings and Log — under an M3 collapsing top app bar.
- * The connection status is a one-line chip in the bar's top-right corner (pulsing dot plus the
- * connection kind); tapping it opens the peer and address in full. The actions are extended FABs
- * bottom-right, on the Settings tab only, and follow the service: "Start" while it is stopped,
- * "Stop" + "Apply" while it runs.
+ * Two pages in a ViewPager2 — Settings and Log — reachable by swipe or by the bottom navigation
+ * bar, under an M3 collapsing top app bar. The connection status is the bar's only menu action, a
+ * Chip whose icon is the pulsing dot; tapping it opens the peer and address in full. The actions
+ * are extended FABs bottom-right, a different pair per page: Settings gets "Start", or "Stop" plus
+ * "Apply" once the service runs, and Log gets "Copy" and "Clear".
  * Every field is validated live; Apply is enabled only when all of them are valid and sends a
  * RELOAD to the running service (no restart).
  */
@@ -64,17 +66,16 @@ public class MainActivity extends AppCompatActivity {
     private ExtendedFloatingActionButton stopFab, applyFab;      // Settings tab
     private ExtendedFloatingActionButton copyFab, clearFab;      // Log tab
     // pages / log
-    private NestedScrollView pageSettings;
-    private View pageLog, batteryRow, batteryFix;
-    private TextView log, batteryText;
-    private NestedScrollView logScroll;
+    private ViewPager2 pager;
+    private View settingsPage, batteryRow, batteryFix;
+    private TextView batteryText;
+    private RecyclerView logList;
+    private final LogAdapter logAdapter = new LogAdapter();
     // status
-    private ViewGroup statusBlock;
-    private View statusDot, statusHalo;
-    private TextView statusTitle;
+    private Chip statusChip;
     private String peerName, peerAddr, connectionKind;      // shown in the details dialog
     private boolean wasConnected;
-    private ObjectAnimator pulse;
+    private ValueAnimator pulse;
     // action state: which of Start / Stop + Apply is shown, and what we are waiting for
     private boolean serviceRunning, waitingForStop, waitingForStart;
     private boolean onLogTab, configValid;
@@ -85,22 +86,30 @@ public class MainActivity extends AppCompatActivity {
     private static final long WAIT_TIMEOUT_MS = 12_000;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
-    private final Logger.Listener logListener = line -> ui.post(() -> {
-        log.append("\n" + line);
-        if (pageLog.getVisibility() == View.VISIBLE) logScroll.post(() -> logScroll.fullScroll(NestedScrollView.FOCUS_DOWN));
-    });
+    // lines written in this process arrive here; lines written by the :sync process arrive through
+    // the file, picked up by the poll below
+    private final Logger.Listener logListener = line -> ui.post(this::showLog);
     // the service runs in its own process: its log and state reach us through files, polled 1/s
     private final Runnable tick = new Runnable() {
         @Override
         public void run() {
-            if (Logger.refresh()) {
-                log.setText(TextUtils.join("\n", Logger.snapshot()));
-                if (pageLog.getVisibility() == View.VISIBLE) logScroll.post(() -> logScroll.fullScroll(NestedScrollView.FOCUS_DOWN));
-            }
+            if (Logger.refresh()) showLog();
             refreshStatus();
             ui.postDelayed(this, 1000);
         }
     };
+
+    /**
+     * Replaces the visible log. Following the tail is only automatic while the list is already at
+     * the bottom, so reading further up is not yanked away by the next line.
+     */
+    private void showLog() {
+        boolean atBottom = !logList.canScrollVertically(1);
+        logAdapter.submit(Logger.snapshot());
+        if (atBottom && logAdapter.getItemCount() > 0) {
+            logList.scrollToPosition(logAdapter.getItemCount() - 1);
+        }
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -125,40 +134,45 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void bind() {
-        mode = findViewById(R.id.mode);
-        hostL = findViewById(R.id.host_layout);       host = findViewById(R.id.host);
-        portL = findViewById(R.id.port_layout);       port = findViewById(R.id.port);
-        pskL = findViewById(R.id.psk_layout);         psk = findViewById(R.id.psk);
-        textKbL = findViewById(R.id.text_kb_layout);  textKb = findViewById(R.id.text_kb);
-        fileMbL = findViewById(R.id.file_mb_layout);  fileMb = findViewById(R.id.file_mb);
-        fileMbLocalL = findViewById(R.id.file_mb_local_layout); fileMbLocal = findViewById(R.id.file_mb_local);
-        pathL = findViewById(R.id.path_layout);       path = findViewById(R.id.path);
-        keepHoursL = findViewById(R.id.keep_hours_layout); keepHours = findViewById(R.id.keep_hours);
-        keepMbL = findViewById(R.id.keep_mb_layout);  keepMb = findViewById(R.id.keep_mb);
-        browseRow = findViewById(R.id.browse_row);
-        browse = findViewById(R.id.browse);
-        browseLabel = findViewById(R.id.browse_label);
-        threads = findViewById(R.id.threads);
-        threadsLabel = findViewById(R.id.threads_label);
-        settingsRoot = findViewById(R.id.settings_root);
+        // The pages are inflated here rather than by the pager's adapter, so that everything on
+        // them can be found in this one pass and held for the activity's whole life.
+        settingsPage = getLayoutInflater().inflate(R.layout.page_settings, null);
+        logList = (RecyclerView) getLayoutInflater().inflate(R.layout.page_log, null);
+
+        mode = settingsPage.findViewById(R.id.mode);
+        hostL = settingsPage.findViewById(R.id.host_layout);       host = settingsPage.findViewById(R.id.host);
+        portL = settingsPage.findViewById(R.id.port_layout);       port = settingsPage.findViewById(R.id.port);
+        pskL = settingsPage.findViewById(R.id.psk_layout);         psk = settingsPage.findViewById(R.id.psk);
+        textKbL = settingsPage.findViewById(R.id.text_kb_layout);  textKb = settingsPage.findViewById(R.id.text_kb);
+        fileMbL = settingsPage.findViewById(R.id.file_mb_layout);  fileMb = settingsPage.findViewById(R.id.file_mb);
+        fileMbLocalL = settingsPage.findViewById(R.id.file_mb_local_layout);
+        fileMbLocal = settingsPage.findViewById(R.id.file_mb_local);
+        pathL = settingsPage.findViewById(R.id.path_layout);       path = settingsPage.findViewById(R.id.path);
+        keepHoursL = settingsPage.findViewById(R.id.keep_hours_layout);
+        keepHours = settingsPage.findViewById(R.id.keep_hours);
+        keepMbL = settingsPage.findViewById(R.id.keep_mb_layout);  keepMb = settingsPage.findViewById(R.id.keep_mb);
+        browseRow = settingsPage.findViewById(R.id.browse_row);
+        browse = settingsPage.findViewById(R.id.browse);
+        browseLabel = settingsPage.findViewById(R.id.browse_label);
+        threads = settingsPage.findViewById(R.id.threads);
+        threadsLabel = settingsPage.findViewById(R.id.threads_label);
+        settingsRoot = settingsPage.findViewById(R.id.settings_root);
+        batteryRow = settingsPage.findViewById(R.id.battery_row);
+        batteryText = settingsPage.findViewById(R.id.battery_text);
+        batteryFix = settingsPage.findViewById(R.id.battery_fix);
+
         appbar = findViewById(R.id.appbar);
         coordinator = findViewById(R.id.coordinator);
         nav = findViewById(R.id.nav);
+        pager = findViewById(R.id.pager);
         stopFab = findViewById(R.id.stop);
         applyFab = findViewById(R.id.apply);
         copyFab = findViewById(R.id.log_copy);
         clearFab = findViewById(R.id.log_clear);
-        pageSettings = findViewById(R.id.page_settings);
-        pageLog = findViewById(R.id.page_log);
-        log = findViewById(R.id.log);
-        logScroll = findViewById(R.id.log_scroll);
-        batteryRow = findViewById(R.id.battery_row);
-        batteryText = findViewById(R.id.battery_text);
-        batteryFix = findViewById(R.id.battery_fix);
-        statusBlock = findViewById(R.id.status_block);
-        statusTitle = findViewById(R.id.status_title);
-        statusDot = findViewById(R.id.status_dot);
-        statusHalo = findViewById(R.id.status_halo);
+
+        // the chip is the toolbar's single menu action; app:menu inflates it with the layout
+        MaterialToolbar toolbar = findViewById(R.id.toolbar);
+        statusChip = (Chip) toolbar.getMenu().findItem(R.id.action_status).getActionView();
     }
 
     // ------------------------------------------------------------------ values <-> fields
@@ -281,56 +295,63 @@ public class MainActivity extends AppCompatActivity {
             refreshActions();                          // greys Stop out until the service is gone
             snack(R.string.snack_stopped);
         });
-        clearFab.setOnClickListener(v -> { Logger.clear(); log.setText(""); });
+        clearFab.setOnClickListener(v -> { Logger.clear(); showLog(); });
         copyFab.setOnClickListener(v -> {
-            getSystemService(ClipboardManager.class).setPrimaryClip(ClipData.newPlainText("clipsync log", log.getText()));
+            getSystemService(ClipboardManager.class).setPrimaryClip(ClipData.newPlainText("clipsync log", logAdapter.text()));
             snack(R.string.snack_log_copied);
         });
         // The secondary FAB rides to the left of the primary one; following the primary's animated
         // width by translation keeps the pairing out of the layout pass entirely
         pairFabs(applyFab, stopFab);
         pairFabs(copyFab, clearFab);
-        // shrink to the icons while the page scrolls down, extend again on the way up — the
-        // component's own motion, now that the FABs sit directly in the CoordinatorLayout
-        shrinkOnScroll(pageSettings, applyFab, stopFab);
-        shrinkOnScroll(logScroll, copyFab, clearFab);
         batteryFix.setOnClickListener(v -> {
             Intent i = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).setData(Uri.parse("package:" + getPackageName()));
             try { startActivity(i); } catch (Exception e) { startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)); }
         });
 
+        logList.setAdapter(logAdapter);
+        pager.setAdapter(new PageAdapter(settingsPage, logList));
+        // A horizontal drag that starts on a slider belongs to the slider, not to the pager.
+        View.OnTouchListener sliderOwnsTheGesture = (v, e) -> {
+            if (e.getActionMasked() == MotionEvent.ACTION_DOWN) v.getParent().requestDisallowInterceptTouchEvent(true);
+            return false;                                   // the slider still handles it
+        };
+        threads.setOnTouchListener(sliderOwnsTheGesture);
+        browse.setOnTouchListener(sliderOwnsTheGesture);
+
+        // the bottom bar and the swipe are two ways to move the same pager
         nav.setOnItemSelectedListener(item -> {
-            boolean showLog = item.getItemId() == R.id.nav_log;
-            pageSettings.setVisibility(showLog ? View.GONE : View.VISIBLE);
-            pageLog.setVisibility(showLog ? View.VISIBLE : View.GONE);
-            appbar.setLiftOnScrollTargetViewId(showLog ? R.id.log_scroll : R.id.page_settings);   // lift follows the visible page
-            onLogTab = showLog;
-            refreshActions();
-            if (showLog) logScroll.post(() -> logScroll.fullScroll(NestedScrollView.FOCUS_DOWN));
+            pager.setCurrentItem(item.getItemId() == R.id.nav_log ? 1 : 0, true);
             return true;
         });
-        statusBlock.setOnClickListener(v -> showConnectionDetails());
+        pager.registerOnPageChangeCallback(new ViewPager2.OnPageChangeCallback() {
+            @Override
+            public void onPageSelected(int position) {
+                onLogTab = position == 1;
+                nav.getMenu().findItem(onLogTab ? R.id.nav_log : R.id.nav_settings).setChecked(true);
+                appbar.setLiftOnScrollTargetViewId(onLogTab ? R.id.page_log : R.id.page_settings);
+                refreshActions();
+            }
+        });
 
-        // the first offset callback arrives before anything is measured: place it once laid out
-        statusBlock.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> placeStatus());
-
-        pulse = ObjectAnimator.ofFloat(statusHalo, View.ALPHA, 0.45f, 0f);
+        statusChip.setOnClickListener(v -> showConnectionDetails());
+        // the dot is the chip's icon, so the pulse animates that drawable rather than a second view
+        pulse = ValueAnimator.ofInt(255, 60);
         pulse.setDuration(1400);
         pulse.setRepeatCount(ValueAnimator.INFINITE);
-        pulse.setRepeatMode(ValueAnimator.RESTART);
+        pulse.setRepeatMode(ValueAnimator.REVERSE);
+        pulse.addUpdateListener(a -> {
+            if (statusChip.getChipIcon() == null) return;
+            int alpha = (Integer) a.getAnimatedValue();
+            statusChip.getChipIcon().setAlpha(alpha);
+            statusChip.invalidate();
+        });
     }
 
     /** Keeps {@code second} pinned 12dp to the left of {@code first}, whatever width it animates to. */
     private void pairFabs(ExtendedFloatingActionButton first, ExtendedFloatingActionButton second) {
         first.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) ->
                 second.setTranslationX(-(first.getWidth() + dp(12))));
-    }
-
-    private void shrinkOnScroll(NestedScrollView page, ExtendedFloatingActionButton... fabs) {
-        page.setOnScrollChangeListener((NestedScrollView.OnScrollChangeListener) (v, x, y, ox, oy) -> {
-            if (y > oy + dp(4)) for (ExtendedFloatingActionButton f : fabs) f.shrink();
-            else if (y < oy - dp(4) || y <= 0) for (ExtendedFloatingActionButton f : fabs) f.extend();
-        });
     }
 
     private void snack(int textRes) {
@@ -383,18 +404,6 @@ public class MainActivity extends AppCompatActivity {
         applyFab.setEnabled(configValid && !waitingForStart);
     }
 
-    /**
-     * The chip sits on the collapsed bar's centre line, so it stays put in the top-right corner
-     * whether the bar is open or closed. Translation only: no layout, nothing that could disturb
-     * the app bar.
-     */
-    private void placeStatus() {
-        int h = statusBlock.getHeight(), bar = appbar.getHeight();
-        if (h == 0 || bar == 0) return;                                // not laid out yet
-        int collapsed = bar - appbar.getTotalScrollRange();
-        statusBlock.setTranslationY((collapsed - h) / 2f);
-    }
-
     /** Peer name and address in full, wrapped, each copied by tapping it. */
     private void showConnectionDetails() {
         if (peerName == null && peerAddr == null) return;              // nothing to show when stopped
@@ -424,8 +433,8 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
-        log.setText(TextUtils.join("\n", Logger.snapshot()));
-        logScroll.post(() -> logScroll.fullScroll(NestedScrollView.FOCUS_DOWN));
+        logAdapter.submit(Logger.snapshot());
+        if (logAdapter.getItemCount() > 0) logList.scrollToPosition(logAdapter.getItemCount() - 1);
         Logger.addListener(logListener);
         wasConnected = false;
         ui.post(tick);
@@ -467,11 +476,10 @@ public class MainActivity extends AppCompatActivity {
         boolean busy = "connecting".equals(s.state);
         boolean stopped = "stopped".equals(s.state);
 
-        int dot = MaterialColors.getColor(statusDot, connected ? androidx.appcompat.R.attr.colorPrimary
+        int dot = MaterialColors.getColor(statusChip, connected ? androidx.appcompat.R.attr.colorPrimary
                 : busy ? com.google.android.material.R.attr.colorTertiary : com.google.android.material.R.attr.colorOutline);
-        statusDot.setBackgroundTintList(ColorStateList.valueOf(dot));
-        statusHalo.setBackgroundTintList(ColorStateList.valueOf(dot));
-        statusTitle.setTextColor(MaterialColors.getColor(statusTitle, stopped
+        statusChip.setChipIconTint(ColorStateList.valueOf(dot));
+        statusChip.setTextColor(MaterialColors.getColor(statusChip, stopped
                 ? com.google.android.material.R.attr.colorOnSurfaceVariant
                 : com.google.android.material.R.attr.colorOnSurface));
 
@@ -497,13 +505,18 @@ public class MainActivity extends AppCompatActivity {
         }
         // this runs once a second: only touch the TextView when the text really changed, or every
         // tick would queue a layout pass for the status chip
-        setTextIfChanged(statusTitle, titleText);
-        statusBlock.setClickable(peerName != null || peerAddr != null);
+        setTextIfChanged(statusChip, titleText);
+        statusChip.setClickable(peerName != null || peerAddr != null);
 
         if (connected != wasConnected) {
             wasConnected = connected;
-            if (connected) { statusHalo.setVisibility(View.VISIBLE); if (!pulse.isRunning()) pulse.start(); }
-            else { pulse.cancel(); statusHalo.setVisibility(View.INVISIBLE); }
+            if (connected) {
+                if (!pulse.isRunning()) pulse.start();
+            } else {
+                pulse.cancel();
+                if (statusChip.getChipIcon() != null) statusChip.getChipIcon().setAlpha(255);
+                statusChip.invalidate();
+            }
         }
 
         // the actions follow the service: Start alone while it is stopped, Stop + Apply while it runs

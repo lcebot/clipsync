@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Page 2 of the ViewPager2. A RecyclerView, not one long TextView: the buffer holds up to 500
+     lines and only the visible handful is ever measured. The bottom padding clears the FAB pair. -->
+<androidx.recyclerview.widget.RecyclerView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/page_log"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="?attr/colorSurfaceContainerLow"
+    android:clipToPadding="false"
+    android:paddingTop="6dp"
+    android:paddingBottom="80dp"
+    android:scrollbars="vertical"
+    app:layoutManager="androidx.recyclerview.widget.LinearLayoutManager" />
