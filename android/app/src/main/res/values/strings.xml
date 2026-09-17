@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">ClipSync</string>
-    <string name="app_desc">Sync clipboard, images and files with a Windows PC. Scope: System Framework.</string>
+    <!-- Shown as the module description in the LSPosed manager and in the module repository:
+         PackageManager reads it from android:description on <application>. -->
+    <string name="app_desc">Share one clipboard across your rooted Android devices and your Windows PC.</string>
 
     <!-- actions -->
     <string name="action_stop">Stop</string>

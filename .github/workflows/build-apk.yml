@@ -58,11 +58,11 @@ jobs:
         run: |
           SDKMANAGER=$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager | tail -n1)
           yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
-          "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0" >/dev/null
+          "$SDKMANAGER" "platforms;android-35" "build-tools;36.0.0" >/dev/null
 
       - uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "8.9"
+          gradle-version: "9.6.0"          # AGP 9.x needs Gradle 9.x; 9.6 covers the whole line
 
       # Secrets win; otherwise a committed android/clipsync.properties (private repos) is used as-is.
       - name: write clipsync.properties from secrets
@@ -86,23 +86,35 @@ jobs:
         env:
           KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
         run: |
-          if [ -n "$KEYSTORE_B64" ]; then
-            # Strip every whitespace character first. A secret copied on Windows usually carries a
-            # trailing CR, and GNU base64 treats one stray \r as garbage and rejects the whole
-            # input ("invalid input"). Not --ignore-garbage: that would also swallow a genuinely
-            # corrupt secret and hand Gradle a broken file.
-            printf '%s' "$KEYSTORE_B64" | tr -d '[:space:]' | base64 -d > "$RUNNER_TEMP/clipsync.p12"
-            # a PKCS12 is a DER SEQUENCE, so the file must start with 30 82
-            head -c2 "$RUNNER_TEMP/clipsync.p12" | od -An -tx1 | grep -q '30 82' || {
-              echo "KEYSTORE_B64 does not decode to a PKCS12."
-              echo 'Re-copy it with: [Convert]::ToBase64String([IO.File]::ReadAllBytes("clipsync.p12")) | Set-Clipboard'
-              exit 1
-            }
-            echo "KEYSTORE_FILE=$RUNNER_TEMP/clipsync.p12" >> "$GITHUB_ENV"
-            echo "signing with the keystore secret"
-          else
+          if [ -z "$KEYSTORE_B64" ]; then
             echo "no keystore secret: the release APK will be unsigned"
+            exit 0
           fi
+
+          # Keep only base64 alphabet characters. GNU base64 rejects the entire input over a single
+          # stray byte ("invalid input"), and a secret pasted from Windows routinely carries a CR,
+          # a BOM, or certutil's BEGIN/END armour. Dropping the rest is safe: what survives is
+          # still verified below, so a genuinely wrong secret cannot slip through.
+          clean=$(printf '%s' "$KEYSTORE_B64" | tr -cd 'A-Za-z0-9+/=')
+          printf '%s' "$clean" | base64 -d > "$RUNNER_TEMP/clipsync.p12" 2>/dev/null || true
+
+          # A PKCS12 is a DER SEQUENCE, so the file starts with 30 82 — and its base64 with "MII".
+          if ! head -c2 "$RUNNER_TEMP/clipsync.p12" | od -An -tx1 | grep -q '30 82'; then
+            echo "KEYSTORE_B64 does not decode to a PKCS12. Diagnostics (no secret content):"
+            echo "  characters received:       ${#KEYSTORE_B64}"
+            echo "  left after filtering:      ${#clean}"
+            echo "  starts with MII:           $(case "$clean" in MII*) echo yes;; *) echo no;; esac)"
+            echo "  length is a multiple of 4: $(( ${#clean} % 4 == 0 ))"
+            echo "  decoded bytes:             $(wc -c < "$RUNNER_TEMP/clipsync.p12")"
+            echo
+            echo "Expected: a few thousand characters, starting with MII."
+            echo 'Re-copy with: [Convert]::ToBase64String([IO.File]::ReadAllBytes("clipsync.p12")) | Set-Clipboard'
+            echo "and paste straight into the secret - no file, no certutil."
+            exit 1
+          fi
+
+          echo "KEYSTORE_FILE=$RUNNER_TEMP/clipsync.p12" >> "$GITHUB_ENV"
+          echo "signing with the keystore secret ($(wc -c < "$RUNNER_TEMP/clipsync.p12") bytes)"
 
       - name: build
         env:

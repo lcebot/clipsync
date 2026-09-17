@@ -1,30 +1,47 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Connection details, shown when the status chip is tapped. Each value wraps and copies itself
-     when tapped. -->
+<!-- Connection details, shown when the status chip is tapped.
+     A bottom sheet rather than a dialog for two reasons: M3 reserves dialogs for decisions that
+     need an answer, while this is supplementary content you glance at and dismiss — and
+     BottomSheetDialog is one of the few components with predictive back built in, so the gesture
+     animates the sheet back down without a line of animation code.
+     Each value wraps and copies itself when tapped. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
-    android:paddingHorizontal="24dp"
-    android:paddingTop="8dp"
-    android:paddingBottom="4dp">
+    android:paddingBottom="16dp">
+
+    <!-- the spec's own affordance: it says the sheet is draggable, and it is a real component -->
+    <com.google.android.material.bottomsheet.BottomSheetDragHandleView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content" />
+
+    <TextView
+        android:id="@+id/sheet_title"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingHorizontal="24dp"
+        android:paddingBottom="12dp"
+        android:textAppearance="?attr/textAppearanceTitleLarge"
+        android:textColor="?attr/colorOnSurface" />
 
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:paddingHorizontal="24dp"
         android:textAppearance="?attr/textAppearanceLabelMedium"
         android:textColor="?attr/colorPrimary"
         android:text="@string/dialog_peer" />
 
     <TextView
-        android:id="@+id/dialog_peer"
+        android:id="@+id/sheet_peer"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="2dp"
         android:background="?attr/selectableItemBackground"
         android:clickable="true"
         android:focusable="true"
-        android:paddingVertical="6dp"
+        android:paddingHorizontal="24dp"
+        android:paddingVertical="8dp"
         android:textAppearance="?attr/textAppearanceBodyLarge"
         android:textColor="?attr/colorOnSurface" />
 
@@ -32,19 +49,20 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="12dp"
+        android:paddingHorizontal="24dp"
         android:textAppearance="?attr/textAppearanceLabelMedium"
         android:textColor="?attr/colorPrimary"
         android:text="@string/dialog_address" />
 
     <TextView
-        android:id="@+id/dialog_address"
+        android:id="@+id/sheet_address"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="2dp"
         android:background="?attr/selectableItemBackground"
         android:clickable="true"
         android:focusable="true"
-        android:paddingVertical="6dp"
+        android:paddingHorizontal="24dp"
+        android:paddingVertical="8dp"
         android:fontFamily="monospace"
         android:textAppearance="?attr/textAppearanceBodyMedium"
         android:textColor="?attr/colorOnSurface" />
@@ -53,6 +71,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="12dp"
+        android:paddingHorizontal="24dp"
         android:textAppearance="?attr/textAppearanceBodySmall"
         android:textColor="?attr/colorOnSurfaceVariant"
         android:text="@string/dialog_tap_to_copy" />

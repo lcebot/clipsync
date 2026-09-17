@@ -19,22 +19,28 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.TextView;
 
+import androidx.activity.OnBackPressedCallback;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.graphics.Insets;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowInsetsCompat;
 import androidx.core.widget.NestedScrollView;
-import androidx.transition.AutoTransition;
+import androidx.transition.ChangeBounds;
 import androidx.transition.TransitionManager;
+import androidx.transition.TransitionSet;
 
 import com.google.android.material.appbar.AppBarLayout;
 import com.google.android.material.bottomnavigation.BottomNavigationView;
+import com.google.android.material.bottomsheet.BottomSheetDialog;
 import com.google.android.material.button.MaterialButtonToggleGroup;
 import com.google.android.material.chip.Chip;
 import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton;
 import com.google.android.material.color.MaterialColors;
-import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.google.android.material.slider.Slider;
 import com.google.android.material.snackbar.Snackbar;
 import com.google.android.material.textfield.TextInputEditText;
 import com.google.android.material.textfield.TextInputLayout;
+import com.google.android.material.transition.MaterialFade;
 import com.google.android.material.transition.MaterialFadeThrough;
 
 import java.util.Properties;
@@ -70,6 +76,8 @@ public class MainActivity extends AppCompatActivity {
     private TextView log, batteryText;
     // status
     private Chip statusChip;
+    private int shownDot, shownLabel;                       // colours already on the chip
+    private OnBackPressedCallback backToSettings;
     private String peerName, peerAddr, connectionKind;      // shown in the details dialog
     private boolean wasConnected;
     private ValueAnimator pulse;
@@ -83,6 +91,7 @@ public class MainActivity extends AppCompatActivity {
     private int applyIcon;                                  // 0 = never set, so the first pass applies
     private long waitingSince;
     private static final long WAIT_TIMEOUT_MS = 12_000;
+    private static final String KEY_LOG_TAB = "log_tab";
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     // lines written in this process arrive here; lines written by the :sync process arrive through
@@ -142,12 +151,19 @@ public class MainActivity extends AppCompatActivity {
         loadFields();
         wire();
         validate();
-        // Open with the title showing. What keeps it open is settings_root being
-        // focusableInTouchMode: without it the first text field takes focus on start and the
-        // scroll container scrolls to it, taking the bar with it. This is the belt to that
-        // braces, and only on a cold start — on a recreate the bar's own saved state is the
-        // user's scroll position and must win.
-        if (savedInstanceState == null) appbar.setExpanded(true, false);
+        if (savedInstanceState == null) {
+            // Open with the title showing. What keeps it open is settings_root being
+            // focusableInTouchMode: without it the first text field takes focus on start and the
+            // scroll container scrolls to it, taking the bar with it. This is the belt to that
+            // braces.
+            appbar.setExpanded(true, false);
+        } else if (savedInstanceState.getBoolean(KEY_LOG_TAB)) {
+            // Views do not save their own visibility, so after a recreate both pages come back at
+            // their XML defaults — while the bottom bar does restore its selection, which is how
+            // a rotation on the Log tab used to land on Settings with "Log" still highlighted.
+            showPage(true, false);
+            nav.setSelectedItemId(R.id.nav_log);             // no-op if it restored by itself
+        }
 
         // an installed-but-never-started app is in the "stopped" state and gets no BOOT_COMPLETED;
         // opening the activity once (and starting the service) clears that.
@@ -243,9 +259,21 @@ public class MainActivity extends AppCompatActivity {
         return Config.BROWSE_STEPS_MS[Math.max(0, Math.min(Config.BROWSE_STEPS_MS.length - 1, Math.round(browse.getValue())))];
     }
 
-    /** Show / hide the DDNS name and the browse slider according to the segmented choice. */
+    /**
+     * Show / hide the DDNS name and the browse slider according to the segmented choice.
+     *
+     * <p>MaterialFade is M3's own transition for an element entering or leaving inside a container
+     * — the same motion vocabulary as the page cross-fade — but it only fades and scales the
+     * element itself, so ChangeBounds is paired with it to close the gap it leaves. One duration
+     * for both, or the fade and the reflow drift apart.
+     */
     private void applyMode(boolean animate) {
-        if (animate) TransitionManager.beginDelayedTransition(settingsRoot, new AutoTransition().setDuration(220));
+        if (animate) {
+            TransitionManager.beginDelayedTransition(settingsRoot, new TransitionSet()
+                    .addTransition(new MaterialFade())
+                    .addTransition(new ChangeBounds())
+                    .setDuration(220));
+        }
         hostL.setVisibility(modeHasDdns() ? View.VISIBLE : View.GONE);
         browseRow.setVisibility(modeHasMdns() ? View.VISIBLE : View.GONE);
     }
@@ -343,25 +371,49 @@ public class MainActivity extends AppCompatActivity {
             pageLog.scrollTo(0, log.getBottom());            // NestedScrollView clamps this
         });
 
-        // shrink to the icons while the page scrolls down, extend again on the way up. The FABs'
-        // own Behavior only reacts to the app bar leaving the screen, which exitUntilCollapsed
-        // never lets happen, so the scroll position is read here instead.
+        // Shrink to the icons while the page scrolls down, extend again on the way up.
+        //
+        // This cannot be left to ExtendedFloatingActionButtonBehavior, which is checked here
+        // because the reason is not the obvious one. That Behavior has no nested-scroll hooks at
+        // all — it reacts only in onDependentViewChanged — and shouldUpdateVisibility() returns
+        // early unless the FAB's layout_anchor IS the AppBarLayout. These FABs sit in the corner
+        // with no anchor, so it never runs. (Anchoring them would move them onto the app bar,
+        // which is the whole point of not doing it.)
         shrinkOnScroll(pageSettings, applyFab, stopFab);
         shrinkOnScroll(pageLog, copyFab, clearFab);
 
+        // Edge-to-edge. Both children are handed the full insets rather than left to the default
+        // serial dispatch, where the first one to consume them starves the other: the app bar
+        // needs the top, the navigation bar needs the bottom, and each applies its own (the root
+        // consumes nothing). The horizontal pair is only ever non-zero next to a cutout.
+        ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.root), (v, insets) -> {
+            Insets bars = insets.getInsets(
+                    WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout());
+            coordinator.setPadding(bars.left, 0, bars.right, 0);
+            ViewCompat.dispatchApplyWindowInsets(coordinator, insets);
+            ViewCompat.dispatchApplyWindowInsets(nav, insets);
+            return insets;
+        });
+
+        // Back from the Log returns to Settings, the start destination, rather than leaving the
+        // app. Registered through the dispatcher (not onBackPressed) so the platform knows the app
+        // will consume the gesture: with android:enableOnBackInvokedCallback the system then shows
+        // no "leaving the app" preview while this is enabled, and the real one when it is not.
+        backToSettings = new OnBackPressedCallback(false) {
+            @Override
+            public void handleOnBackPressed() {
+                nav.setSelectedItemId(R.id.nav_settings);
+            }
+        };
+        getOnBackPressedDispatcher().addCallback(this, backToSettings);
+
+        // The log keeps the app bar collapsed by never driving it: with nested scrolling off it
+        // still scrolls its own content, but it cannot push the bar back open. That is all the
+        // "always collapsed" rule needs — no scroll flags to swap, no height to juggle.
+        pageLog.setNestedScrollingEnabled(false);
+
         nav.setOnItemSelectedListener(item -> {
-            boolean toLog = item.getItemId() == R.id.nav_log;
-            if (toLog == onLogTab) return true;
-            // MaterialFadeThrough is M3's own transition for a navigation bar destination change:
-            // the outgoing page fades and scales down, the incoming one fades in. No lateral
-            // motion, which the spec reserves for peers in a sequence.
-            TransitionManager.beginDelayedTransition(pages, new MaterialFadeThrough());
-            pageSettings.setVisibility(toLog ? View.GONE : View.VISIBLE);
-            pageLog.setVisibility(toLog ? View.VISIBLE : View.GONE);
-            appbar.setLiftOnScrollTargetViewId(toLog ? R.id.page_log : R.id.page_settings);
-            onLogTab = toLog;
-            refreshActions();
-            if (toLog) { logToBottom = true; showLog(); }
+            showPage(item.getItemId() == R.id.nav_log, true);
             return true;
         });
 
@@ -377,6 +429,33 @@ public class MainActivity extends AppCompatActivity {
             statusChip.getChipIcon().setAlpha(alpha);
             statusChip.invalidate();
         });
+    }
+
+    /**
+     * Swaps the visible page.
+     *
+     * <p>The two pages want different app bars. Settings gets the collapsing one: open on a cold
+     * start, then free to follow the scroll — and reopened on the way back whenever the page is at
+     * the top, since a collapsed bar over un-scrolled content reads as broken. The Log wants every
+     * pixel it can get, so it arrives collapsed and stays that way (see the nested-scrolling switch
+     * in wire()).
+     *
+     * <p>{@code animate} is false when restoring after a recreate: there is no state to move from.
+     */
+    private void showPage(boolean toLog, boolean animate) {
+        if (toLog == onLogTab) return;                       // re-tapping the current tab
+        // MaterialFadeThrough is M3's own transition for a navigation bar destination change: the
+        // outgoing page fades and scales down, the incoming one fades in. No lateral motion, which
+        // the spec reserves for peers in a sequence.
+        if (animate) TransitionManager.beginDelayedTransition(pages, new MaterialFadeThrough());
+        pageSettings.setVisibility(toLog ? View.GONE : View.VISIBLE);
+        pageLog.setVisibility(toLog ? View.VISIBLE : View.GONE);
+        if (toLog) appbar.setExpanded(false, animate);
+        else if (pageSettings.getScrollY() == 0) appbar.setExpanded(true, animate);
+        onLogTab = toLog;
+        backToSettings.setEnabled(toLog);                    // back only means something off Settings
+        refreshActions();
+        if (toLog) { logToBottom = true; showLog(); }
     }
 
     /** Keeps {@code second} pinned 12dp to the left of {@code first}, whatever width it animates to. */
@@ -442,20 +521,27 @@ public class MainActivity extends AppCompatActivity {
         applyFab.setEnabled(configValid && !waitingForStart);
     }
 
-    /** Peer name and address in full, wrapped, each copied by tapping it. */
+    /**
+     * Peer name and address in full, wrapped, each copied by tapping it.
+     *
+     * <p>A BottomSheetDialog: supplementary content rather than a decision, and the only surface
+     * here that Material gives predictive back to for free — the gesture walks the sheet back down
+     * instead of previewing an exit from the app.
+     */
     private void showConnectionDetails() {
         if (peerName == null && peerAddr == null) return;              // nothing to show when stopped
-        View body = getLayoutInflater().inflate(R.layout.dialog_status, null);
-        TextView peer = body.findViewById(R.id.dialog_peer), addr = body.findViewById(R.id.dialog_address);
+        BottomSheetDialog sheet = new BottomSheetDialog(this);
+        sheet.setContentView(R.layout.sheet_status);
+        TextView title = sheet.findViewById(R.id.sheet_title);
+        TextView peer = sheet.findViewById(R.id.sheet_peer);
+        TextView addr = sheet.findViewById(R.id.sheet_address);
+        if (title == null || peer == null || addr == null) return;
+        title.setText(connectionKind == null ? getString(R.string.state_stopped) : connectionKind);
         peer.setText(peerName == null ? "—" : peerName);
         addr.setText(peerAddr == null ? "—" : peerAddr);
         peer.setOnClickListener(v -> copy(peerName));
         addr.setOnClickListener(v -> copy(peerAddr));
-        new MaterialAlertDialogBuilder(this)
-                .setTitle(connectionKind == null ? getString(R.string.state_stopped) : connectionKind)
-                .setView(body)
-                .setPositiveButton(android.R.string.ok, null)
-                .show();
+        sheet.show();
     }
 
     private void copy(String text) {
@@ -466,6 +552,12 @@ public class MainActivity extends AppCompatActivity {
 
     private static void setTextIfChanged(TextView v, String text) {
         if (!text.contentEquals(v.getText())) v.setText(text);
+    }
+
+    @Override
+    protected void onSaveInstanceState(Bundle out) {
+        super.onSaveInstanceState(out);
+        out.putBoolean(KEY_LOG_TAB, onLogTab);
     }
 
     @Override
@@ -514,12 +606,21 @@ public class MainActivity extends AppCompatActivity {
         boolean busy = "connecting".equals(s.state);
         boolean stopped = "stopped".equals(s.state);
 
+        // this runs once a second: every setter here either invalidates or requests a layout, so
+        // none of them is called unless the value actually changed
         int dot = MaterialColors.getColor(statusChip, connected ? androidx.appcompat.R.attr.colorPrimary
                 : busy ? com.google.android.material.R.attr.colorTertiary : com.google.android.material.R.attr.colorOutline);
-        statusChip.setChipIconTint(ColorStateList.valueOf(dot));
-        statusChip.setTextColor(MaterialColors.getColor(statusChip, stopped
+        if (dot != shownDot) {
+            shownDot = dot;
+            statusChip.setChipIconTint(ColorStateList.valueOf(dot));
+        }
+        int label = MaterialColors.getColor(statusChip, stopped
                 ? com.google.android.material.R.attr.colorOnSurfaceVariant
-                : com.google.android.material.R.attr.colorOnSurface));
+                : com.google.android.material.R.attr.colorOnSurface);
+        if (label != shownLabel) {
+            shownLabel = label;
+            statusChip.setTextColor(label);
+        }
 
         // the chip carries the connection kind (or the state) only; peer and address go to the dialog
         String titleText;
