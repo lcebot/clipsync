@@ -1003,6 +1003,9 @@ public class SyncService extends Service {
     /**
      * Claim this peer, or discover that we already hold it.
      *
+     * @return null when this link is now the one for its peer, or the link that already holds it —
+     *         which the caller keeps, so the next round can skip the dial rather than repeat it
+     *
      * <p>Two targets can be two names for one machine — a listed address and its mDNS
      * advertisement, or two listed addresses — and it is only here, with the handshake done and an
      * id in hand, that this becomes knowable.
@@ -1024,7 +1027,7 @@ public class SyncService extends Service {
         Logger.i(l.target + " is " + existing.target + " by another name [" + Node.shortId(id)
                 + "] — closing the newer link");
         l.bye("duplicate");
-        return false;
+        return existing;                                // the caller defers to this link, not forever
     }
 
     /**
