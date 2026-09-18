@@ -20,10 +20,14 @@ $pythonw = Join-Path (Split-Path -Parent $python) "pythonw.exe"
 
 # --- firewall: TCP port for clients, UDP 5353 so python can answer mDNS queries
 $port = 47521
-$conf = Join-Path $here 'clipsync.ini'
+$conf = Join-Path $here 'config.json'
 if (Test-Path $conf) {
-    $m = Select-String -Path $conf -Pattern '^\s*port\s*=\s*(\d+)' | Select-Object -First 1
-    if ($m) { $port = [int]$m.Matches[0].Groups[1].Value }
+    try {
+        $p = (Get-Content $conf -Raw | ConvertFrom-Json).port
+        if ($p) { $port = [int]$p }
+    } catch {
+        Write-Host "config.json is not valid JSON; opening the default port $port"
+    }
 }
 foreach ($rule in @(
     @{ Name = "ClipSync TCP $port"; Proto = 'TCP'; Port = $port },

@@ -67,63 +67,90 @@ except ImportError:                    # pragma: no cover
     Image = None
 
 # ----------------------------------------------------------------------------- config
-HERE = os.path.dirname(os.path.abspath(__file__))
-CONFIG_PATH = os.path.join(HERE, "clipsync.ini")
-LOG_PATH = os.path.join(HERE, "clipsync.log")
+# Defaults, parsing, validation and the ini writer live in clipsync_config so that configurator.py
+# can import the rules instead of restating them. That module is deliberately free of side effects;
+# this one is not (it configures logging and registers a clipboard format below), which is why the
+# dependency only runs one way.
+from clipsync_config import CHUNK, LOG_PATH, Cfg   # noqa: E402
 
 (T_HELLO, T_CLIP, T_PING, T_PONG, T_FILE, T_OFFER, T_WANT, T_HAVE, T_SKIP, T_DATA, T_END,
  T_ABORT, T_CHUNK, T_PULL) = 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14
 PROTOCOL_VERSION = 1
 READ_TIMEOUT = 90          # seconds without any frame -> drop client
-CHUNK = 512 * 1024         # chunk size: CHUNK frames carry u32 index || bytes
 MAP_SAVE_EVERY = 8         # persist the received-chunk bitmap every N chunks
 WANT_RETRIES = 3           # how often the receiver re-asks for missing chunks in one session
+LOG_MAX_BYTES = 128 * 1024  # roll clipsync.log over at this size; see RotatingLog
 
-_handlers = [logging.FileHandler(LOG_PATH, encoding="utf-8")]
+
+class RotatingLog(logging.FileHandler):
+    """
+    A file handler that keeps one generation: at LOG_MAX_BYTES the current log becomes
+    clipsync.log.old and a fresh one starts.
+
+    logging.handlers.RotatingFileHandler does this already, and is not used, for one reason: it
+    rolls *after* writing the record that crossed the line, and it renames through a chain
+    (.1 -> .2, ...). Here the size is checked before the record is emitted, so the file never
+    exceeds the limit rather than exceeding it by one line, and there is exactly one .old, silently
+    replaced. A crash log is worth one generation; it is not worth a directory of them.
+
+    A failed roll is not allowed to take the service down: if the rename loses a race with a tail
+    or an editor holding the file open, the handler keeps writing to the current file and tries
+    again on the next record. Losing the rotation is a nuisance; losing the log is not.
+    """
+
+    def __init__(self, path, max_bytes=LOG_MAX_BYTES):
+        super().__init__(path, encoding="utf-8")
+        self.max_bytes = max_bytes
+        # From baseFilename, which FileHandler has already made absolute, and not from `path`:
+        # os.replace below uses baseFilename, so a relative path would otherwise rename the log into
+        # whatever the working directory happens to be rather than next to itself.
+        self.old_path = self.baseFilename + ".old"
+
+    def emit(self, record):
+        try:
+            if self._should_roll(record):
+                self._roll()
+        except Exception:                # noqa: BLE001 - never lose a record over housekeeping
+            pass
+        super().emit(record)
+
+    def _should_roll(self, record) -> bool:
+        if self.stream is None:
+            return False
+        try:
+            pos = self.stream.tell()
+        except (OSError, ValueError):
+            return False
+        if pos == 0:
+            # Never roll an empty file. Without this, a single record longer than the whole limit —
+            # a long traceback — rolls before writing, then rolls again on the next record, and the
+            # second roll overwrites .old with that one record and then throws it away too. The
+            # limit is a ceiling for ordinary lines, not a promise to truncate one enormous one.
+            return False
+        # Counted in bytes, not characters: the stream is UTF-8, and a peer name or a received file
+        # name can put the two a long way apart.
+        return pos + len(self.format(record).encode("utf-8")) + 1 > self.max_bytes
+
+    def _roll(self):
+        # The stream is closed directly rather than through Handler.close(), which would also mark
+        # the handler closed and drop it from logging's own bookkeeping — this handler is going
+        # straight back into service. Windows will not rename a file that is still open.
+        stream, self.stream = self.stream, None
+        try:
+            stream.flush()
+        finally:
+            stream.close()
+        try:
+            os.replace(self.baseFilename, self.old_path)   # silently replaces an existing .old
+        finally:
+            self.stream = self._open()   # reopened either way: a failed rename must not stop logging
+
+
+_handlers = [RotatingLog(LOG_PATH)]
 if sys.stdout is not None:          # absent under pythonw.exe
     _handlers.append(logging.StreamHandler(sys.stdout))
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", handlers=_handlers)
 log = logging.getLogger("clipsync")
-
-
-class Cfg:
-    def __init__(self):
-        raw = {"port": "47521", "psk": "", "max_bytes": str(1024 * 1024),
-               "max_file_bytes": str(10 * 1024 * 1024), "max_file_bytes_local": str(100 * 1024 * 1024),
-               "files_dir": os.path.join(HERE, "received"), "keep_hours": "2", "keep_max_mb": "256",
-               "discovery": "1", "mdns_name": "", "peers": "", "start_delay": "0"}
-        with open(CONFIG_PATH, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                k, v = line.split("=", 1)
-                raw[k.strip()] = v.strip()
-        self.psk = bytes.fromhex(raw["psk"])
-        if len(self.psk) != 32:
-            raise SystemExit("psk must be 64 hex chars (32 bytes)")
-        self.port = int(raw["port"])
-        self.max_bytes = int(raw["max_bytes"])
-        self.max_file_bytes = int(raw["max_file_bytes"])
-        self.max_file_bytes_local = int(raw["max_file_bytes_local"])
-        self.files_dir = raw["files_dir"] or os.path.join(HERE, "received")
-        if not os.path.isabs(self.files_dir):
-            self.files_dir = os.path.join(HERE, self.files_dir)
-        self.keep_hours = float(raw["keep_hours"])          # 0 = keep forever
-        self.keep_max_bytes = int(float(raw["keep_max_mb"]) * 1024 * 1024)   # 0 = unlimited
-        self.discovery = raw["discovery"].lower() in ("1", "true", "yes", "on")
-        self.mdns_name = raw["mdns_name"]
-        # Host names or literal addresses of peers to reach directly. Comma-separated, because an
-        # IPv6 literal is nothing but colons. Used by the advertiser to tell whether this PC is the
-        # one a shared config points at; from phase 3 it is also what this PC dials.
-        self.peers = [p.strip() for p in raw["peers"].split(",") if p.strip()]
-        self.start_delay = int(raw["start_delay"])
-        # largest frame we accept: a DATA chunk, or a CLIP whose JSON escaping doubled the text
-        self.max_frame = max(CHUNK, self.max_bytes * 2) + 64 * 1024
-
-    @property
-    def max_file_any(self) -> int:
-        return max(self.max_file_bytes, self.max_file_bytes_local)
 
 
 # ----------------------------------------------------------------------------- crypto
@@ -1241,7 +1268,7 @@ MDNS_PROBE_FIRST = 10      # and how long the first one waits for the resolver t
 def owns_a_listed_name(peers: list, port: int) -> bool:
     """
     Am I one of the machines the configured addresses point at?  Only ever used to *withdraw* an
-    mDNS advertisement, so that when several PCs share one clipsync.ini the ones that own none of
+    mDNS advertisement, so that when several PCs share one config.json the ones that own none of
     the names stop announcing themselves and devices cannot reach the wrong hub.  A single-PC setup
     always answers True here.  With no addresses listed, every PC is a host.
 
@@ -1507,7 +1534,7 @@ def main():
     # needs no delay of its own — the listening socket is a wildcard bind and serves interfaces
     # that appear later anyway, and the mDNS advertiser waits for the address list to settle.
     # start_delay remains for the one case that still wants it: several PCs sharing one
-    # clipsync.ini, where starting before the DNS record has been published makes the PC that does
+    # config.json, where starting before the DNS record has been published makes the PC that does
     # not own the name advertise for one probe interval before withdrawing.
     if cfg.start_delay > 0:
         log.info("network start delayed by %ds", cfg.start_delay)
