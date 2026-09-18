@@ -261,6 +261,11 @@ public class SyncService extends Service {
         public void onReceive(Context c, Intent i) {
             if (Intent.ACTION_SCREEN_ON.equals(i.getAction())) {
                 screenOn = true;
+                // Like a network arriving: the user picking the phone up is a real new chance, and
+                // without this a target that had climbed to a 60 s back-off makes them wait it out
+                // while they are looking at the screen. wake() alone cannot do it — it notifies the
+                // gate, deliberately not the back-off.
+                resetBackoff();
                 wake();
             } else if (Intent.ACTION_SCREEN_OFF.equals(i.getAction())) {
                 screenOn = false;
@@ -908,7 +913,10 @@ public class SyncService extends Service {
                 // and not a surrender — if the other route dies, this one takes over.
                 Link held = deferredTo;
                 if (held != null && held.isOpen()) {
-                    waitBackoff();
+                    // Quietly: this is not a retry, and logging "retry in 60s" once a minute for a
+                    // target that is deliberately not being dialled reads as a fault when it is the
+                    // fix working. The one line when it started is the whole story.
+                    waitBackoff(false);
                     continue;
                 }
                 deferredTo = null;
@@ -928,6 +936,7 @@ public class SyncService extends Service {
                         // handshaking only to be rejected again.
                         deferredTo = winner;
                         backoff = backoffMax();
+                        Logger.i(target + ": deferring to " + winner.target + " while that link is open");
                     }
                 } catch (Connection.SelfConnection e) {
                     Logger.i(e.getMessage());
@@ -957,21 +966,29 @@ public class SyncService extends Service {
                 // A peer that said goodbye closed us on purpose — as a duplicate, most often.
                 // Redialling straight away would hand it back exactly what it just discarded.
                 if (l != null && l.saidBye()) backoff = backoffMax();
-                else if (burst) continue;                // a burst ending is success, not a failure
-                waitBackoff();
+                else if (burst) {
+                    // A burst ending is success, so no back-off ladder — but not *no delay*. The
+                    // gate normally closes right after, because the clip has been released; it does
+                    // not when another live peer has yet to take the same clip, and then this spins:
+                    // connect, burst, close, connect, re-sending the clip each time because a new
+                    // link starts with no record of what it has sent. A floor costs nothing when the
+                    // gate does close and bounds it when it does not.
+                    backoff = BACKOFF_MIN_MS;
+                }
+                waitBackoff(true);
             }
         }
 
         private Link open() throws Exception {
             Network net = connectivity.getActiveNetwork();
-            if (MDNS.equals(target)) return Link.viaMdns(SyncService.this, linkOwner, net);
+            if (MDNS.equals(target)) return Link.viaMdns(SyncService.this, linkOwner, target, net);
             return Link.toPeer(SyncService.this, linkOwner, target, net);
         }
 
-        private void waitBackoff() {
+        private void waitBackoff(boolean say) {
             if ((!screenOn && pendingLocal == null) || !hasNetwork) return;
             long wait = Math.min(backoff, backoffMax());
-            Logger.i(target + ": retry in " + wait / 1000 + "s (" + (onLan ? "lan" : "mobile") + ")");
+            if (say) Logger.i(target + ": retry in " + wait / 1000 + "s (" + (onLan ? "lan" : "mobile") + ")");
             // A deadline and a loop, not a bare wait(ms): a single wait returns on ANY notify, and
             // the wait it replaced was on the monitor a clipboard copy notifies. Waiting out the
             // remainder each time is what makes the logged interval the interval that is served.

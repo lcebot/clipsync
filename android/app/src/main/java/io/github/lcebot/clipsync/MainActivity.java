@@ -584,8 +584,18 @@ public class MainActivity extends AppCompatActivity {
             if (!logToBottom) return;
             pageLog.post(() -> {
                 if (!logToBottom) return;
-                logToBottom = false;
+                // Scrolling a container that has no height yet overshoots into blank space, and
+                // this runs right after the page is switched from GONE, which is exactly when it
+                // has none. NestedScrollView.scrollTo clamps against
+                // (height - padding); with height 0 and a bottom padding that is not, the clamp is
+                // computed from a negative viewport and returns MORE than the content, scrolling
+                // every line off the top. Hence: skip, keep the flag, let the next layout do it.
+                if (pageLog.getVisibility() != View.VISIBLE || pageLog.getHeight() == 0) return;
                 pageLog.scrollTo(0, Integer.MAX_VALUE);
+                // Cleared only once it actually reached the end. The flag is re-armed by showLog()
+                // solely when the view is already at the bottom, so clearing it after a scroll that
+                // fell short used to be permanent — every later line pushed the end further away.
+                if (!pageLog.canScrollVertically(1)) logToBottom = false;
             });
         });
 

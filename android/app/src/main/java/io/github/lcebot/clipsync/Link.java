@@ -99,9 +99,16 @@ final class Link implements AutoCloseable {
         return new Link(s, o, peer, Connection.toPeer(s, o.config(), peer, net));
     }
 
-    static Link viaMdns(SyncService s, Owner o, Network net) throws Exception {
-        Connection c = Connection.viaMdns(s, o.config(), net);
-        return new Link(s, o, c.peerName, c);
+    /**
+     * @param target the dialer's target, not the advertised service name. Those are different
+     *               things and conflating them cost two bugs: the log alternated between two names
+     *               for one dialer, and the per-target sequence cursor was keyed by the name the PC
+     *               advertises — so renaming the PC silently reset the LAN path's cursor. The
+     *               advertised name is still what the UI shows; it reaches it through the peer's
+     *               HELLO ({@code Connection.peerLabel}), which is where a display name belongs.
+     */
+    static Link viaMdns(SyncService s, Owner o, String target, Network net) throws Exception {
+        return new Link(s, o, target, Connection.viaMdns(s, o.config(), net));
     }
 
     Connection connection() {
