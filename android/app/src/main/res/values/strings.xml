@@ -50,7 +50,7 @@
          "this device has no name of its own". -->
     <string name="section_own">This device\'s addresses</string>
     <!-- No full stop: nothing else on this page ends a supporting line with one. -->
-    <string name="own_help">ClipSync uses them to recognise itself and avoid a network loop</string>
+    <string name="own_help">Used to recognise itself and avoid a network loop</string>
     <string name="own_expand">Show this device\'s addresses</string>
     <string name="own_collapse">Hide this device\'s addresses</string>
     <string name="browse_label">mDNS browse timeout: %1$d ms</string>

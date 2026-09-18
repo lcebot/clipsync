@@ -38,6 +38,18 @@ public final class Connection implements AutoCloseable {
     public static final int T_HELLO = 1, T_CLIP = 2, T_PING = 3, T_PONG = 4, T_OFFER = 6, T_WANT = 7,
             T_HAVE = 8, T_SKIP = 9, T_END = 11, T_ABORT = 12, T_CHUNK = 13, T_PULL = 14;
     /**
+     * "I am closing this connection, and here is why" — {@code {reason}}.
+     *
+     * <p>15, not one of the retired numbers (5 FILE, 10 DATA): reusing one would make an old log
+     * impossible to read, and the numbers are not scarce.
+     *
+     * <p>It exists because <b>a close without one becomes a loop</b>, and that failure needs no
+     * network trouble to trigger. When a duplicate link is dropped, the far side sees nothing but a
+     * disconnect, its reconnect logic fires, and it rebuilds exactly the link that was discarded — to
+     * be discarded again. A peer that receives BYE does not schedule a redial. (docs/p2p-plan.md §5)
+     */
+    public static final int T_BYE = 15;
+    /**
      * 2: HELLO is exchanged in both directions and carries the node id, type, persistence and
      * battery bucket (docs/p2p-plan.md §2). A clean break, by §9 — a version 1 peer is refused
      * rather than tolerated, because a peer that cannot name itself cannot be deduplicated or
@@ -120,11 +132,50 @@ public final class Connection implements AutoCloseable {
     public String peerBattery = "medium";
 
     /**
-     * @param lan true when the active network is Wi-Fi/Ethernet — the only place mDNS can work
-     * @param net the active network, so the mDNS browse is pinned to it (may be null)
+     * One listed address. Resolves and connects to that name and nothing else.
+     *
+     * <p>This replaces the constructor that raced every target and kept the first — see
+     * {@link #connectAny}, which is gone. Racing was right while the device held one connection and
+     * is exactly wrong now: the losers it closed are the other peers.
      */
-    public Connection(Context ctx, Config cfg, boolean lan, Network net) throws Exception {
-        this(cfg, connectAny(ctx, cfg, lan, net), ctx, net);
+    public static Connection toPeer(Context ctx, Config cfg, String peer, Network net) throws Exception {
+        return new Connection(cfg, new Object[]{connectDirect(peer, cfg.port), "direct", peer}, ctx, net);
+    }
+
+    /**
+     * The peer found on the local network.
+     *
+     * <p>Still one connection out of several candidates, and still a race — but the candidates here
+     * are the addresses of *one* PC, which typically advertises every adapter it has. Choosing among
+     * them is not the same thing as choosing among peers.
+     *
+     * @param net the active network, so the browse is pinned to it (may be null)
+     */
+    public static Connection viaMdns(Context ctx, Config cfg, Network net) throws Exception {
+        InetSocketAddress cached = freshMdnsCache();
+        if (cached != null) {
+            try {
+                return new Connection(cfg, new Object[]{connectTo(cached, MDNS_CONNECT_TIMEOUT_MS), "mdns", mdnsCachedName}, ctx, net);
+            } catch (IOException e) {
+                Logger.i("cached mdns address failed: " + e);
+                mdnsCached = null;
+            }
+        }
+        Logger.i("mdns: browsing for " + cfg.mdnsTimeoutMs + "ms");
+        List<Mdns.Candidate> cands = Mdns.discover(ctx, net, cfg.mdnsTimeoutMs);
+        if (cands.isEmpty())
+            throw new IOException("mdns: no _clipsync._tcp service found (peer not advertising, "
+                    + "UDP 5353 blocked, or AP client isolation)");
+        // A PC typically advertises every adapter it has (VMware/Hyper-V/WSL/hotspot subnets
+        // included). Put addresses on the phone's own subnet first, then race them Happy-Eyeballs
+        // style instead of eating a 3 s timeout per dead address.
+        cands = OnLink.sort(ctx, net, cands);
+        Logger.i("mdns: " + cands.size() + " candidates, trying " + cands.get(0).addr + " first");
+        Won w = race(cands, MDNS_CONNECT_TIMEOUT_MS);
+        mdnsCached = w.c.addr;
+        mdnsCachedName = w.c.name;
+        mdnsCachedAt = System.currentTimeMillis();
+        return new Connection(cfg, new Object[]{w.s, "mdns", w.c.name}, ctx, net);
     }
 
     /** A data connection to a known address (opened by the transfer workers, several in parallel). */
@@ -174,6 +225,11 @@ public final class Connection implements AutoCloseable {
         if (v != PROTOCOL_VERSION)
             throw new IOException("protocol version mismatch (peer speaks " + v + ", we speak " + PROTOCOL_VERSION + ")");
         peerId = theirs.optString("id", null);
+        // Protocol 2's premise is that a peer can name itself, and everything downstream assumes it:
+        // a link with no id cannot be deduplicated, cannot be recognised as this device, and would
+        // sit outside the map that the heartbeat, the broadcast and the status all iterate — running
+        // but reaching nobody. Refusing here is much easier to diagnose than that.
+        if (peerId == null || peerId.isEmpty()) throw new IOException("peer sent no node id");
         peerType = theirs.optString("type", "?");
         peerPersistent = theirs.optBoolean("persistent", false);
         peerBattery = theirs.optString("battery", "medium");
@@ -224,135 +280,22 @@ public final class Connection implements AutoCloseable {
         rxKey = Crypto.hkdfSha256(cfg.psk, salt, "clipsync s2c".getBytes(StandardCharsets.US_ASCII), 32);
     }
 
-    /**
-     * Listed addresses and local discovery are peers, not a preference and a fallback: whichever
-     * connects first is the connection. Returns {socket, "direct"|"mdns", peer name}.
-     *
-     * <p>Two rounds, and the split is about cost rather than rank. The cheap half — a lookup and a
-     * connect per listed address, plus a connect to the LAN address mDNS last reported — races all
-     * of them at once, which is where the ordering used to hurt: a stale record made the phone sit
-     * through a connect timeout before it would even look at the LAN. The expensive half is a fresh
-     * browse, seconds of multicast and a radio wake-up, so it stays behind every cheap path failing
-     * rather than running on every reconnect a listed address would have served instantly.
-     *
-     * <p>Racing the whole list also means a peer list acts as failover for free: an address that is
-     * down costs nothing but its own connect timeout, in parallel with the others.
-     */
-    private static Object[] connectAny(Context ctx, Config cfg, boolean lan, Network net) throws IOException {
-        IOException last = null;
-        // mDNS is link-local multicast: pointless (and a radio wake-up) on cellular
-        boolean useMdns = cfg.discovery && lan;
-
-        List<Callable<Object[]>> cheap = new ArrayList<>();
-        for (String peer : cfg.peers) {
-            // Two filters, cheapest first. The declared own-addresses list (§4a) is a string compare
-            // and costs nothing; selfTargets is what a handshake has already proved, and covers the
-            // spellings the declaration could not know about. Skipping here rather than connecting
-            // and being told again is the whole point — otherwise a self-target occupies a reconnect
-            // cycle forever, failing in a way that looks like a network problem.
-            if (Config.isSelf(peer, cfg.own) || isKnownSelf(peer)) continue;
-            cheap.add(() -> {
-                try {
-                    return new Object[]{connectDirect(peer, cfg.port), "direct", peer};
-                } catch (IOException e) {
-                    Logger.i("direct path failed (" + peer + "): " + e);
-                    throw e;
-                }
-            });
-        }
-        InetSocketAddress cached = useMdns ? freshMdnsCache() : null;
-        if (cached != null) {
-            final String name = mdnsCachedName;
-            cheap.add(() -> {
-                try {
-                    return new Object[]{connectTo(cached, MDNS_CONNECT_TIMEOUT_MS), "mdns", name};
-                } catch (IOException e) {
-                    Logger.i("cached mdns address failed: " + e);
-                    throw e;
-                }
-            });
-        }
-        if (!cheap.isEmpty()) {
-            try {
-                return firstToConnect(cheap);
-            } catch (IOException e) {
-                last = e;
-                mdnsCached = null;      // both failed, so the remembered address is no good either
-            }
-        }
-
-        if (useMdns) {
-            Logger.i("mdns: browsing for " + cfg.mdnsTimeoutMs + "ms");
-            List<Mdns.Candidate> cands = Mdns.discover(ctx, net, cfg.mdnsTimeoutMs);
-            if (cands.isEmpty()) {
-                Logger.i("mdns: no _clipsync._tcp service found (peer not advertising, UDP 5353 blocked, or AP client isolation)");
-                last = new IOException((last != null ? "direct: " + last.getMessage() + "; " : "") + "mdns: no service found");
-            } else {
-                // A PC typically advertises every adapter it has (VMware/Hyper-V/WSL/hotspot
-                // subnets included). Put addresses on the phone's own subnet first, then race
-                // them Happy-Eyeballs style instead of eating a 3 s timeout per dead address.
-                cands = OnLink.sort(ctx, net, cands);
-                Logger.i("mdns: " + cands.size() + " candidates, trying " + cands.get(0).addr + " first");
-                try {
-                    Won w = race(cands, MDNS_CONNECT_TIMEOUT_MS);
-                    mdnsCached = w.c.addr;
-                    mdnsCachedName = w.c.name;
-                    mdnsCachedAt = System.currentTimeMillis();
-                    return new Object[]{w.s, "mdns", w.c.name};
-                } catch (IOException e) {
-                    Logger.i("mdns: no candidate accepted: " + e.getMessage());
-                    last = e;
-                }
-            }
-        } else if (cfg.discovery) {
-            Logger.i("mdns: skipped (not on Wi-Fi/Ethernet)");
-        }
-
-        throw last != null ? last
-                : new IOException(lan ? "no addresses listed and discovery is off"
-                                      : "no addresses listed; discovery needs Wi-Fi");
-    }
+    // connectAny() and firstToConnect() are gone with the single connection they served. They raced
+    // every listed address and the LAN together and kept whichever answered first, closing the rest
+    // — which was the right shape for a device that held one link and is precisely the wrong one for
+    // a device that holds several: the sockets it threw away are the other peers. What it did well
+    // survives, in two pieces that each race only the things that really are alternatives to each
+    // other: toPeer() resolves one name (getAllByName already tries every address that name has),
+    // and viaMdns() races the addresses of one PC.
+    //
+    // The failover it gave for free — a listed address that is down costing nothing but its own
+    // timeout, in parallel with the others — survives too, and is now structural: every target has
+    // its own dialer and its own back-off, so a dead one cannot delay a live one at all rather than
+    // merely not delaying it much.
 
     private static InetSocketAddress freshMdnsCache() {
         InetSocketAddress c = mdnsCached;
         return c != null && System.currentTimeMillis() - mdnsCachedAt < MDNS_CACHE_MS ? c : null;
-    }
-
-    /**
-     * Runs every path at once and returns the first connection made. The losers are not cancelled:
-     * a connect interrupted halfway can still complete on the PC, which would leave it holding a
-     * client that will never say HELLO. They are collected on a background thread instead and
-     * whatever they opened is closed properly.
-     */
-    private static Object[] firstToConnect(List<Callable<Object[]>> paths) throws IOException {
-        CompletionService<Object[]> cs = new ExecutorCompletionService<>(RACE_POOL);
-        List<Future<Object[]>> futures = new ArrayList<>();
-        for (Callable<Object[]> p : paths) futures.add(cs.submit(p));
-        Object[] won = null;
-        String err = null;
-        try {
-            for (int done = 0; done < paths.size() && won == null; done++) {
-                try {
-                    won = cs.take().get();
-                } catch (ExecutionException e) {
-                    err = String.valueOf(e.getCause() != null ? e.getCause().getMessage() : e);
-                }
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
-        if (won == null) throw new IOException(err == null ? "no path answered" : err);
-        final Object[] winner = won;
-        RACE_POOL.submit(() -> {
-            for (Future<Object[]> f : futures) {
-                try {
-                    Object[] r = f.get();
-                    if (r != winner) ((Socket) r[0]).close();
-                } catch (Exception ignored) {
-                }
-            }
-        });
-        return won;
     }
 
     /**

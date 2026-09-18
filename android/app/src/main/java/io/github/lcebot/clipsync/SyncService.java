@@ -33,8 +33,11 @@ import java.util.concurrent.Executors;
  */
 public class SyncService extends Service {
     private static final String CHANNEL = "clipsync";
-    // The keep-alive intervals moved to Link with the heartbeat that uses them: they depend on the
-    // transport of one link, which is the first thing here that turned out to be per-peer.
+    // keep-alive: a peer drops a silent client after 90 s. Cellular pings are spaced wider because
+    // every one of them pulls the modem out of its idle state. Here and not in Link, because one
+    // device has one radio: the heartbeat is per-device even though the interval is chosen from the
+    // transport all its links share.
+    private static final long PING_WIFI_MS = 30_000, PING_MOBILE_MS = 45_000;
     // reconnect back-off (doubling), capped per transport. Both caps are 60 s for now — a
     // network change resets the back-off to the minimum immediately, so most reconnects don't
     // wait at all, and a shorter Wi-Fi cap only adds retries while the PC is offline.
@@ -75,24 +78,43 @@ public class SyncService extends Service {
     private volatile boolean screenOn = true;
     private volatile boolean hasNetwork = true;  // default network validated (internet) or at least present
     private volatile boolean onLan = false;      // active network is Wi-Fi or Ethernet
-    private volatile long backoff = BACKOFF_MIN_MS;
+    /** One dialer per target, keyed by the target. Rebuilt when the configuration changes. */
+    private final java.util.Map<String, Dialer> dialers = new java.util.LinkedHashMap<>();
     /**
-     * The current session, and its connection.
+     * The live links, keyed by the peer's node id.
      *
-     * <p>Both, for now: {@code conn} is what the rest of the file still reaches for — {@code wake()},
-     * {@code reload()}, {@code abortTransfers()} — and narrowing all of those to a peer is step 2's
-     * work, not this step's. {@code link} is what owns the session. They point at the same thing.
+     * <p>Keyed by id and not by target because that is what makes a duplicate visible: two targets
+     * can be two names for one machine, and the only moment that becomes knowable is when the second
+     * handshake returns an id the map already holds.
      */
-    private volatile Link link;
-    private volatile Connection conn;           // current session, null when disconnected
-    private Thread worker;
+    private final java.util.Map<String, Link> byPeer = new java.util.concurrent.ConcurrentHashMap<>();
+    private Thread heart;
 
     // sync state
-    private String lastRemoteHash;              // content we last wrote into the local clipboard
-    private String lastRemoteUri;               // URI we last put on the clipboard (cheap loop check)
-    private String lastSentHash;                // content we last sent to the PC
-    private long lastServerSeq = 0;             // server seq we last saw (for HELLO catch-up)
-    private Object pendingLocal;                // String (text) or Files.Ref not yet delivered
+    // volatile, all three: they are written from the clip worker and from up to N clipsync-push
+    // threads, and read both under `lock` and (lastRemoteUri, in handleClip) outside it. With one
+    // connection there was one writer; with several, a reader that misses a write re-applies a clip
+    // this device just sent, which is how a two-peer ping-pong starts.
+    private volatile String lastRemoteHash;     // content we last wrote into the local clipboard
+    private volatile String lastRemoteUri;      // URI we last put on the clipboard (cheap loop check)
+    private volatile String lastSentHash;       // content we last sent, to any peer (echo check)
+    /**
+     * How far into each peer's stream we have seen, by target.
+     *
+     * <p>One cursor per target, where there used to be one for the device. With several peers a
+     * single number is not merely imprecise, it is meaningless: the peers have independent sequence
+     * spaces, and a number from one of them tells another nothing about what we are missing.
+     */
+    private final java.util.Map<String, Long> seqByTarget = new java.util.concurrent.ConcurrentHashMap<>();
+    /**
+     * The newest local clip, or null.
+     *
+     * <p><b>Not consumed.</b> It used to be taken by whoever flushed it first, which is correct for
+     * one peer and silently wrong for several — the first connection to send it took it away from
+     * the rest. Each link now records what it has delivered ({@code Link.sentHash}), so this stays
+     * put until a newer clip replaces it, and a peer that connects a minute later still gets it.
+     */
+    private volatile Object pendingLocal;
 
     // ------------------------------------------------------------------ lifecycle
     @Override
@@ -130,9 +152,10 @@ public class SyncService extends Service {
         readNetwork(connectivity.getNetworkCapabilities(connectivity.getActiveNetwork()));
         connectivity.registerDefaultNetworkCallback(netCallback);
 
-        worker = new Thread(this::mainLoop, "clipsync-net");
-        worker.setDaemon(true);
-        worker.start();
+        syncDialers();
+        heart = new Thread(this::heartbeat, "clipsync-ping");
+        heart.setDaemon(true);
+        heart.start();
         setStatus("connecting");
         // root: whitelist + app-ops + standby bucket, so vendor battery managers leave us alone
         Thread ka = new Thread(() -> Logger.i(Root.keepAlive(getPackageName())), "clipsync-root");
@@ -184,10 +207,10 @@ public class SyncService extends Service {
         cfg = next;
         Logger.i("config reloaded: " + targets(cfg)
                 + ", " + cfg.threads + " streams, files -> " + cfg.filesDir);
-        abortTransfers(conn, "configuration changed", null);
+        abortTransfers(null, "configuration changed", null);
         Connection.forgetMdns();
-        backoff = BACKOFF_MIN_MS;
-        dropConnection();                 // the loop reconnects with the new settings
+        dropConnection();                 // the dialers reconnect with the new settings
+        syncDialers();                    // ... and the set of targets may itself have changed
         wake();
     }
 
@@ -198,7 +221,10 @@ public class SyncService extends Service {
             clipboard.removePrimaryClipChangedListener(clipListener);
             unregisterReceiver(screenReceiver);
             try { connectivity.unregisterNetworkCallback(netCallback); } catch (Exception ignored) {}
+            for (Dialer d : snapshotDialers()) d.cancel();
+            synchronized (dialers) { dialers.clear(); }
             dropConnection();
+            if (heart != null) heart.interrupt();
             synchronized (lock) { lock.notifyAll(); }
             setStatus("stopped");
             Logger.i("service stopped");
@@ -260,7 +286,7 @@ public class SyncService extends Service {
         public void onCapabilitiesChanged(Network n, NetworkCapabilities nc) {
             if (readNetwork(nc)) {
                 Logger.i("network: " + (onLan ? "lan" : "mobile") + (hasNetwork ? "" : " (no internet)"));
-                backoff = BACKOFF_MIN_MS;
+                resetBackoff();         // a new network is a new chance for every target at once
                 dropConnection();       // a session bound to the old network is dead anyway
                 wake();
             }
@@ -278,6 +304,11 @@ public class SyncService extends Service {
 
     private long backoffMax() {
         return onLan ? BACKOFF_MAX_WIFI_MS : BACKOFF_MAX_MOBILE_MS;
+    }
+
+    /** Give every target its first retry back. A network appearing is good news for all of them. */
+    private void resetBackoff() {
+        for (Dialer d : snapshotDialers()) d.resetBackoff();
     }
 
     // ------------------------------------------------------------------ local clipboard -> PC
@@ -367,7 +398,7 @@ public class SyncService extends Service {
             }
             Logger.i("clip (" + source + "): " + (out instanceof Files.Ref ? out.toString() : "text " + ((String) out).length() + " chars"));
             // copying something new while a file is still moving: stop that transfer first
-            abortTransfers(conn, "superseded by a newer clip on the phone", h);
+            abortTransfers(null, "superseded by a newer clip on the phone", h);
             synchronized (offered) { offered.clear(); }
             wake();                                     // send now (reconnect if needed)
         } catch (Throwable t) {
@@ -384,21 +415,28 @@ public class SyncService extends Service {
         return c.lanPeer ? cfg.maxFileBytesLocal : cfg.maxFileBytes;
     }
 
-    private void flushPending(Connection c) throws Exception {
-        Object o;
-        synchronized (lock) {
-            o = pendingLocal;
-            if (o == null) return;
-            pendingLocal = null;
-            lastSentHash = hashOf(o);
-        }
+    /**
+     * Put one clip on one link.
+     *
+     * <p>It no longer takes the clip out of the pending slot — {@link Link#deliver()} decides whether
+     * this link still owes it, and the slot belongs to every link at once. What used to be
+     * {@code flushPending}'s job of marking it sent is now two different marks: the per-link one in
+     * Link, and {@code lastSentHash} here, which is the device saying "this content came from us" so
+     * that any peer echoing it back is ignored.
+     */
+    private void sendClip(Link link, Object o) throws Exception {
+        Connection c = link.connection();
         if (o instanceof Files.Ref) {
             Files.Ref f = (Files.Ref) o;
             long limit = limitFor(c);
             if (f.size > limit) {
+                // Returning before lastSentHash is set, deliberately: a file we declined to offer is
+                // not something this device has sent, and marking it would make a peer's own copy of
+                // the same file look like our echo and be ignored.
                 Logger.i("not offering " + f + ": over the " + (c.lanPeer ? "LAN" : "internet") + " limit (" + limit / (1024 * 1024) + " MB)");
                 return;
             }
+            lastSentHash = f.sha256;
             // two-step: OFFER the hash first; the bytes only go out if the PC answers WANT
             synchronized (offered) {
                 offered.put(f.sha256, f);
@@ -408,10 +446,11 @@ public class SyncService extends Service {
             Logger.i("local -> remote: offered " + f);
         } else {
             String text = (String) o;
+            lastSentHash = Crypto.sha256Hex(text);
             JSONObject j = new JSONObject();
             j.put("seq", System.currentTimeMillis());
             j.put("mime", "text/plain");
-            j.put("sha256", Crypto.sha256Hex(text));
+            j.put("sha256", lastSentHash);
             j.put("data", text);
             c.send(Connection.T_CLIP, j.toString().getBytes(StandardCharsets.UTF_8));
             Logger.i("local -> remote (" + text.length() + " chars)");
@@ -419,14 +458,16 @@ public class SyncService extends Service {
     }
 
     // ------------------------------------------------------------------ PC -> local clipboard
-    private void onRemoteClip(JSONObject msg) {
+    private void onRemoteClip(Link l, JSONObject msg) {
         String text = msg.optString("data", null);
         if (text == null || !"text/plain".equals(msg.optString("mime", "text/plain"))) return;
         if (text.getBytes(StandardCharsets.UTF_8).length > cfg.maxBytes) return;
         String h = Crypto.sha256Hex(text);
         if (!h.equals(msg.optString("sha256"))) return;
+        advance(l, msg.optLong("seq", 0));
         synchronized (lock) {
-            lastServerSeq = Math.max(lastServerSeq, msg.optLong("seq", 0));
+            // Content hashes, so this still works with several peers: a clip we sent to A and had
+            // relayed back by B is recognised by what it is, not by which link it arrived on.
             if (h.equals(lastSentHash) || h.equals(lastRemoteHash)) return;
             lastRemoteHash = h;
             lastRemoteUri = null;
@@ -475,42 +516,50 @@ public class SyncService extends Service {
         return a;
     }
 
-    /** Stop whatever is in flight (a newer clip supersedes it) and tell the PC. */
+    /**
+     * Stop whatever is in flight (a newer clip supersedes it) and tell the peer that was carrying it.
+     *
+     * <p>{@code c} is null now at both call sites, which is the honest shape: a transfer knows which
+     * connection it is running on ({@code Transfer.control}), so there is no need for the caller to
+     * guess — and with several links a caller that guessed would tell the wrong peer.
+     */
     private void abortTransfers(Connection c, String reason, String except) {
         for (Transfer t : new Transfer[]{upload, download}) {
             if (t == null || t.isAborted() || t.sha256.equals(except)) continue;
             t.abort();
             Logger.i("aborting " + (t.upload ? "upload" : "download") + " of " + (t.upload ? t.ref.name : t.partial.name) + ": " + reason);
+            Connection tell = c != null ? c : t.control;
             try {
-                if (c != null) c.sendJson(Connection.T_ABORT, shaMsg(t.sha256).put("reason", reason));
+                if (tell != null) tell.sendJson(Connection.T_ABORT, shaMsg(t.sha256).put("reason", reason));
             } catch (Exception ignored) {
             }
         }
     }
 
     /** The PC offers a file: re-use our cached copy (HAVE), refuse (SKIP), or ask for the chunks we miss (WANT) and pull them. */
-    private void onOffer(Connection c, JSONObject hdr) throws Exception {
+    private void onOffer(Link l, JSONObject hdr) throws Exception {
+        Connection c = l.connection();
         String sha = hdr.optString("sha256");
         String name = new java.io.File(hdr.optString("name", "clip")).getName();
         if (name.isEmpty()) name = "clip";
         long size = hdr.optLong("size", -1);
         long seq = hdr.optLong("seq", 0);
         boolean echo;
-        // last_seq only advances once we actually have the file (HAVE / SKIP / download done), so
-        // that after a dropped connection the PC's catch-up OFFER triggers the resume
+        // the cursor only advances once we actually have the file (HAVE / SKIP / download done), so
+        // that after a dropped connection the peer's catch-up OFFER triggers the resume
         synchronized (lock) {
             echo = sha.equals(lastSentHash) || sha.equals(lastRemoteHash);
-            if (echo) lastServerSeq = Math.max(lastServerSeq, seq);
         }
         if (echo) {
+            advance(l, seq);
             c.sendJson(Connection.T_HAVE, shaMsg(sha));
             return;
         }
         Uri cached = cache.get(sha);
         if (cached != null) {
             c.sendJson(Connection.T_HAVE, shaMsg(sha));
+            advance(l, seq);
             synchronized (lock) {
-                lastServerSeq = Math.max(lastServerSeq, seq);
                 lastRemoteHash = sha;
                 lastRemoteUri = cached.toString();
             }
@@ -523,7 +572,7 @@ public class SyncService extends Service {
         if (size < 0 || size > limit) {
             String why = size + " bytes > " + limit + " (" + (c.lanPeer ? "LAN" : "internet") + " limit)";
             c.sendJson(Connection.T_SKIP, shaMsg(sha).put("reason", why));
-            synchronized (lock) { lastServerSeq = Math.max(lastServerSeq, seq); }
+            advance(l, seq);
             Logger.i("offer: " + name + " -> skipped, " + why);
             return;
         }
@@ -535,17 +584,19 @@ public class SyncService extends Service {
         List<int[]> missing = p.missing();
         c.sendJson(Connection.T_WANT, shaMsg(sha).put("ranges", rangesJson(missing)));
         Logger.i("offer: " + name + " (" + size + " bytes) -> want " + (p.haveCount() == 0 ? "all" : (p.n - p.haveCount()) + "/" + p.n + " chunks (resume)"));
-        startDownload(c, p, 0);
+        startDownload(l, p, 0);
     }
 
-    private void startDownload(Connection c, Files.Partial p, int attempt) {
+    private void startDownload(Link l, Files.Partial p, int attempt) {
+        Connection c = l.connection();
         Transfer t = Transfer.download(this, cfg, c, p, (tr, complete) -> {
             if (download == tr) download = null;
             if (complete) {
-                finishDownload(p);
-            } else if (!tr.isAborted() && conn == c && attempt < DOWNLOAD_RETRIES) {
+                finishDownload(l, p);
+                // the link that offered it is the link whose cursor moves
+            } else if (!tr.isAborted() && l.isOpen() && attempt < DOWNLOAD_RETRIES) {
                 Logger.i("retrying " + p + " (" + (attempt + 1) + "/" + DOWNLOAD_RETRIES + ")");
-                startDownload(c, p, attempt + 1);
+                startDownload(l, p, attempt + 1);
             } else {
                 p.keep();          // resumed on the next OFFER of the same file
             }
@@ -554,12 +605,12 @@ public class SyncService extends Service {
         t.start();
     }
 
-    private void finishDownload(Files.Partial p) {
+    private void finishDownload(Link l, Files.Partial p) {
         try {
             Uri uri = p.finalizeFile();
             cache.put(p.sha256, uri, p.name, p.mime, p.size);
+            advance(l, p.seq);
             synchronized (lock) {
-                lastServerSeq = Math.max(lastServerSeq, p.seq);
                 if (p.sha256.equals(lastSentHash) || p.sha256.equals(lastRemoteHash)) return;
                 lastRemoteHash = p.sha256;
                 lastRemoteUri = uri.toString();
@@ -637,17 +688,33 @@ public class SyncService extends Service {
     }
 
     /** One place for every frame type, used by both the normal loop and the screen-off burst. */
-    private void handleFrame(Connection c, Connection.Frame f) throws Exception {
+    private void handleFrame(Link l, Connection.Frame f) throws Exception {
+        Connection c = l.connection();
         switch (f.type) {
-            case Connection.T_CLIP -> onRemoteClip(new JSONObject(new String(f.payload, StandardCharsets.UTF_8)));
-            case Connection.T_OFFER -> onOffer(c, new JSONObject(new String(f.payload, StandardCharsets.UTF_8)));
+            case Connection.T_CLIP -> onRemoteClip(l, new JSONObject(new String(f.payload, StandardCharsets.UTF_8)));
+            case Connection.T_OFFER -> onOffer(l, new JSONObject(new String(f.payload, StandardCharsets.UTF_8)));
             case Connection.T_WANT -> onWant(c, new JSONObject(new String(f.payload, StandardCharsets.UTF_8)));
             case Connection.T_HAVE -> onHave(new JSONObject(new String(f.payload, StandardCharsets.UTF_8)));
             case Connection.T_SKIP -> onSkip(new JSONObject(new String(f.payload, StandardCharsets.UTF_8)));
             case Connection.T_ABORT -> onAbort(new JSONObject(new String(f.payload, StandardCharsets.UTF_8)));
             case Connection.T_PING -> c.send(Connection.T_PONG);
+            case Connection.T_BYE -> {
+                String why = new JSONObject(new String(f.payload, StandardCharsets.UTF_8)).optString("reason", "");
+                Logger.i(c.peer + " said goodbye: " + (why.isEmpty() ? "no reason given" : why));
+                // Marked, not just closed. Closing alone ends the session and the dialer redials on
+                // its usual back-off — handing the peer back exactly the link it discarded, which is
+                // the loop BYE exists to prevent. The dialer reads this and waits the long interval.
+                l.markBye();
+                l.close();
+            }
             default -> { }
         }
+    }
+
+    /** Remember how far into a peer's stream we have seen. One cursor per target (see seqByTarget). */
+    private void advance(Link l, long seq) {
+        if (seq <= 0) return;
+        seqByTarget.merge(l.target, seq, Math::max);
     }
 
     private boolean transferBusy() {
@@ -662,64 +729,103 @@ public class SyncService extends Service {
         synchronized (lock) {
             lock.notifyAll();
         }
-        Connection c = conn;
-        if (c != null) {
-            // already connected: push from a short-lived thread so the listener returns fast
+        // Every live link, not the one: a clip has to reach every peer. Each decides for itself
+        // whether it has already sent this one, so calling them all is safe however often it happens.
+        for (Link l : byPeer.values()) {
+            if (!l.isOpen()) continue;
+            // a short-lived thread per link, so the clipboard listener returns immediately and one
+            // slow peer cannot hold up delivery to the others
             new Thread(() -> {
-                try { flushPending(c); } catch (Exception e) { dropConnection(); }
+                try { l.deliver(); } catch (Exception e) { l.close(); }
             }, "clipsync-push").start();
         }
     }
 
+    /** Close every live link. Screen off, network change, reload and shutdown all mean this. */
     private void dropConnection() {
-        Link l;
-        synchronized (lock) {
-            l = link;
-            link = null;
-            conn = null;
+        for (Link l : byPeer.values()) l.close();
+        byPeer.clear();
+        for (Dialer d : snapshotDialers()) {
+            Link l = d.live;
+            if (l != null) l.close();
         }
-        if (l != null) l.close();
     }
 
     /**
-     * What a {@link Link} may ask of the service. Every method here is state that belongs to the
-     * device rather than to one peer, which is exactly why it is on this side of the interface —
-     * step 2 turns several of them into per-peer lookups without Link having to know.
+     * Let go of the pending clip once every live link has it.
+     *
+     * <p><b>This is what keeps the radio asleep.</b> The old code consumed the clip on the first
+     * flush, which cleared the slot as a side effect; making it a broadcast removed that, and the
+     * gate every dialer waits on is {@code !screenOn && pendingLocal == null}. Without a release the
+     * gate never closes again after the first copy of the session: screen off drops the links, the
+     * gate passes at once, each dialer reconnects, runs a burst, returns "success" so skips its
+     * back-off, and does it again — N sockets and N radio wake-ups in a tight loop, forever, with
+     * the same clip re-sent every cycle because each new link starts with a clean {@code sentHash}.
+     *
+     * <p>Delivered to every live link is the right condition rather than "to one": a clip that has
+     * reached the PC but not the tablet is not delivered. A target that cannot connect at all still
+     * holds the slot open, which is the same thing the single-connection version did, and is the
+     * behaviour that makes a clip survive a peer being briefly unreachable.
      */
+    private void releasePending(String hash) {
+        boolean all = true;
+        int live = 0;
+        for (Link l : byPeer.values()) {
+            if (!l.isOpen()) continue;
+            live++;
+            if (!hash.equals(l.sentHash())) { all = false; break; }
+        }
+        if (!all || live == 0) return;
+        synchronized (lock) {
+            Object p = pendingLocal;
+            if (p != null && hash.equals(hashOf(p))) pendingLocal = null;
+        }
+    }
+
+    /** The live connection to show in the single-peer status file. Step (c) replaces this. */
+    private Link anyLive() {
+        for (Link l : byPeer.values()) if (l.isOpen()) return l;
+        return null;
+    }
+
+    private java.util.List<Dialer> snapshotDialers() {
+        synchronized (dialers) { return new ArrayList<>(dialers.values()); }
+    }
+
+    /** What a {@link Link} may ask of the service: state that belongs to the device, not to a peer. */
     private final Link.Owner linkOwner = new Link.Owner() {
         @Override public void onFrame(Link l, Connection.Frame f) throws Exception {
-            handleFrame(l.connection(), f);
+            handleFrame(l, f);
         }
 
         @Override public void onConnected(Link l) {
             Connection c = l.connection();
             String what = c.lanPeer ? "LAN link, file limit " + cfg.maxFileBytesLocal / (1024 * 1024) + " MB"
                                     : "internet link, file limit " + cfg.maxFileBytes / (1024 * 1024) + " MB";
+            Logger.i("connected via " + c.via + " to " + c.peer + " ["
+                    + Node.shortId(c.peerId) + "] (" + what + ")");
             setConnected(c);
-            Logger.i("connected via " + c.via + " to " + c.peer + " (" + what + ")");
         }
 
-        @Override public long lastSeq() {
-            synchronized (lock) { return lastServerSeq; }
+        @Override public long lastSeq(String target) {
+            Long v = seqByTarget.get(target);
+            return v == null ? 0 : v;
         }
 
-        @Override public void flushPending(Connection c) throws Exception {
-            SyncService.this.flushPending(c);
+        @Override public Object pendingClip() {
+            return pendingLocal;
+        }
+
+        @Override public void send(Link l, Object clip) throws Exception {
+            sendClip(l, clip);
+        }
+
+        @Override public void delivered(Link l, String hash) {
+            releasePending(hash);
         }
 
         @Override public boolean transferBusy() {
             return SyncService.this.transferBusy();
-        }
-
-        @Override public void onHeartbeat(long overshootMs) {
-            if (overshootMs > 20_000) {
-                // a sleep that overshoots by this much means the process was frozen meanwhile:
-                // the OS (or the ROM's battery manager) suspended us
-                Logger.w("process was suspended for ~" + overshootMs / 1000 + " s by the system — "
-                        + "exempt ClipSync from battery optimisation / background limits (see the app)");
-                suspendedOnce = true;
-            }
-            touchStatus();
         }
 
         @Override public boolean isRunning() { return running; }
@@ -729,70 +835,252 @@ public class SyncService extends Service {
         @Override public Config config() { return cfg; }
     };
 
-    private void mainLoop() {
-        while (running) {
-            // Only hold a connection while the screen is on, or while something is pending —
-            // and never try without a network (the callback wakes us when one appears).
+    // ------------------------------------------------------------------ one dialer per target
+    /**
+     * Keeps one link to one target alive, with its own back-off.
+     *
+     * <p><b>Its own</b>, and that is the point of one thread per target rather than one loop over
+     * them: a peer that is switched off must not slow the redial of one that is merely rebooting.
+     * The single shared back-off this replaces did exactly that, and it was invisible while there
+     * was only ever one target to punish.
+     */
+    private final class Dialer implements Runnable {
+        /** A listed address, or {@link #MDNS} for the peer found on the local network. */
+        final String target;
+        volatile Link live;
+        private volatile boolean stop;
+        private long backoff = BACKOFF_MIN_MS;
+
+        Dialer(String target) {
+            this.target = target;
+        }
+
+        void cancel() {
+            stop = true;
+            Link l = live;
+            if (l != null) l.close();
+        }
+
+        void resetBackoff() {
+            backoff = BACKOFF_MIN_MS;
+        }
+
+        @Override public void run() {
+            while (running && !stop) {
+                synchronized (lock) {
+                    // Hold a link while the screen is on, or while something is waiting to go out —
+                    // and never try without a network (the callback wakes us when one appears).
+                    while (running && !stop && ((!screenOn && pendingLocal == null) || !hasNetwork)) {
+                        try { lock.wait(60_000); } catch (InterruptedException ignored) {}
+                        touchStatus();                   // keep status.json fresh for the UI
+                    }
+                }
+                if (!running || stop) return;
+
+                boolean burst = false;
+                Link l = null;
+                try {
+                    l = open();
+                    live = l;
+                    if (register(l)) {
+                        backoff = BACKOFF_MIN_MS;
+                        burst = l.run();
+                    } else {
+                        // A duplicate of a peer another target already holds. Not transient, so it
+                        // waits the longest interval rather than falling through to an immediate
+                        // redial — without that it would re-dial, re-handshake and be rejected again
+                        // with no delay at all, which is a TCP connect plus an HKDF handshake per
+                        // iteration. Not permanent either: if the link that won goes away, this
+                        // target is how the peer is reached again.
+                        backoff = backoffMax();
+                    }
+                } catch (Connection.SelfConnection e) {
+                    Logger.i(e.getMessage());
+                    Connection.rememberSelf(e.target());
+                    if (!MDNS.equals(target)) {
+                        // A listed address that is this device stays wrong until the user edits it.
+                        Logger.i("not retrying " + target + " until the configuration changes");
+                        return;
+                    }
+                    // Discovery is different: finding ourselves says nothing about whether some
+                    // other peer is also advertising, and giving up would leave the LAN path dead
+                    // for the life of the process. Forget the cached address and try again later.
+                    Connection.forgetMdns();
+                    backoff = backoffMax();
+                } catch (Exception e) {
+                    Logger.i(target + ": " + e);
+                } finally {
+                    if (l != null) {
+                        l.close();
+                        if (l.peerId() != null) byPeer.remove(l.peerId(), l);
+                        teardown(l);
+                    }
+                    live = null;
+                    refreshStatus();
+                }
+                if (!running || stop) return;
+                // A peer that said goodbye closed us on purpose — as a duplicate, most often.
+                // Redialling straight away would hand it back exactly what it just discarded.
+                if (l != null && l.saidBye()) backoff = backoffMax();
+                else if (burst) continue;                // a burst ending is success, not a failure
+                waitBackoff();
+            }
+        }
+
+        private Link open() throws Exception {
+            Network net = connectivity.getActiveNetwork();
+            if (MDNS.equals(target)) return Link.viaMdns(SyncService.this, linkOwner, net);
+            return Link.toPeer(SyncService.this, linkOwner, target, net);
+        }
+
+        private void waitBackoff() {
+            if ((!screenOn && pendingLocal == null) || !hasNetwork) return;
+            long wait = Math.min(backoff, backoffMax());
+            Logger.i(target + ": retry in " + wait / 1000 + "s (" + (onLan ? "lan" : "mobile") + ")");
             synchronized (lock) {
-                while (running && ((!screenOn && pendingLocal == null) || !hasNetwork)) {
-                    try { lock.wait(60_000); } catch (InterruptedException ignored) {}
-                    touchStatus();                       // keep status.json fresh for the UI
-                }
+                try { lock.wait(wait); } catch (InterruptedException ignored) {}
             }
-            if (!running) break;
+            if (backoff == wait) backoff = Math.min(wait * 2, backoffMax());   // unless a change reset it
+            else if (backoff > backoffMax()) backoff = backoffMax();
+        }
+    }
 
-            final boolean lan = onLan;
-            // One Link at a time, still. Everything the session does now lives in Link; this loop
-            // has gone back to being what it should have been all along — decide whether to be
-            // connected, open one, run it, back off. Step 2 starts several of these.
-            try (Link l = new Link(this, linkOwner, lan, connectivity.getActiveNetwork())) {
-                // Both fields under the lock, and both together: dropConnection() tests `link`, so a
-                // drop landing between two bare assignments would clear them and then have `conn`
-                // resurrected by the second one — a live-looking pointer to a closed socket.
-                synchronized (lock) {
-                    link = l;
-                    conn = l.connection();
-                }
-                backoff = BACKOFF_MIN_MS;
-                // A burst ending is success, not a failure to back off from; `continue` still runs
-                // the resource close and the finally, exactly as the old code's did.
-                if (l.run()) continue;
-            } catch (Connection.SelfConnection e) {
-                // The target turned out to be this device. Remembering it is what stops it occupying
-                // a reconnect cycle forever, failing in a way that looks like a network problem —
-                // the next connectAny skips it, and the backoff is left alone so that a *real* peer
-                // failing for a different reason does not inherit this one's penalty.
-                Logger.i(e.getMessage() + " — not retrying that address until the configuration changes");
-                Connection.rememberSelf(e.target());
-            } catch (Exception e) {
-                Logger.i("disconnected: " + e);
-            } finally {
-                if (conn != null) dropConnection();
-                // transfers die with the control connection; partial data stays on disk.
-                // An unfinished upload / unanswered offer is offered again on the next connection,
-                // and the PC then asks only for the chunks it is still missing.
-                Files.Ref unanswered = null;
-                Transfer u = upload, d = download;
-                if (d != null) { d.abort(); d.partial.keep(); download = null; }
-                if (u != null) { if (!u.isAborted()) unanswered = u.ref; u.abort(); upload = null; }
-                synchronized (offered) {
-                    for (Files.Ref r : offered.values()) unanswered = r;
-                    offered.clear();
-                }
-                if (unanswered != null) synchronized (lock) { if (pendingLocal == null) pendingLocal = unanswered; }
-                if (running) setStatus(screenOn ? "disconnected" : "idle", screenOn ? null : "screen off");
+    /**
+     * The target name for "whatever local discovery finds".
+     *
+     * <p>An asterisk because it cannot appear in a host name, so this collides with nothing a user
+     * can type — and <b>not</b> a {@code \u0000} sentinel, which would have been the obvious
+     * choice and does not compile: Java processes unicode escapes before lexing, so that one puts a
+     * real NUL in the source file rather than in the string.
+     */
+    private static final String MDNS = "*discovery*";
+
+    /**
+     * Claim this peer, or discover that we already hold it.
+     *
+     * <p>Two targets can be two names for one machine — a listed address and its mDNS
+     * advertisement, or two listed addresses — and it is only here, with the handshake done and an
+     * id in hand, that this becomes knowable.
+     *
+     * <p>Which link survives: <b>the older one</b>. Both were opened by this device, so §5's rules
+     * 1 and 2 do not apply — rule 1 arbitrates by which peer address is on-link and rule 2 by which
+     * node opened what, and both need the other end to have dialled us, which Android cannot yet do.
+     * Rule 3 is the one that fits, and it is also the stable choice: the older link is the one that
+     * is already carrying traffic.
+     */
+    private boolean register(Link l) {
+        String id = l.peerId();                         // never null: hello() refuses a peer with no id
+        Link existing = byPeer.putIfAbsent(id, l);
+        if (existing == null || existing == l) return true;
+        // It died between the handshake and now. replace() and not put(): a third link may have
+        // registered in the meantime, and overwriting it unconditionally would lose it from the map
+        // while it went on running — invisible to the heartbeat, the broadcast and the status.
+        if (!existing.isOpen() && byPeer.replace(id, existing, l)) return true;
+        Logger.i(l.target + " is " + existing.target + " by another name [" + Node.shortId(id)
+                + "] — closing the newer link");
+        l.bye("duplicate");
+        return false;
+    }
+
+    /**
+     * After a link goes: stop whatever it was carrying, and keep what can be resumed.
+     *
+     * <p>Transfers are still one at a time for the whole device, so this only has to tell the one in
+     * flight apart from nothing — but it does have to check whose it was, because with several links
+     * a closing one must not abort a transfer another is running.
+     */
+    private void teardown(Link l) {
+        Connection c = l.connection();
+        Files.Ref unanswered = null;
+        Transfer u = upload, d = download;
+        // Only what this link was carrying. With one connection "no connection given" could mean
+        // "mine"; with several it would mean "everyone's", and a target that merely failed to
+        // connect would abort the transfer a different peer was happily running.
+        if (d != null && d.control == c) { d.abort(); d.partial.keep(); download = null; }
+        if (u != null && u.control == c) {
+            if (!u.isAborted()) unanswered = u.ref;
+            u.abort();
+            upload = null;
+        }
+        // `offered` is deliberately NOT cleared here. It is what answers a WANT, it is keyed by hash
+        // rather than by peer, and the same file is offered to every link — so clearing it when one
+        // link dies would make the others' offers unanswerable. It is bounded at 8 and emptied by
+        // HAVE / SKIP / ABORT, or wholesale when a newer clip supersedes everything.
+        // Back into the pending slot only if nothing newer has taken it: a clip the user copied
+        // while the transfer was dying is the one that should win.
+        if (unanswered != null) synchronized (lock) { if (pendingLocal == null) pendingLocal = unanswered; }
+    }
+
+    /** Recompute the one-peer status file from however many links are live. Step (c) widens this. */
+    private void refreshStatus() {
+        if (!running) return;
+        Link l = anyLive();
+        if (l != null) setConnected(l.connection());
+        else setStatus(screenOn ? "disconnected" : "idle", screenOn ? null : "screen off");
+    }
+
+    /**
+     * Start a dialer for every target the configuration names, and stop the ones it no longer does.
+     *
+     * <p>Called at start-up and on every reload. Dialers for targets that survive a reload are left
+     * running: a configuration change that adds a peer should not disconnect the others.
+     */
+    private void syncDialers() {
+        java.util.Set<String> want = new java.util.LinkedHashSet<>(cfg.peers);
+        if (cfg.discovery) want.add(MDNS);
+        java.util.List<Dialer> cancel = new ArrayList<>();
+        synchronized (dialers) {
+            for (java.util.Iterator<java.util.Map.Entry<String, Dialer>> it = dialers.entrySet().iterator(); it.hasNext(); ) {
+                java.util.Map.Entry<String, Dialer> e = it.next();
+                if (!want.contains(e.getKey())) { cancel.add(e.getValue()); it.remove(); }
             }
+            for (String t : want) {
+                if (dialers.containsKey(t)) continue;
+                Dialer d = new Dialer(t);
+                dialers.put(t, d);
+                Thread th = new Thread(d, "clipsync-dial-" + (MDNS.equals(t) ? "mdns" : t));
+                th.setDaemon(true);
+                th.start();
+            }
+        }
+        for (Dialer d : cancel) d.cancel();
+    }
 
-            if (!running) break;
-            if ((screenOn || pendingLocal != null) && hasNetwork) {
-                long wait = Math.min(backoff, backoffMax());
-                Logger.i("retry in " + wait / 1000 + "s (" + (onLan ? "lan" : "mobile") + ")");
-                setStatus("disconnected", "retry in " + wait / 1000 + " s");
-                synchronized (lock) {
-                    try { lock.wait(wait); } catch (InterruptedException ignored) {}
+    /**
+     * One heartbeat for the device, not one per link.
+     *
+     * <p>A phone has one radio: N pingers would wake it N times to do the same job, and the
+     * frozen-process detector and the status timestamp must not run N times either. The interval
+     * still depends on the transport, and every link on a phone shares one transport, so there is
+     * exactly one right answer to ask for.
+     */
+    private void heartbeat() {
+        while (running) {
+            long interval = onLan ? PING_WIFI_MS : PING_MOBILE_MS;
+            long before = System.currentTimeMillis();
+            try { Thread.sleep(interval); } catch (InterruptedException e) { return; }
+            long overshoot = System.currentTimeMillis() - before - interval;
+            if (overshoot > 20_000) {
+                // a sleep that overshoots by this much means the process was frozen meanwhile:
+                // the OS (or the ROM's battery manager) suspended us
+                Logger.w("process was suspended for ~" + overshoot / 1000 + " s by the system — "
+                        + "exempt ClipSync from battery optimisation / background limits (see the app)");
+                suspendedOnce = true;
+            }
+            touchStatus();
+            for (java.util.Map.Entry<String, Link> e : byPeer.entrySet()) {
+                Link l = e.getValue();
+                if (!l.isOpen()) { byPeer.remove(e.getKey(), l); continue; }
+                // A failed ping is a dead link. Closing it is what makes its own dialer's blocking
+                // recv() return, which is what gets it retried — so this is the path that notices a
+                // peer that went away without closing, and it must also drop it from the map here
+                // rather than leave it looking connected until the dialer's finally runs.
+                try {
+                    l.ping();
+                } catch (Exception ex) {
+                    l.close();
+                    byPeer.remove(e.getKey(), l);
                 }
-                if (backoff == wait) backoff = Math.min(wait * 2, backoffMax());   // unless a network change reset it
-                else if (backoff > backoffMax()) backoff = backoffMax();
             }
         }
     }

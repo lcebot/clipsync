@@ -229,7 +229,7 @@ public class MainActivity extends AppCompatActivity {
         pathsError = findViewById(R.id.paths_error);
         ownContent = findViewById(R.id.own_content);
         ownChevron = findViewById(R.id.own_chevron);
-        findViewById(R.id.own_card).setOnClickListener(v -> {
+        Haptics.onClick(findViewById(R.id.own_card), () -> {
             boolean open = ownContent.getVisibility() != View.VISIBLE;
             // Never close over an error. The message is inside the group, and hiding it would leave
             // Apply disabled with nothing on screen to say why. Doing nothing is not a dead end
@@ -535,14 +535,14 @@ public class MainActivity extends AppCompatActivity {
             e.addTextChangedListener(revalidate);
         discovery.setOnCheckedChangeListener((b, checked) -> { applySwitches(true); validate(); });
         direct.setOnCheckedChangeListener((b, checked) -> { applySwitches(true); validate(); });
-        pskRandom.setOnClickListener(v -> newPsk());
+        Haptics.onClick(pskRandom, this::newPsk);
         threads.setLabelFormatter(v -> String.valueOf(Config.THREAD_STEPS[Math.max(0, Math.min(4, Math.round(v)))]));
-        threads.addOnChangeListener((s, v, u) -> threadsLabel.setText(getString(R.string.threads_label, threadsValue())));
+        Haptics.bind(threads, (s, v, u) -> threadsLabel.setText(getString(R.string.threads_label, threadsValue())));
         browse.setLabelFormatter(v -> Config.BROWSE_STEPS_MS[Math.max(0, Math.min(6, Math.round(v)))] + " ms");
-        browse.addOnChangeListener((s, v, u) -> browseLabel.setText(getString(R.string.browse_label, browseValue())));
+        Haptics.bind(browse, (s, v, u) -> browseLabel.setText(getString(R.string.browse_label, browseValue())));
 
-        applyFab.setOnClickListener(v -> apply());
-        stopFab.setOnClickListener(v -> {
+        Haptics.onClick(applyFab, this::apply);
+        Haptics.onClick(stopFab, () -> {
             setAutoStart(false);                       // watchdog / boot must not bring it back
             stopService(new Intent(this, SyncService.class));
             waitingForStop = true;
@@ -550,8 +550,8 @@ public class MainActivity extends AppCompatActivity {
             refreshActions();                          // greys Stop out until the service is gone
             snack(R.string.snack_stopped);
         });
-        clearFab.setOnClickListener(v -> { Logger.clear(); showLog(); });
-        copyFab.setOnClickListener(v -> {
+        Haptics.onClick(clearFab, () -> { Logger.clear(); showLog(); });
+        Haptics.onClick(copyFab, () -> {
             getSystemService(ClipboardManager.class).setPrimaryClip(ClipData.newPlainText("clipsync log", log.getText()));
             snack(R.string.snack_log_copied);
         });
@@ -559,7 +559,7 @@ public class MainActivity extends AppCompatActivity {
         // width by translation keeps the pairing out of the layout pass entirely
         pairFabs(applyFab, stopFab);
         pairFabs(copyFab, clearFab);
-        batteryFix.setOnClickListener(v -> {
+        Haptics.onClick(batteryFix, () -> {
             Intent i = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).setData(Uri.parse("package:" + getPackageName()));
             try { startActivity(i); } catch (Exception e) { startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)); }
         });
@@ -643,11 +643,12 @@ public class MainActivity extends AppCompatActivity {
         pageLog.setNestedScrollingEnabled(false);
 
         nav.setOnItemSelectedListener(item -> {
+            Haptics.tick(nav);
             showPage(item.getItemId() == R.id.nav_log, true);
             return true;
         });
 
-        statusChip.setOnClickListener(v -> showConnectionDetails());
+        Haptics.onClick(statusChip, this::showConnectionDetails);
         // the dot is the chip's icon, so the pulse animates that drawable rather than a second view
         pulse = ValueAnimator.ofInt(255, 60);
         pulse.setDuration(1400);
@@ -769,8 +770,8 @@ public class MainActivity extends AppCompatActivity {
         title.setText(connectionKind == null ? getString(R.string.state_stopped) : connectionKind);
         peer.setText(peerName == null ? "—" : peerName);
         addr.setText(peerAddr == null ? "—" : peerAddr);
-        peer.setOnClickListener(v -> copy(peerName));
-        addr.setOnClickListener(v -> copy(peerAddr));
+        Haptics.onClick(peer, () -> copy(peerName));
+        Haptics.onClick(addr, () -> copy(peerAddr));
         sheet.show();
     }
 

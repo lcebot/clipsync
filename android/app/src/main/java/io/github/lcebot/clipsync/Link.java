@@ -1,58 +1,65 @@
 package io.github.lcebot.clipsync;
 
+import android.net.Network;
+
+import androidx.annotation.Nullable;
+
 /**
  * One session with one peer, from the moment a socket is opened to the moment it is torn down.
  *
- * <p><b>This class exists to be duplicated.</b> Everything in it used to live inside one lexical
- * scope in {@code SyncService.mainLoop}, which braided seven concerns together — gating, connecting,
- * the handshake, the screen-off burst, the heartbeat, the read loop and teardown — and used
- * {@code conn == c} as the test for "am I still the current session". That idiom means "is this
- * <em>the</em> one", not "is this alive", and it does not generalise to several at once. Pulling the
- * session out first makes holding N of them a matter of starting N of these, rather than a rewrite
- * of the loop that holds one.
- *
- * <p><b>Behaviour here is deliberately identical to what mainLoop did.</b> This step is a move, not a
- * change: the same order, the same timeouts, the same logging, the same teardown. What is different
- * is only that the decisions which will have to become per-peer or global are now visible as
- * separate methods rather than as consecutive paragraphs. Each one is marked below with which way it
- * will go, because that is the question the next step has to answer and this is where the evidence
- * for it lives.
+ * <p>Everything in here used to live inside one lexical scope in {@code SyncService.mainLoop}, which
+ * braided seven concerns together — gating, connecting, the handshake, the screen-off burst, the
+ * heartbeat, the read loop and teardown — and used {@code conn == c} as the test for "am I still the
+ * current session". That idiom means "is this <em>the</em> one", not "is this alive", and it is why
+ * the file could only ever hold one connection.
  *
  * <p>The owner ({@link SyncService}) supplies everything shared through {@link Owner}. The split is
  * the point: what a Link may decide for itself is what it holds, and what belongs to the device is
- * what it has to ask for.
+ * what it has to ask for. Two things that were per-session and turned out to be per-device are
+ * <em>not</em> here as a result:
  *
- * <p>Teardown is <em>not</em> here. It still runs in the service's retry loop, because it also
- * decides whether and when to try again, and that decision is about to become per-target rather than
- * per-session. Moving it before that is settled would move it twice.
+ * <ul>
+ *   <li><b>the heartbeat.</b> One timer for the device, not one per link — N pingers would wake the
+ *       radio N times on a phone that has exactly one radio, and the frozen-process detector and the
+ *       status timestamp must not run N times either. {@link #ping()} is all that is left here.
+ *   <li><b>the retry.</b> It belongs to the target, which outlives any session to it.
+ * </ul>
+ *
+ * <p>And one thing that was global and turned out to be per-link is here: {@link #sentHash}. A clip
+ * has to reach every peer, so "have I already sent this" is a question each link answers for itself.
  */
 final class Link implements AutoCloseable {
     /** What a session needs from the service. Shared state stays on the far side of this. */
     interface Owner {
-        /** GLOBAL: the clipboard is one device's, however many peers there are. */
+        /** The clipboard is one device's, however many peers there are. */
         void onFrame(Link link, Connection.Frame frame) throws Exception;
 
-        /** GLOBAL for now; per-peer once several peers can be behind on different things. */
         void onConnected(Link link);
 
         /**
-         * How far into the peer's stream we have already seen, asked for at handshake time.
+         * How far into this peer's stream we have seen.
          *
-         * <p>Asked for rather than passed in, and that is not arbitrary: the connect can take as long
-         * as an mDNS browse, and a transfer finishing during it advances the cursor. Reading it
-         * before the connect would send a value that was already stale by the time it went out. It is
-         * also the shape step 2 needs — one cursor per peer, looked up by the peer being dialled.
+         * <p>Keyed by <b>target</b> and not by node id, for a reason that only shows up here: the
+         * cursor has to go out in our HELLO, and the peer does not say who it is until its HELLO
+         * comes back. The target is the only name we have at that moment, and in practice it maps to
+         * one peer — a listed address, or the service instance mDNS resolved.
+         *
+         * <p>Asked for at handshake time rather than passed in: a connect can take as long as an
+         * mDNS browse, and a transfer finishing during it advances the cursor.
          */
-        long lastSeq();
+        long lastSeq(String target);
 
-        /** GLOBAL: something to deliver. Consumed once today; broadcast in step 2. */
-        void flushPending(Connection c) throws Exception;
+        /** The newest local clip, or null. Not consumed — every link delivers it once. */
+        @Nullable Object pendingClip();
 
-        /** GLOBAL: is a transfer or an open offer still outstanding? Keyed by peer in a later step. */
+        /** Put one clip on one link. Throws like any send; the caller decides what that means. */
+        void send(Link link, Object clip) throws Exception;
+
+        /** This link has now delivered that content hash. */
+        void delivered(Link link, String hash);
+
+        /** Is a transfer or an open offer still outstanding anywhere? */
         boolean transferBusy();
-
-        /** GLOBAL: the suspend detector and the status heartbeat, which must not run N times. */
-        void onHeartbeat(long overshootMs);
 
         boolean isRunning();
 
@@ -63,28 +70,47 @@ final class Link implements AutoCloseable {
 
     private final Owner owner;
     private final Connection conn;
-    private final boolean lan;
+    /** The target this link was dialled for: a listed address, or the mDNS service name. */
+    final String target;
     private volatile boolean open = true;
-
     /**
-     * Opens the socket and completes the handshake. Throws exactly what mainLoop used to let
-     * propagate, including {@link Connection.SelfConnection}, which the caller treats specially.
+     * The content hash this link has already delivered.
      *
+     * <p>Per link, not global, and that is the difference between one peer and several: the old code
+     * consumed the pending clip, so the first connection to flush it took it away from the rest. A
+     * clip has to reach every peer, including one that connects a minute later.
      */
-    Link(SyncService service, Owner owner, boolean lan, android.net.Network net) throws Exception {
+    private volatile String sentHash;
+
+    /** Opens the socket and completes the handshake, or throws having closed whatever it opened. */
+    private Link(SyncService service, Owner owner, String target, Connection c) throws Exception {
         this.owner = owner;
-        this.lan = lan;
-        this.conn = new Connection(service, owner.config(), lan, net);
+        this.target = target;
+        this.conn = c;
         try {
-            conn.hello(service, owner.lastSeq());
+            c.hello(service, owner.lastSeq(target));
         } catch (Exception e) {
-            conn.close();                  // the socket is ours from the moment the constructor ran
+            c.close();                     // the socket is ours from the moment we were handed it
             throw e;
         }
     }
 
+    static Link toPeer(SyncService s, Owner o, String peer, Network net) throws Exception {
+        return new Link(s, o, peer, Connection.toPeer(s, o.config(), peer, net));
+    }
+
+    static Link viaMdns(SyncService s, Owner o, Network net) throws Exception {
+        Connection c = Connection.viaMdns(s, o.config(), net);
+        return new Link(s, o, c.peerName, c);
+    }
+
     Connection connection() {
         return conn;
+    }
+
+    /** The peer's node id, known once the handshake is done. */
+    String peerId() {
+        return conn.peerId;
     }
 
     boolean isOpen() {
@@ -92,11 +118,8 @@ final class Link implements AutoCloseable {
     }
 
     /**
-     * The test that replaces {@code conn == c}.
-     *
-     * <p>The old one asked "is this still the connection the service is holding", which happened to
-     * answer "is this session alive" only because there was exactly one. This asks the question that
-     * was actually meant, and it stays true when there are several.
+     * The test that replaces {@code conn == c}: the question that was actually meant, and one that
+     * stays meaningful when there are several links.
      */
     private boolean alive() {
         return open && owner.isRunning();
@@ -109,22 +132,74 @@ final class Link implements AutoCloseable {
     }
 
     /**
+     * Close deliberately, telling the peer why first.
+     *
+     * <p>The BYE is the whole point: a close without one becomes a loop. The far side would see only
+     * a disconnect, reconnect, and rebuild exactly the link that was discarded. (§5)
+     */
+    void bye(String reason) {
+        try {
+            conn.sendJson(Connection.T_BYE, new org.json.JSONObject().put("reason", reason));
+        } catch (Exception ignored) {
+            // it is going away regardless; a peer that cannot hear the reason still sees the close
+        }
+        close();
+    }
+
+    /** One keep-alive frame, sent by the device's single heartbeat. */
+    void ping() throws Exception {
+        if (alive()) conn.send(Connection.T_PING);
+    }
+
+    /**
+     * Send the current local clip if this link has not already delivered it.
+     *
+     * <p>Idempotent, because it is called from three places — on connect, when a clip is captured,
+     * and after a burst — and a peer must get a clip exactly once however many of those fire.
+     */
+    synchronized void deliver() throws Exception {
+        Object clip = owner.pendingClip();
+        if (clip == null) return;
+        String h = clip instanceof Files.Ref ? ((Files.Ref) clip).sha256 : Crypto.sha256Hex((String) clip);
+        if (h.equals(sentHash)) return;
+        // Marked before the send, not after: a send that throws has still put the clip on the wire
+        // as far as we can tell, and retrying it on the next tick would be a duplicate. The link is
+        // about to be torn down anyway, and the next one starts with a clean sentHash.
+        sentHash = h;
+        owner.send(this, clip);
+        owner.delivered(this, h);
+    }
+
+    /** The content hash this link has delivered, or null. */
+    String sentHash() {
+        return sentHash;
+    }
+
+    /** True once the peer has said goodbye: the link is closing on purpose, not failing. */
+    boolean saidBye() {
+        return bye;
+    }
+
+    void markBye() {
+        bye = true;
+    }
+
+    private volatile boolean bye;
+
+    /**
      * Run the session to its end. Returns when the peer goes away, the screen-off burst finishes, or
      * the link is closed from outside.
      *
      * @return true when this was a screen-off burst rather than a session that ended. The caller
-     *         must not back off on that: a burst finishing is the expected outcome, not a failure,
-     *         and treating it as one would double the back-off and overwrite the "idle" status every
-     *         time the device delivered a clip while asleep.
+     *         must not back off on that: a burst finishing is the expected outcome, not a failure.
      */
     boolean run() throws Exception {
         owner.onConnected(this);
-        owner.flushPending(conn);
+        deliver();
         if (!owner.isScreenOn()) {
             burst();
             return true;
         }
-        heartbeat();
         while (alive()) {
             owner.onFrame(this, conn.recv());
         }
@@ -136,10 +211,6 @@ final class Link implements AutoCloseable {
      * file, or anything newer — then let the link drop so the radio can sleep. While an offer is open
      * or a transfer is running the window stays open, with a hard cap; otherwise one second of
      * silence ends it.
-     *
-     * <p>GLOBAL, and this is the one that will need a decision rather than a rename: with several
-     * peers, "wake up briefly and deliver" cannot mean N independent bursts, because each is a radio
-     * wake-up on a device that was deliberately asleep.
      */
     private void burst() {
         long until = System.currentTimeMillis() + BURST_CAP_MS;
@@ -153,36 +224,6 @@ final class Link implements AutoCloseable {
         }
     }
 
-    /**
-     * Keep-alive, and the two things that ride along with it: the frozen-process detector and the
-     * status timestamp the UI reads for liveness.
-     *
-     * <p>GLOBAL in everything but the PING itself. The interval is per-link because it depends on
-     * that link's transport, but a device with several peers must not run several detectors or
-     * several status writers — and ideally not several timers at all, since each one wakes the radio.
-     * {@link Owner#onHeartbeat} is where those land, so that step 2 can coalesce them without
-     * touching this.
-     */
-    private void heartbeat() {
-        Thread t = new Thread(() -> {
-            try {
-                long interval = lan ? PING_WIFI_MS : PING_MOBILE_MS;
-                while (alive()) {
-                    long before = System.currentTimeMillis();
-                    Thread.sleep(interval);
-                    owner.onHeartbeat(System.currentTimeMillis() - before - interval);
-                    if (alive()) conn.send(Connection.T_PING);
-                }
-            } catch (Exception ignored) {
-            }
-        }, "clipsync-ping");
-        t.setDaemon(true);
-        t.start();
-    }
-
-    // keep-alive: a peer drops a silent client after 90 s. Cellular pings are spaced wider because
-    // every one of them pulls the modem out of its idle state.
-    static final long PING_WIFI_MS = 30_000, PING_MOBILE_MS = 45_000;
     private static final long BURST_CAP_MS = 120_000;
     // int, because Connection.setSoTimeout takes one — a long here compiles as a lossy conversion.
     private static final int BURST_BUSY_MS = 10_000, BURST_IDLE_MS = 1_000;

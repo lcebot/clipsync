@@ -71,7 +71,7 @@ final class AddressList {
         this.hintRes = hintRes;
         this.allowEmpty = allowEmpty;
         this.host = host;
-        addButton.setOnClickListener(v -> { add("", true); host.onChanged(); });
+        Haptics.onClick(addButton, () -> { add("", true); host.onChanged(); });
     }
 
     // ------------------------------------------------------------------ contents
@@ -142,7 +142,9 @@ final class AddressList {
             @Override public void onTextChanged(CharSequence s, int a, int b, int c) { }
             @Override public void afterTextChanged(Editable s) { host.onChanged(); }
         });
-        row.setEndIconOnClickListener(v -> remove(row));
+        // The trailing icon is a button, whatever it is attached to: "no haptics on text fields"
+        // means the field, not the control sitting in its corner.
+        row.setEndIconOnClickListener(v -> { Haptics.tick(v); remove(row); });
         // Inflated before the transition begins so the new row can be named as the thing that fades.
         if (animate) TransitionManager.beginDelayedTransition(host.sceneRoot(), host.motion(row));
         box.addView(row);

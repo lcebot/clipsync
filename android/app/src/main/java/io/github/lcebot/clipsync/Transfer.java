@@ -29,7 +29,14 @@ public final class Transfer {
     public final Files.Partial partial;    // download
     private final Context ctx;
     private final Config cfg;
-    private final Connection control;
+    /**
+     * The control connection this transfer belongs to.
+     *
+     * <p>Readable, because with several links the service has to tell a transfer's own peer apart
+     * from the others: a link closing must abort only what it was carrying, and an ABORT must go to
+     * the peer that is sending or receiving rather than to whichever one the caller had to hand.
+     */
+    final Connection control;
     private final List<int[]> ranges;
     private final Done done;
     private final AtomicBoolean aborted = new AtomicBoolean(false);
