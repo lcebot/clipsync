@@ -145,34 +145,77 @@
 
             <LinearLayout style="@style/ClipSync.CardBody">
 
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:paddingStart="16dp"
-                    android:textAppearance="?attr/textAppearanceBodyLarge"
-                    android:text="@string/section_own" />
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="2dp"
-                    android:paddingStart="16dp"
-                    android:textAppearance="?attr/textAppearanceBodySmall"
-                    android:textColor="?attr/colorOnSurfaceVariant"
-                    android:text="@string/own_help" />
-
+                <!-- The header is the whole row, not just the chevron: a 24dp target beside a label
+                     that plainly belongs to it is a target people miss. minHeight is the M3 touch
+                     target, and the ripple comes from the platform's own list-item background.
+                     No paddingStart on either text: they line up with the LEFT EDGE of the text
+                     boxes below, which is where the card body already puts them. The 16dp inset
+                     belongs to text *inside* a box, and these are not inside one. -->
                 <LinearLayout
-                    android:id="@+id/own_box"
+                    android:id="@+id/own_header"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:orientation="vertical" />
+                    android:minHeight="48dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:background="?attr/selectableItemBackground"
+                    android:clickable="true"
+                    android:focusable="true">
 
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/own_add"
-                    style="@style/ClipSync.SettingsButton"
-                    android:layout_marginTop="4dp"
-                    android:text="@string/peer_add"
-                    app:icon="@drawable/ic_add" />
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_weight="1"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:textAppearance="?attr/textAppearanceBodyLarge"
+                            android:text="@string/section_own" />
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:textAppearance="?attr/textAppearanceBodySmall"
+                            android:textColor="?attr/colorOnSurfaceVariant"
+                            android:text="@string/own_help" />
+                    </LinearLayout>
+
+                    <ImageView
+                        android:id="@+id/own_chevron"
+                        android:layout_width="24dp"
+                        android:layout_height="24dp"
+                        android:layout_marginStart="8dp"
+                        android:contentDescription="@string/own_expand"
+                        android:src="@drawable/ic_expand" />
+                </LinearLayout>
+
+                <!-- Collapsed by default: most devices have no name of their own, so this is a group
+                     that exists for the minority who run a dynamic DNS client. MainActivity expands
+                     it when the list is non-empty or carries an error — a setting the user cannot
+                     see is worse than one that takes a tap. -->
+                <LinearLayout
+                    android:id="@+id/own_content"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:visibility="gone"
+                    tools:visibility="visible">
+
+                    <LinearLayout
+                        android:id="@+id/own_box"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/own_add"
+                        style="@style/ClipSync.SettingsButton"
+                        android:layout_marginTop="4dp"
+                        android:text="@string/peer_add"
+                        app:icon="@drawable/ic_add" />
+                </LinearLayout>
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 

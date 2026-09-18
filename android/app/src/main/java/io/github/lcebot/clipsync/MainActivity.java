@@ -74,6 +74,8 @@ public class MainActivity extends AppCompatActivity {
     private View discoveryCard, directCard;
     /** Shown under the pair when both switches are off — see {@link #validate()}. */
     private View pathsError;
+    /** The collapsible own-addresses group: its body and the chevron that turns. */
+    private View ownContent, ownChevron;
     private Slider browse, threads;
     private TextView browseLabel, threadsLabel;
     private ViewGroup settingsRoot;
@@ -216,6 +218,9 @@ public class MainActivity extends AppCompatActivity {
         discoveryCard = findViewById(R.id.discovery_card);
         directCard = findViewById(R.id.direct_card);
         pathsError = findViewById(R.id.paths_error);
+        ownContent = findViewById(R.id.own_content);
+        ownChevron = findViewById(R.id.own_chevron);
+        findViewById(R.id.own_header).setOnClickListener(v -> setOwnExpanded(ownContent.getVisibility() != View.VISIBLE, true));
         browse = findViewById(R.id.browse);
         browseLabel = findViewById(R.id.browse_label);
         threads = findViewById(R.id.threads);
@@ -258,6 +263,9 @@ public class MainActivity extends AppCompatActivity {
         direct.setChecked(bool(p.getProperty("direct", "false")));
         peerList.setValues(Config.peerList(p.getProperty("peers", "")));
         ownList.setValues(Config.peerList(p.getProperty("own_addresses", "")));
+        // Collapsed by default, but never over content: a device that has an address of its own
+        // should show it, and a group the user cannot see is worse than one that takes a tap.
+        setOwnExpanded(!ownList.values().isEmpty(), false);
         port.setText(p.getProperty("port", "47521"));
         psk.setText(p.getProperty("psk", ""));
         textKb.setText(String.valueOf(longOf(p, "max_bytes", 1048576) / 1024));
@@ -322,6 +330,28 @@ public class MainActivity extends AppCompatActivity {
         discoveryCard.setVisibility(wantDiscovery);
         directCard.setVisibility(wantDirect);
         peerList.setEnabled(direct.isChecked());
+    }
+
+    /**
+     * Open or close the own-addresses group.
+     *
+     * <p>Built from a card, a clickable header and the transition machinery that is already here,
+     * because Material's View library has no expandable *container* — {@code ExpandableWidget} is
+     * an interface the FAB and the Chip implement for themselves, not something a group of settings
+     * can be. So the M3 parts are used and the assembly is local: a list-item-height header with the
+     * platform ripple, a chevron that turns, and the same fade-and-reflow every other group on this
+     * page uses when it appears.
+     */
+    private void setOwnExpanded(boolean open, boolean animate) {
+        // Nothing to do is not the same as doing nothing cheaply: validate() runs on every keystroke
+        // and calls this whenever the group holds an error, so without this guard every character
+        // typed anywhere on the page would start a transition.
+        if (open == (ownContent.getVisibility() == View.VISIBLE)) return;
+        if (animate) TransitionManager.beginDelayedTransition(
+                settingsRoot, visibilityMotion(turning(ownContent, open ? View.VISIBLE : View.GONE)));
+        ownContent.setVisibility(open ? View.VISIBLE : View.GONE);
+        ownChevron.setRotation(open ? 180f : 0f);
+        ownChevron.setContentDescription(getString(open ? R.string.own_collapse : R.string.own_expand));
     }
 
     /**
@@ -443,7 +473,11 @@ public class MainActivity extends AppCompatActivity {
 
         boolean ok = anyPath;
         // The own list first: the peer list is checked against it, so it has to be current.
-        ok &= ownList.validate(Set.of(), null, null);
+        boolean ownOk = ownList.validate(Set.of(), null, null);
+        // An error inside a collapsed group is an error nobody can act on, and Apply is disabled
+        // with no visible reason. Opening it is the only honest thing to do.
+        if (!ownOk) setOwnExpanded(true, true);
+        ok &= ownOk;
         ok &= peerList.validate(ownList.normalised(),
                 getString(R.string.peer_empty_last, getString(R.string.switch_direct)),
                 getString(R.string.peer_empty));

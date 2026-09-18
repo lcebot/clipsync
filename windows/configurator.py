@@ -318,10 +318,7 @@ class App:
         own.grid(row=section_row, column=0, sticky="ew", padx=PAD, pady=(PAD, 0))
         own.columnconfigure(0, weight=1)
         ttk.Label(own, wraplength=460, foreground="#49454f",
-                  text="Names that point at this PC — typically a domain a dynamic DNS client here "
-                       "keeps pointed at it. ClipSync uses them to recognise itself, so it will not "
-                       "dial this machine, and so that an address of its own typed into the peer "
-                       "list below is refused rather than connected to."
+                  text="ClipSync uses them to recognise itself and avoid connecting to itself."
                   ).grid(row=0, column=0, sticky="w", padx=PAD, pady=(PAD, 0))
         self.own_list = AddressList(own, allow_empty=True, on_change=self.revalidate)
         self.own_list.grid(box_row=1, button_row=2)
