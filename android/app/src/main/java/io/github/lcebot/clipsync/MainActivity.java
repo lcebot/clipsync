@@ -356,12 +356,33 @@ public class MainActivity extends AppCompatActivity {
      * @see #visibilityMotion(View...)
      */
     private void applySwitches(boolean animate) {
+        int wantDiscovery = discovery.isChecked() ? View.VISIBLE : View.GONE;
+        int wantDirect = direct.isChecked() ? View.VISIBLE : View.GONE;
+        // validate() sets this one, just after this method returns and inside the same transition.
+        int wantError = discovery.isChecked() || direct.isChecked() ? View.GONE : View.VISIBLE;
+
         if (animate)
-            TransitionManager.beginDelayedTransition(
-                    settingsRoot, visibilityMotion(discoveryCard, directCard, pathsError));
-        discoveryCard.setVisibility(discovery.isChecked() ? View.VISIBLE : View.GONE);
-        directCard.setVisibility(direct.isChecked() ? View.VISIBLE : View.GONE);
+            TransitionManager.beginDelayedTransition(settingsRoot, visibilityMotion(
+                    turning(discoveryCard, wantDiscovery),
+                    turning(directCard, wantDirect),
+                    turning(pathsError, wantError)));
+
+        discoveryCard.setVisibility(wantDiscovery);
+        directCard.setVisibility(wantDirect);
         if (!direct.isChecked()) dropBlankRows();
+    }
+
+    /**
+     * The view if it is about to change visibility, otherwise null.
+     *
+     * <p>Only the views that actually turn over may be handed to {@link #visibilityMotion(View...)},
+     * because it excludes them from ChangeBounds. Naming a view that is merely going to *move* — the
+     * Direct card when the discovery card above it collapses — would exclude it from the only
+     * transition that could have moved it, and it would jump instead of sliding. A view fades or it
+     * moves; never both, and never neither.
+     */
+    private static View turning(View v, int want) {
+        return v != null && v.getVisibility() != want ? v : null;
     }
 
     /**
@@ -431,6 +452,10 @@ public class MainActivity extends AppCompatActivity {
      *       the fading view too and animates bounds that are degenerate on the GONE side, fighting
      *       the visibility animator on the same view.
      * </ul>
+     *
+     * <p>Which makes {@code fading} a precise list, not a convenient one: pass only the views whose
+     * visibility is changing in this pass. Everything else has to stay inside ChangeBounds' reach,
+     * or it will not move when the gap above it closes. {@link #turning(View, int)} is the filter.
      *
      * <p>1.14.0 has no spring-driven Transition — the Expressive spring attributes feed
      * SpringAnimation directly and are not wired into androidx.transition — so MaterialFade under its

@@ -128,7 +128,7 @@
         <!-- The two switches are named for HOW a peer is found, not for the route to it: a listed
              address is very often a LAN address too. Named that way, neither needs a subtitle.
 
-             Each switch is its own card, outside the card it governs, with the group's card 2dp under
+             Each switch is its own card, outside the card it governs, with the group's card 4dp under
              it — just a seam, so the two read as one unit while staying two surfaces. The switch turns
              a whole group on and off, so it sits beside the group rather than inside it, which also
              means the group's card is the hideable thing and the switch is never inside what it hides.
@@ -170,7 +170,7 @@
             style="?attr/materialCardViewFilledStyle"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="3dp">
+            android:layout_marginTop="4dp">
 
             <LinearLayout style="@style/ClipSync.CardBody">
 
@@ -215,7 +215,7 @@
             style="?attr/materialCardViewFilledStyle"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="3dp">
+            android:layout_marginTop="4dp">
 
             <LinearLayout style="@style/ClipSync.CardBody">
 
