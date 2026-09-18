@@ -74,8 +74,17 @@ public class MainActivity extends AppCompatActivity {
     private View discoveryCard, directCard;
     /** Shown under the pair when both switches are off — see {@link #validate()}. */
     private View pathsError;
+    /**
+     * How long the page takes to close a gap. The only pinned duration in the motion set — the fade
+     * itself keeps M3's own asymmetric timing — and anything that has to move in step with a reflow
+     * uses this rather than a number of its own.
+     */
+    private static final long REFLOW_MS = 220;
+
     /** The collapsible own-addresses group: its body and the chevron that turns. */
     private View ownContent, ownChevron;
+    /** Whether that group currently holds a bad address — see the card's click listener. */
+    private boolean ownHasError;
     private Slider browse, threads;
     private TextView browseLabel, threadsLabel;
     private ViewGroup settingsRoot;
@@ -220,7 +229,14 @@ public class MainActivity extends AppCompatActivity {
         pathsError = findViewById(R.id.paths_error);
         ownContent = findViewById(R.id.own_content);
         ownChevron = findViewById(R.id.own_chevron);
-        findViewById(R.id.own_header).setOnClickListener(v -> setOwnExpanded(ownContent.getVisibility() != View.VISIBLE, true));
+        findViewById(R.id.own_card).setOnClickListener(v -> {
+            boolean open = ownContent.getVisibility() != View.VISIBLE;
+            // Never close over an error. The message is inside the group, and hiding it would leave
+            // Apply disabled with nothing on screen to say why. Doing nothing is not a dead end
+            // either — the reason the tap was refused is the red line the user is looking at.
+            if (!open && ownHasError) return;
+            setOwnExpanded(open, true);
+        });
         browse = findViewById(R.id.browse);
         browseLabel = findViewById(R.id.browse_label);
         threads = findViewById(R.id.threads);
@@ -350,7 +366,12 @@ public class MainActivity extends AppCompatActivity {
         if (animate) TransitionManager.beginDelayedTransition(
                 settingsRoot, visibilityMotion(turning(ownContent, open ? View.VISIBLE : View.GONE)));
         ownContent.setVisibility(open ? View.VISIBLE : View.GONE);
-        ownChevron.setRotation(open ? 180f : 0f);
+        // The chevron turns over exactly the span the group takes to reflow — REFLOW_MS is the one
+        // ChangeBounds is pinned to. A rotation on its own timing would either finish early, over a
+        // card that is still moving, or lag one that has already settled.
+        float to = open ? 180f : 0f;
+        if (animate) ownChevron.animate().rotation(to).setDuration(REFLOW_MS).start();
+        else ownChevron.setRotation(to);
         ownChevron.setContentDescription(getString(open ? R.string.own_collapse : R.string.own_expand));
     }
 
@@ -428,7 +449,7 @@ public class MainActivity extends AppCompatActivity {
     private TransitionSet visibilityMotion(View... fading) {
         MaterialFade fade = new MaterialFade();
         ChangeBounds bounds = new ChangeBounds();
-        bounds.setDuration(220);
+        bounds.setDuration(REFLOW_MS);
         for (View v : fading) {
             if (v == null) continue;
             fade.addTarget(v);
@@ -474,8 +495,10 @@ public class MainActivity extends AppCompatActivity {
         boolean ok = anyPath;
         // The own list first: the peer list is checked against it, so it has to be current.
         boolean ownOk = ownList.validate(Set.of(), null, null);
+        ownHasError = !ownOk;
         // An error inside a collapsed group is an error nobody can act on, and Apply is disabled
-        // with no visible reason. Opening it is the only honest thing to do.
+        // with no visible reason. Opening it is the only honest thing to do. The card's click
+        // listener keeps it open from there.
         if (!ownOk) setOwnExpanded(true, true);
         ok &= ownOk;
         ok &= peerList.validate(ownList.normalised(),

@@ -318,7 +318,7 @@ class App:
         own.grid(row=section_row, column=0, sticky="ew", padx=PAD, pady=(PAD, 0))
         own.columnconfigure(0, weight=1)
         ttk.Label(own, wraplength=460, foreground="#49454f",
-                  text="ClipSync uses them to recognise itself and avoid connecting to itself."
+                  text="ClipSync uses them to recognise itself and avoid a network loop."
                   ).grid(row=0, column=0, sticky="w", padx=PAD, pady=(PAD, 0))
         self.own_list = AddressList(own, allow_empty=True, on_change=self.revalidate)
         self.own_list.grid(box_row=1, button_row=2)

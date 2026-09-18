@@ -137,30 +137,30 @@
              an empty list already means "this device has no name of its own", and disabling such a
              list could only cause the mistakes it exists to prevent. Its label therefore lives
              inside the card; a fourth section heading would flatten the three the page has. -->
+        <!-- The CARD is the touch target, not a rectangle inside it: MaterialCardView draws its
+             ripple clipped to its own rounded shape, so the press lands on the shape the user sees.
+             A LinearLayout with selectableItemBackground cannot — its ripple is a rectangle inside a
+             rounded card, and the corners give it away. -->
         <com.google.android.material.card.MaterialCardView
+            android:id="@+id/own_card"
             style="?attr/materialCardViewFilledStyle"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp">
+            android:layout_marginTop="8dp"
+            android:clickable="true"
+            android:focusable="true">
 
             <LinearLayout style="@style/ClipSync.CardBody">
 
-                <!-- The header is the whole row, not just the chevron: a 24dp target beside a label
-                     that plainly belongs to it is a target people miss. minHeight is the M3 touch
-                     target, and the ripple comes from the platform's own list-item background.
-                     No paddingStart on either text: they line up with the LEFT EDGE of the text
+                <!-- No paddingStart on either text: they line up with the LEFT EDGE of the text
                      boxes below, which is where the card body already puts them. The 16dp inset
                      belongs to text *inside* a box, and these are not inside one. -->
                 <LinearLayout
-                    android:id="@+id/own_header"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:minHeight="48dp"
                     android:gravity="center_vertical"
-                    android:orientation="horizontal"
-                    android:background="?attr/selectableItemBackground"
-                    android:clickable="true"
-                    android:focusable="true">
+                    android:orientation="horizontal">
 
                     <LinearLayout
                         android:layout_width="0dp"
@@ -195,11 +195,17 @@
                      that exists for the minority who run a dynamic DNS client. MainActivity expands
                      it when the list is non-empty or carries an error — a setting the user cannot
                      see is worse than one that takes a tap. -->
+                <!-- clickable, and that is the whole trick: it swallows taps so that editing inside
+                     an open group never collapses it, while the header strip above — which is not
+                     inside this view — still reaches the card. No coordinate arithmetic, and it
+                     stays right if the contents change height. -->
                 <LinearLayout
                     android:id="@+id/own_content"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="vertical"
+                    android:clickable="true"
+                    android:focusable="false"
                     android:visibility="gone"
                     tools:visibility="visible">
 

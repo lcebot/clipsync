@@ -49,7 +49,8 @@
     <!-- This device's own addresses (docs/p2p-plan.md §4a). No switch: an empty list already means
          "this device has no name of its own". -->
     <string name="section_own">This device\'s addresses</string>
-    <string name="own_help">ClipSync uses them to recognise itself and avoid connecting to itself.</string>
+    <!-- No full stop: nothing else on this page ends a supporting line with one. -->
+    <string name="own_help">ClipSync uses them to recognise itself and avoid a network loop</string>
     <string name="own_expand">Show this device\'s addresses</string>
     <string name="own_collapse">Hide this device\'s addresses</string>
     <string name="browse_label">mDNS browse timeout: %1$d ms</string>
