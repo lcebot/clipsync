@@ -15,7 +15,6 @@ import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.Uri;
-import android.os.Build;
 import android.os.IBinder;
 import android.os.PowerManager;
 
@@ -34,9 +33,8 @@ import java.util.concurrent.Executors;
  */
 public class SyncService extends Service {
     private static final String CHANNEL = "clipsync";
-    // keep-alive: server drops a silent client after 90 s. Cellular pings are spaced wider
-    // because every one of them pulls the modem out of its idle state.
-    private static final long PING_WIFI_MS = 30_000, PING_MOBILE_MS = 45_000;
+    // The keep-alive intervals moved to Link with the heartbeat that uses them: they depend on the
+    // transport of one link, which is the first thing here that turned out to be per-peer.
     // reconnect back-off (doubling), capped per transport. Both caps are 60 s for now — a
     // network change resets the back-off to the minimum immediately, so most reconnects don't
     // wait at all, and a shorter Wi-Fi cap only adds retries while the PC is offline.
@@ -50,7 +48,10 @@ public class SyncService extends Service {
     private void setStatus(String state) { setStatus(state, null); }
     private void setStatus(String state, String detail) { publish(state, detail, null, false, null, null); }
     private void setConnected(Connection c) {
-        publish("connected", null, c.via, c.lanPeer, c.peerName, String.valueOf(c.remote).replaceFirst("^[^/]*/", ""));
+        // peerLabel, not peerName: once HELLO has arrived this is what the peer calls itself, which
+        // is more use in the UI than the address we happened to reach it at. It falls back to the
+        // address until then, so there is never a blank.
+        publish("connected", null, c.via, c.lanPeer, c.peerLabel, String.valueOf(c.remote).replaceFirst("^[^/]*/", ""));
     }
     private void publish(String state, String detail, String via, boolean lan, String host, String addr) {
         last = new Object[]{state, detail, via, lan, host, addr};
@@ -75,6 +76,14 @@ public class SyncService extends Service {
     private volatile boolean hasNetwork = true;  // default network validated (internet) or at least present
     private volatile boolean onLan = false;      // active network is Wi-Fi or Ethernet
     private volatile long backoff = BACKOFF_MIN_MS;
+    /**
+     * The current session, and its connection.
+     *
+     * <p>Both, for now: {@code conn} is what the rest of the file still reaches for — {@code wake()},
+     * {@code reload()}, {@code abortTransfers()} — and narrowing all of those to a peer is step 2's
+     * work, not this step's. {@code link} is what owns the session. They point at the same thing.
+     */
+    private volatile Link link;
     private volatile Connection conn;           // current session, null when disconnected
     private Thread worker;
 
@@ -90,6 +99,11 @@ public class SyncService extends Service {
     public void onCreate() {
         super.onCreate();
         Logger.init(this);
+        // First line of every run. The id is per-process (see Node), so this is what ties every
+        // later "connected" line to the session it belongs to — the thing the old persisted id used
+        // to provide for free, and the only thing worth keeping from it.
+        Logger.i("ClipSync " + Node.name() + ", node " + Node.shortId(Node.id())
+                + " (protocol " + Connection.PROTOCOL_VERSION + ")");
         startForegroundQuiet();             // must happen promptly after startForegroundService()
         try {
             cfg = Config.load(this);
@@ -658,10 +672,62 @@ public class SyncService extends Service {
     }
 
     private void dropConnection() {
-        Connection c = conn;
-        conn = null;
-        if (c != null) c.close();
+        Link l;
+        synchronized (lock) {
+            l = link;
+            link = null;
+            conn = null;
+        }
+        if (l != null) l.close();
     }
+
+    /**
+     * What a {@link Link} may ask of the service. Every method here is state that belongs to the
+     * device rather than to one peer, which is exactly why it is on this side of the interface —
+     * step 2 turns several of them into per-peer lookups without Link having to know.
+     */
+    private final Link.Owner linkOwner = new Link.Owner() {
+        @Override public void onFrame(Link l, Connection.Frame f) throws Exception {
+            handleFrame(l.connection(), f);
+        }
+
+        @Override public void onConnected(Link l) {
+            Connection c = l.connection();
+            String what = c.lanPeer ? "LAN link, file limit " + cfg.maxFileBytesLocal / (1024 * 1024) + " MB"
+                                    : "internet link, file limit " + cfg.maxFileBytes / (1024 * 1024) + " MB";
+            setConnected(c);
+            Logger.i("connected via " + c.via + " to " + c.peer + " (" + what + ")");
+        }
+
+        @Override public long lastSeq() {
+            synchronized (lock) { return lastServerSeq; }
+        }
+
+        @Override public void flushPending(Connection c) throws Exception {
+            SyncService.this.flushPending(c);
+        }
+
+        @Override public boolean transferBusy() {
+            return SyncService.this.transferBusy();
+        }
+
+        @Override public void onHeartbeat(long overshootMs) {
+            if (overshootMs > 20_000) {
+                // a sleep that overshoots by this much means the process was frozen meanwhile:
+                // the OS (or the ROM's battery manager) suspended us
+                Logger.w("process was suspended for ~" + overshootMs / 1000 + " s by the system — "
+                        + "exempt ClipSync from battery optimisation / background limits (see the app)");
+                suspendedOnce = true;
+            }
+            touchStatus();
+        }
+
+        @Override public boolean isRunning() { return running; }
+
+        @Override public boolean isScreenOn() { return screenOn; }
+
+        @Override public Config config() { return cfg; }
+    };
 
     private void mainLoop() {
         while (running) {
@@ -676,63 +742,28 @@ public class SyncService extends Service {
             if (!running) break;
 
             final boolean lan = onLan;
-            try (Connection c = new Connection(this, cfg, lan, connectivity.getActiveNetwork())) {
-                JSONObject hello = new JSONObject();
-                hello.put("v", Connection.PROTOCOL_VERSION);
-                hello.put("device", Build.MODEL);
-                hello.put("last_seq", lastServerSeq);
-                hello.put("lan", c.lanPeer);
-                c.send(Connection.T_HELLO, hello.toString().getBytes(StandardCharsets.UTF_8));
-                conn = c;
+            // One Link at a time, still. Everything the session does now lives in Link; this loop
+            // has gone back to being what it should have been all along — decide whether to be
+            // connected, open one, run it, back off. Step 2 starts several of these.
+            try (Link l = new Link(this, linkOwner, lan, connectivity.getActiveNetwork())) {
+                // Both fields under the lock, and both together: dropConnection() tests `link`, so a
+                // drop landing between two bare assignments would clear them and then have `conn`
+                // resurrected by the second one — a live-looking pointer to a closed socket.
+                synchronized (lock) {
+                    link = l;
+                    conn = l.connection();
+                }
                 backoff = BACKOFF_MIN_MS;
-                String link = c.lanPeer ? "LAN link, file limit " + cfg.maxFileBytesLocal / (1024 * 1024) + " MB"
-                                        : "internet link, file limit " + cfg.maxFileBytes / (1024 * 1024) + " MB";
-                setConnected(c);
-                Logger.i("connected via " + c.via + " to " + c.peer + " (" + link + ")");
-                flushPending(c);
-                if (!screenOn) {
-                    // woke up only to deliver a pending clip: give the server a moment to answer
-                    // (WANT for an offered file, or anything newer), then drop the link so the
-                    // radio can sleep. While an offer is open or a transfer is running the
-                    // window stays open (hard cap 2 min); otherwise 1 s of silence ends it.
-                    long until = System.currentTimeMillis() + 120_000;
-                    try {
-                        while (System.currentTimeMillis() < until) {
-                            c.setSoTimeout(transferBusy() ? 10_000 : 1_000);
-                            handleFrame(c, c.recv());
-                        }
-                    } catch (Exception ignored) {
-                        // read timeout: the burst is over
-                    }
-                    continue;   // try-with-resources closes c; finally clears conn
-                }
-
-                Thread pinger = new Thread(() -> {
-                    try {
-                        long interval = lan ? PING_WIFI_MS : PING_MOBILE_MS;
-                        while (conn == c) {
-                            long before = System.currentTimeMillis();
-                            Thread.sleep(interval);
-                            long gap = System.currentTimeMillis() - before - interval;
-                            if (gap > 20_000) {
-                                // a sleep that overshoots by this much means the process was frozen
-                                // meanwhile: the OS (or the ROM's battery manager) suspended us
-                                Logger.w("process was suspended for ~" + gap / 1000 + " s by the system — "
-                                        + "exempt ClipSync from battery optimisation / background limits (see the app)");
-                                suspendedOnce = true;
-                            }
-                            touchStatus();
-                            if (conn == c) c.send(Connection.T_PING);
-                        }
-                    } catch (Exception ignored) {
-                    }
-                }, "clipsync-ping");
-                pinger.setDaemon(true);
-                pinger.start();
-
-                while (running && conn == c) {
-                    handleFrame(c, c.recv());
-                }
+                // A burst ending is success, not a failure to back off from; `continue` still runs
+                // the resource close and the finally, exactly as the old code's did.
+                if (l.run()) continue;
+            } catch (Connection.SelfConnection e) {
+                // The target turned out to be this device. Remembering it is what stops it occupying
+                // a reconnect cycle forever, failing in a way that looks like a network problem —
+                // the next connectAny skips it, and the backoff is left alone so that a *real* peer
+                // failing for a different reason does not inherit this one's penalty.
+                Logger.i(e.getMessage() + " — not retrying that address until the configuration changes");
+                Connection.rememberSelf(e.target());
             } catch (Exception e) {
                 Logger.i("disconnected: " + e);
             } finally {

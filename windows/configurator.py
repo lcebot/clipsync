@@ -108,7 +108,7 @@ class Field:
         self.var.set("" if value is None else str(value))
 
 
-class PeerRow:
+class AddressRow:
     """One address, with its own remove button and its own error line — the list is edited one entry
     at a time and an error belongs to the entry that caused it."""
 
@@ -133,6 +133,117 @@ class PeerRow:
 
     def destroy(self):
         self.frame.destroy()
+
+
+class AddressList:
+    """
+    A list of addresses with add, per-row remove and per-row errors: the peer list and the
+    own-addresses list, which are the same widget used twice.
+
+    They accept exactly the same things and must not drift into accepting different ones — the whole
+    reason `check_addresses` takes its differences as parameters rather than existing twice. The two
+    that reach up here are `allow_empty` (the peer list needs an entry while Direct connections is
+    on; the own list never does) and `enabled` (only the peer list has a switch above it).
+
+    One row always remains even when the list is logically empty. Zero rows is a list that looks
+    broken, and the one row is also where the "this is required" error has to be shown.
+    """
+
+    def __init__(self, parent, *, allow_empty: bool, on_change):
+        self.allow_empty = allow_empty
+        self.on_change = on_change
+        self.rows = []
+        self.box = ttk.Frame(parent)
+        self.box.columnconfigure(0, weight=1)
+        self.add_button = ttk.Button(parent, text="Add address", command=lambda: self.add("", True))
+        self.enabled = True
+
+    def grid(self, box_row, button_row):
+        self.box.grid(row=box_row, column=0, sticky="ew", padx=PAD)
+        self.add_button.grid(row=button_row, column=0, sticky="w", padx=PAD, pady=(0, PAD))
+
+    def add(self, value="", focus=False):
+        row = AddressRow(self.box, value, self.on_change, self.remove)
+        row.frame.grid(row=len(self.rows), column=0, sticky="ew", pady=(0, 2))
+        self.rows.append(row)
+        if focus:
+            row.entry.focus_set()
+        self._refresh()
+        self.on_change()
+
+    def remove(self, row):
+        if len(self.rows) <= 1:              # the button is disabled, but be certain
+            return
+        row.destroy()
+        self.rows.remove(row)
+        self._regrid()
+        self._refresh()
+        self.on_change()
+
+    def set_values(self, values):
+        for row in list(self.rows):
+            row.destroy()
+        self.rows.clear()
+        for value in list(values) or [""]:
+            self.add(value)
+
+    def values(self):
+        """Blank rows dropped: a blank is either an error the user is looking at or a lone row
+        standing in for an empty list, and neither belongs in the file."""
+        return [v for v in (row.get() for row in self.rows) if v]
+
+    def set_enabled(self, enabled: bool):
+        self.enabled = enabled
+        if not enabled:
+            # Blank rows go when the list goes out of use, keeping one. Filled ones stay: preserving
+            # them is the entire point of having a switch rather than deleting the list.
+            for row in list(self.rows):
+                if not row.get() and len(self.rows) > 1:
+                    row.destroy()
+                    self.rows.remove(row)
+            self._regrid()
+        self._refresh()
+
+    def validate(self, *, own=frozenset(), empty_message=None) -> bool:
+        """
+        Per row, with a repeat reported on the second one — the first is not wrong, and marking both
+        would leave no clue which to change.
+
+        `own` is this device's declared addresses; an entry matching one is refused here rather than
+        dialled. `empty_message` is what a blank row says when the list may not be empty.
+        """
+        if not self.enabled:
+            for row in self.rows:
+                row.show(None)
+            return True
+        ok = True
+        seen = []
+        for row in self.rows:
+            value = row.get()
+            if not value:
+                problem = None if self.allow_empty else empty_message
+            else:
+                problem = cfgmod.check_peer(value)
+                normal = cfgmod.normalise_peer(value)
+                if problem is None and normal in seen:
+                    problem = "Already listed above"
+                elif problem is None and normal in own:
+                    problem = "That is this device"
+                if problem is None:
+                    seen.append(normal)
+            ok &= row.show(problem)
+        return ok
+
+    def _regrid(self):
+        for i, row in enumerate(self.rows):
+            row.frame.grid_configure(row=i)
+
+    def _refresh(self):
+        removable = len(self.rows) > 1
+        for row in self.rows:
+            row.entry.configure(state="normal" if self.enabled else "disabled")
+            row.button.configure(state="normal" if self.enabled and removable else "disabled")
+        self.add_button.configure(state="normal" if self.enabled else "disabled")
 
 
 # ----------------------------------------------------------------------------- the window
@@ -167,15 +278,15 @@ class App:
         scroll.pack(side="right", fill="y")
         canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(-e.delta // 120, "units"))
 
-        self.peer_rows = []
-        self._build(body)
-
+        # The bar's widgets are created before _build, because the lists it builds fire on_change as
+        # soon as they have a row, and revalidate touches apply_button and paths_error.
         self.status = ttk.Label(bar, text="")
         self.status.pack(side="left", padx=PAD, pady=PAD)
         ttk.Button(bar, text="Close", command=master.destroy).pack(side="right", padx=PAD, pady=PAD)
         self.apply_button = ttk.Button(bar, text="Apply", command=self.apply)
         self.apply_button.pack(side="right", pady=PAD)
 
+        self._build(body)
         self.load()
 
     # ------------------------------------------------------------------ layout
@@ -196,6 +307,24 @@ class App:
         self.psk_shown = tk.BooleanVar(value=False)
         ttk.Checkbutton(psk_bar, text="Show", variable=self.psk_shown,
                         command=self._toggle_psk).pack(side="left", padx=(PAD, 0))
+        section_row += 1
+
+        # --- This PC's own addresses (§4a)
+        # Above the two switches, not below: the peer list validates against this one, so it has to
+        # be the thing already on screen when the user starts typing addresses into the list below.
+        # No switch — an empty list already means "this PC has no name of its own", and turning such
+        # a list off could only cause the mistakes it exists to prevent.
+        own = ttk.LabelFrame(body, text="This PC's own addresses")
+        own.grid(row=section_row, column=0, sticky="ew", padx=PAD, pady=(PAD, 0))
+        own.columnconfigure(0, weight=1)
+        ttk.Label(own, wraplength=460, foreground="#49454f",
+                  text="Names that point at this PC — typically a domain a dynamic DNS client here "
+                       "keeps pointed at it. ClipSync uses them to recognise itself, so it will not "
+                       "dial this machine, and so that an address of its own typed into the peer "
+                       "list below is refused rather than connected to."
+                  ).grid(row=0, column=0, sticky="w", padx=PAD, pady=(PAD, 0))
+        self.own_list = AddressList(own, allow_empty=True, on_change=self.revalidate)
+        self.own_list.grid(box_row=1, button_row=2)
         section_row += 1
 
         # --- Local network discovery
@@ -233,11 +362,8 @@ class App:
                        "own none of these names stop advertising on the LAN, so a device cannot "
                        "reach the wrong one."
                   ).grid(row=1, column=0, sticky="w", padx=PAD, pady=(0, PAD))
-        self.peers_box = ttk.Frame(dire)
-        self.peers_box.grid(row=2, column=0, sticky="ew", padx=PAD)
-        self.peers_box.columnconfigure(0, weight=1)
-        self.add_button = ttk.Button(dire, text="Add address", command=lambda: self.add_peer("", True))
-        self.add_button.grid(row=3, column=0, sticky="w", padx=PAD, pady=(0, PAD))
+        self.peer_list = AddressList(dire, allow_empty=False, on_change=self.revalidate)
+        self.peer_list.grid(box_row=2, button_row=3)
         self.paths_error = ttk.Label(dire, text="", foreground="#b3261e", wraplength=460)
         self.paths_error.grid(row=4, column=0, sticky="w", padx=PAD, pady=(0, PAD))
         section_row += 1
@@ -284,52 +410,13 @@ class App:
     def _toggle_psk(self):
         self.psk.entry.configure(show="" if self.psk_shown.get() else "•")
 
-    # ------------------------------------------------------------------ the peers list
-    def add_peer(self, value="", focus=False):
-        row = PeerRow(self.peers_box, value, self.revalidate, self.remove_peer)
-        row.frame.grid(row=len(self.peer_rows), column=0, sticky="ew", pady=(0, 2))
-        self.peer_rows.append(row)
-        if focus:
-            row.entry.focus_set()
-        self._refresh_peers()
-        self.revalidate()
-
-    def remove_peer(self, row):
-        if len(self.peer_rows) <= 1:        # the button is disabled, but be certain
-            return
-        row.destroy()
-        self.peer_rows.remove(row)
-        for i, r in enumerate(self.peer_rows):
-            r.frame.grid_configure(row=i)
-        self._refresh_peers()
-        self.revalidate()
-
-    def _refresh_peers(self):
-        """One row always remains: zero addresses is what the switch is for, not an empty list that
-        looks broken. Its Remove button is disabled rather than hidden — unlike Android, where
-        TextInputLayout offers no way to disable just that icon, a ttk.Button disables cleanly."""
-        removable = len(self.peer_rows) > 1
-        enabled = self.direct.get()
-        for row in self.peer_rows:
-            row.entry.configure(state="normal" if enabled else "disabled")
-            row.button.configure(state="normal" if enabled and removable else "disabled")
-        self.add_button.configure(state="normal" if enabled else "disabled")
-
     def _direct_toggled(self):
-        if not self.direct.get():
-            # Blank rows go when the list goes out of use, keeping one, so nothing empty is ever
-            # joined into the stored value. Filled ones stay: that is the point of the switch.
-            for row in list(self.peer_rows):
-                if not row.get() and len(self.peer_rows) > 1:
-                    row.destroy()
-                    self.peer_rows.remove(row)
-            for i, r in enumerate(self.peer_rows):
-                r.frame.grid_configure(row=i)
-        self._refresh_peers()
+        self.peer_list.set_enabled(self.direct.get())
         self.revalidate()
 
     # ------------------------------------------------------------------ load / collect / validate
     def load(self):
+        fresh = not os.path.exists(cfgmod.CONFIG_PATH)
         try:
             raw = cfgmod.read_config()
         except (ValueError, OSError) as e:
@@ -354,9 +441,16 @@ class App:
         self.keep_max_mb.set(raw["keep_max_mb"])
         self.start_delay.set(raw["start_delay"])
 
-        for value in cfgmod.as_list(raw["peers"]) or [""]:
-            self.add_peer(value)
+        self.own_list.set_values(cfgmod.as_list(raw["own_addresses"]))
+        self.peer_list.set_values(cfgmod.as_list(raw["peers"]))
+        self.peer_list.set_enabled(self.direct.get())
         self.revalidate()
+        if fresh:
+            # Nothing is committed to the repository and nothing ships in the zip: this window is
+            # where config.json comes from. Saying so is the difference between "the defaults are
+            # loaded" and "there is no file yet and Apply is what creates it".
+            self.status.configure(text="No configuration yet — Apply will create %s."
+                                       % os.path.basename(cfgmod.CONFIG_PATH))
 
     def collect(self) -> dict:
         """
@@ -376,9 +470,8 @@ class App:
             "discovery": bool(self.discovery.get()),
             "mdns_name": self.mdns_name.get(),
             "direct": bool(self.direct.get()),
-            # Blank rows dropped: they are a validation error while the list is in use and already
-            # pruned when it is not, so the only one that can reach here is a lone empty row.
-            "peers": [v for v in (row.get() for row in self.peer_rows) if v],
+            "peers": self.peer_list.values(),
+            "own_addresses": self.own_list.values(),
             "start_delay": _int(self.start_delay.get()),
         }
 
@@ -392,7 +485,14 @@ class App:
             # user cannot see. Their own unit is substituted back in.
             ok &= field.show(_in_unit(problems.get(key), key))
 
-        ok &= self._validate_peers()
+        # The own list first: the peer list is checked against it, so it has to be current.
+        own = {cfgmod.normalise_peer(v) for v in self.own_list.values()}
+        ok &= self.own_list.validate()
+        ok &= self.peer_list.validate(
+            own=own,
+            empty_message="Enter a host name or IP address, or turn off Direct connections"
+            if len(self.peer_list.rows) == 1 else
+            "Enter a host name or IP address, or remove this row")
 
         if not self.discovery.get() and not self.direct.get():
             self.paths_error.configure(
@@ -405,30 +505,6 @@ class App:
         self.apply_button.configure(state="normal" if ok else "disabled")
         return ok
 
-    def _validate_peers(self) -> bool:
-        """Per row, with a repeat reported on the second one — the first is not wrong, and marking
-        both would leave no clue which to change."""
-        if not self.direct.get():
-            for row in self.peer_rows:
-                row.show(None)
-            return True
-        ok = True
-        seen = []
-        for row in self.peer_rows:
-            value = row.get()
-            if not value:
-                problem = ("Enter a host name or IP address, or remove this row"
-                           if len(self.peer_rows) > 1 else
-                           "Enter a host name or IP address, or turn off Direct connections")
-            else:
-                problem = cfgmod.check_peer(value)
-                normal = cfgmod.normalise_peer(value)
-                if problem is None and normal in seen:
-                    problem = "Already listed above"
-                if problem is None:
-                    seen.append(normal)
-            ok &= row.show(problem)
-        return ok
 
     # ------------------------------------------------------------------ actions
     def new_psk(self):

@@ -9,6 +9,9 @@ from the standard library instead of the hand-rolled splitter that was here. A k
 BOM, a value containing a comma, an in-place rewrite that had to preserve comments: all of it stops
 being a problem the moment the file stops pretending to be prose.
 
+**Nothing here migrates anything**, from the old ini or from what `peers` used to mean — see the note
+above the field checks, and docs/p2p-plan.md §10.
+
 Split out of clipsync.py so that `configurator.py` can import the rules rather than restate them.
 Importing clipsync.py is not an option for a settings window: it configures logging into the
 service's own log file and registers a clipboard format on load, so merely opening the settings
@@ -29,7 +32,6 @@ import re
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(HERE, "config.json")
-LEGACY_INI_PATH = os.path.join(HERE, "clipsync.ini")
 LOG_PATH = os.path.join(HERE, "clipsync.log")
 
 # Chunk size for file transfer. It lives here because Cfg.max_frame is derived from it; clipsync.py
@@ -52,6 +54,11 @@ DEFAULTS = {
     "mdns_name": "",
     "direct": False,
     "peers": [],
+    # The names and literals that point at THIS machine — typically a domain a dynamic DNS client
+    # here keeps pointed at it. See docs/p2p-plan.md §4a. No switch of its own: empty means "this
+    # device has no name of its own", and turning such a list off could only cause the mistakes it
+    # exists to prevent.
+    "own_addresses": [],
     "start_delay": 0,
 }
 
@@ -71,8 +78,8 @@ def as_bool(v) -> bool:
 
 
 def as_list(v) -> list:
-    """peers is a JSON array. A comma-joined string is still accepted, both for a hand-edit and for
-    the one-time import of an old clipsync.ini."""
+    """The address lists are JSON arrays. A comma-joined string is still accepted, because someone
+    editing the file by hand will write one sooner or later."""
     if isinstance(v, (list, tuple)):
         return [str(x).strip() for x in v if str(x).strip()]
     return [p.strip() for p in str(v).split(",") if p.strip()]
@@ -96,11 +103,24 @@ def read_config(path: str = CONFIG_PATH) -> dict:
         with open(path, encoding="utf-8-sig") as f:
             stored = json.load(f)
     except FileNotFoundError:
-        stored = _import_legacy_ini()
+        stored = {}
     if not isinstance(stored, dict):
         raise ValueError("{}: expected a JSON object at the top level".format(path))
     raw.update(stored)
     return raw
+
+
+# No migration is written, from the old clipsync.ini or from what `peers` used to mean before §4a.
+# That is docs/p2p-plan.md §10's rule and there is no exception to it here: the release notes say to
+# set the devices up again, and this file reads what it finds and nothing else.
+#
+# Two attempts at being helpful were removed rather than kept, and both are worth remembering. The
+# ini import looked free until config.json existed, at which point it was unreachable code claiming
+# to protect people it could no longer reach. The peers-to-own_addresses move was worse: it turned
+# `direct` off, which can leave both paths off, which check_all refuses — so a configuration that
+# worked became a service that exits at start-up. Migration code is a second, rarely exercised way
+# to be wrong about a file, and the cost of carrying it is permanent while the reconfiguration it
+# saves takes a minute once.
 
 
 def write_config(values: dict, path: str = CONFIG_PATH) -> None:
@@ -118,46 +138,6 @@ def write_config(values: dict, path: str = CONFIG_PATH) -> None:
         json.dump(ordered, f, indent=2, ensure_ascii=False)
         f.write("\n")
     os.replace(tmp, path)
-
-
-def _import_legacy_ini(path: str = LEGACY_INI_PATH) -> dict:
-    """
-    One-time read of the old clipsync.ini when no config.json exists yet.
-
-    Kept only so that an existing install does not have to retype a 64-character key it already has.
-    Nothing writes the ini any more and nothing deletes it; the first Apply creates config.json,
-    which wins from then on. Delete the ini by hand once that has happened.
-    """
-    raw = {}
-    try:
-        with open(path, encoding="utf-8-sig") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                k, v = line.split("=", 1)
-                raw[k.strip()] = v.strip()
-    except (OSError, UnicodeDecodeError):
-        return {}
-    if not raw:
-        return {}
-    out = {}
-    for key, default in DEFAULTS.items():
-        if key not in raw:
-            continue
-        value = raw[key]
-        if key == "peers":
-            out[key] = as_list(value)
-        elif isinstance(default, bool):
-            out[key] = as_bool(value)
-        elif isinstance(default, int):
-            try:
-                out[key] = int(float(value))
-            except ValueError:
-                out[key] = value          # left for check_all to report in its own words
-        else:
-            out[key] = value
-    return out
 
 
 # ----------------------------------------------------------------------------- field checks
@@ -207,9 +187,20 @@ def check_peer(s: str):
     return None
 
 
-def check_peers(stored):
-    """The whole list: every entry valid, at least one entry, no repeats. Takes the JSON array, or a
-    comma-joined string from a hand-edit."""
+def check_addresses(stored, *, allow_empty: bool, own=None):
+    """
+    A whole address list: every entry valid, no repeats, and optionally at least one entry.
+
+    Used for both lists, which is the point — `peers` and `own_addresses` accept exactly the same
+    things and must not drift into accepting different ones. They differ in two parameters only:
+    the peer list needs an entry while `direct` is on, the own list never does; and a peer entry is
+    additionally refused when it names this device.
+
+    `own` is the normalised own-address list. Checking it here rather than at the call site keeps
+    the rule in the same place as the rest, so the settings window and the service cannot disagree
+    about it.
+    """
+    own = set(own or ())
     seen = []
     any_entry = False
     for s in as_list(stored):
@@ -220,8 +211,12 @@ def check_peers(stored):
         t = normalise_peer(s)
         if t in seen:
             return "listed twice: " + t
+        if t in own:
+            return "that is this device: " + t
         seen.append(t)
-    return None if any_entry else "add an address, or turn direct connections off"
+    if not any_entry and not allow_empty:
+        return "add an address, or turn direct connections off"
+    return None
 
 
 def check_range(s: str, low, high, unit: str = ""):
@@ -287,6 +282,22 @@ def check_mdns_name(s: str):
     return None
 
 
+def own_set(raw: dict) -> set:
+    """This device's own addresses, normalised, as a set. The one place that spelling is decided, so
+    that validation, dialling and the mDNS filter all agree on what counts as the same name."""
+    return {normalise_peer(s) for s in as_list(raw.get("own_addresses", []))}
+
+
+def is_self(address: str, own) -> bool:
+    """Does this address name this device, as far as the declared list can tell?
+
+    A string comparison on the normalised form, never a DNS lookup — validation runs on every
+    keystroke. It therefore catches the spellings that were declared and nothing else: a second name
+    for the same host still reaches the handshake, where the node id decides.
+    """
+    return normalise_peer(address) in (own if isinstance(own, (set, frozenset)) else set(own or ()))
+
+
 def check_all(raw: dict, *, discovery: bool = None, direct: bool = None) -> dict:
     """
     Every field, as {key: problem} for the ones that fail. The two switches can be passed in by a UI
@@ -313,7 +324,12 @@ def check_all(raw: dict, *, discovery: bool = None, direct: bool = None) -> dict
         "keep_max_mb": check_range(raw.get("keep_max_mb", ""), 0, 1024 * 1024, "MB"),
         "start_delay": check_range(raw.get("start_delay", ""), 0, 3600, "s"),
         "mdns_name": check_mdns_name(raw.get("mdns_name", "")),
-        "peers": check_peers(peers) if direct else None,
+        "own_addresses": check_addresses(raw.get("own_addresses", []), allow_empty=True),
+        # Checked against the own list, so pasting this machine's own name into the peer list is
+        # refused in the field rather than dialled, connected, handshaken and discarded. This is the
+        # cheap half of the self-connection guard; the id comparison in HELLO remains the authority,
+        # because a second name for the same host looks like any other name here.
+        "peers": check_addresses(peers, allow_empty=False, own=own_set(raw)) if direct else None,
     }
     if not discovery and not direct:
         # Same invariant as Config.from() on Android: with neither half enabled nothing can be
@@ -334,6 +350,11 @@ class Cfg:
             raise SystemExit("{}: {}".format(os.path.basename(path), e))
         problems = check_all(raw)
         if problems:
+            # No file at all is the first run, not a broken config, and it has a different answer:
+            # run the settings window. Saying "psk: required" to someone who has never configured
+            # anything names a field they have never seen.
+            if not os.path.exists(path):
+                raise SystemExit("No {} yet. Run: python configurator.py".format(os.path.basename(path)))
             first = sorted(problems)[0]
             raise SystemExit("{}: {}: {}".format(os.path.basename(path), first, problems[first]))
 
@@ -357,6 +378,10 @@ class Cfg:
         # addresses stay in the file so they survive a round trip through the switch, but nothing
         # acts on them.
         self.peers = as_list(raw["peers"]) if self.direct else []
+        # Always read, switch or no switch: it is what the node knows itself by, and that stays true
+        # whether or not it is dialling anyone.
+        self.own_addresses = as_list(raw["own_addresses"])
+        self.own = own_set(raw)
         self.start_delay = int(raw["start_delay"])
         # largest frame we accept: a CHUNK, or a CLIP whose JSON escaping doubled the text
         self.max_frame = max(CHUNK, self.max_bytes * 2) + 64 * 1024

@@ -45,6 +45,11 @@
     <string name="peer_add">Add address</string>
     <string name="peer_remove">Remove</string>
     <string name="peer_duplicate">Already listed above</string>
+    <string name="peer_is_self">That is this device</string>
+    <!-- This device's own addresses (docs/p2p-plan.md §4a). No switch: an empty list already means
+         "this device has no name of its own". -->
+    <string name="section_own">This device\'s addresses</string>
+    <string name="own_help">Names that point at this device — typically a domain a dynamic DNS client here keeps pointed at it. ClipSync uses them to recognise itself, so it will not dial this device, and so that one of its own addresses typed into the list below is refused rather than connected to.</string>
     <string name="browse_label">mDNS browse timeout: %1$d ms</string>
     <!-- Both switches off leaves no way to reach anything. Shown under the pair, because it is about
          the pair; neither switch on its own is wrong. -->

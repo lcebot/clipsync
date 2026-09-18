@@ -26,6 +26,7 @@ import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.core.widget.NestedScrollView;
 import androidx.transition.ChangeBounds;
+import androidx.transition.Transition;
 import androidx.transition.TransitionManager;
 import androidx.transition.TransitionSet;
 
@@ -50,6 +51,7 @@ import com.google.android.material.transition.MaterialFadeThrough;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Properties;
+import java.util.Set;
 
 /**
  * Two pages behind a bottom navigation bar — Settings and Log — cross-faded into each other under
@@ -65,9 +67,9 @@ public class MainActivity extends AppCompatActivity {
     private TextInputLayout portL, pskL, textKbL, fileMbL, fileMbLocalL, pathL, keepHoursL, keepMbL;
     private TextInputEditText port, psk, textKb, fileMb, fileMbLocal, path, keepHours, keepMb;
     private MaterialSwitch discovery, direct;
-    private ViewGroup peersBox;
-    private final List<TextInputLayout> peerRows = new ArrayList<>();
-    private MaterialButton peerAdd, pskRandom;
+    /** The Direct connections list, and this device's own addresses — one class, twice (§4a). */
+    private AddressList peerList, ownList;
+    private MaterialButton pskRandom;
     /** The group each switch governs. Whole cards now, because the switches sit outside them. */
     private View discoveryCard, directCard;
     /** Shown under the pair when both switches are off — see {@link #validate()}. */
@@ -198,8 +200,10 @@ public class MainActivity extends AppCompatActivity {
         // stays one flat findViewById pass over the whole tree
         discovery = findViewById(R.id.discovery);
         direct = findViewById(R.id.direct);
-        peersBox = findViewById(R.id.peers_box);
-        peerAdd = findViewById(R.id.peer_add);
+        peerList = new AddressList(this, findViewById(R.id.peers_box), findViewById(R.id.peer_add),
+                R.string.hint_peer, false, listHost);
+        ownList = new AddressList(this, findViewById(R.id.own_box), findViewById(R.id.own_add),
+                R.string.hint_peer, true, listHost);
         pskRandom = findViewById(R.id.psk_random);
         portL = findViewById(R.id.port_layout);       port = findViewById(R.id.port);
         pskL = findViewById(R.id.psk_layout);         psk = findViewById(R.id.psk);
@@ -252,7 +256,8 @@ public class MainActivity extends AppCompatActivity {
         Properties p = Config.raw(this);
         discovery.setChecked(bool(p.getProperty("discovery", "true")));
         direct.setChecked(bool(p.getProperty("direct", "false")));
-        setPeerRows(Config.peerList(p.getProperty("peers", "")));
+        peerList.setValues(Config.peerList(p.getProperty("peers", "")));
+        ownList.setValues(Config.peerList(p.getProperty("own_addresses", "")));
         port.setText(p.getProperty("port", "47521"));
         psk.setText(p.getProperty("psk", ""));
         textKb.setText(String.valueOf(longOf(p, "max_bytes", 1048576) / 1024));
@@ -270,70 +275,17 @@ public class MainActivity extends AppCompatActivity {
         applySwitches(false);
     }
 
-    // ------------------------------------------------------------------ the peers list
+    // ------------------------------------------------------------------ the address lists
     /**
-     * Rebuilds the rows from a list. One row always remains: zero addresses is expressed by turning
-     * the Direct connections switch off, which says the same thing without a list that looks broken.
+     * Both lists are {@link AddressList}, which owns the rows, the numbered hints, the blank-row rule
+     * and the per-row errors. What this class still supplies is the motion and the scene root, since
+     * those belong to the page rather than to either list.
      */
-    private void setPeerRows(List<String> peers) {
-        peersBox.removeAllViews();
-        peerRows.clear();
-        if (peers.isEmpty()) peers = List.of("");
-        for (String s : peers) addPeerRow(s, false);
-    }
-
-    private void addPeerRow(String value, boolean animate) {
-        TextInputLayout row = (TextInputLayout) getLayoutInflater().inflate(R.layout.item_peer, peersBox, false);
-        TextInputEditText field = row.findViewById(R.id.peer);
-        field.setText(value);
-        field.addTextChangedListener(revalidate);
-        row.setEndIconOnClickListener(v -> removePeerRow(row));
-        // Inflated before the transition begins so the new row can be named as the thing that fades.
-        if (animate) TransitionManager.beginDelayedTransition(settingsRoot, visibilityMotion(row));
-        peersBox.addView(row);
-        peerRows.add(row);
-        refreshPeerRows();
-    }
-
-    private void removePeerRow(TextInputLayout row) {
-        if (peerRows.size() <= 1) return;                 // the icon is hidden, but be certain
-        TransitionManager.beginDelayedTransition(settingsRoot, visibilityMotion(row));
-        peersBox.removeView(row);
-        peerRows.remove(row);
-        refreshPeerRows();
-        validate();
-    }
-
-    /**
-     * The lone row's remove icon is hidden: the row cannot go, because zero addresses is what the
-     * Direct connections switch expresses. Hidden rather than greyed out because TextInputLayout has no public
-     * way to disable only the trailing icon.
-     *
-     * <p>Hints are numbered here rather than in the layout: several rows carrying one identical hint
-     * give a screen reader nothing to tell them apart by, and an error names a row by its hint.
-     */
-    private void refreshPeerRows() {
-        boolean removable = peerRows.size() > 1;
-        for (int i = 0; i < peerRows.size(); i++) {
-            TextInputLayout row = peerRows.get(i);
-            row.setEndIconVisible(removable);
-            row.setHint(getString(R.string.hint_peer, i + 1));
-        }
-    }
-
-    /**
-     * The rows exactly as they read, with nothing filtered out: a blank row is either an error the
-     * user is looking at (Direct connections on) or already gone (off, {@link #dropBlankRows()}), so the
-     * only blank that can reach here is a lone row, which joins to the empty string.
-     */
-    private List<String> peerValues() {
-        List<String> out = new ArrayList<>();
-        for (TextInputLayout row : peerRows) {
-            TextInputEditText f = row.findViewById(R.id.peer);
-            out.add(text(f));
-        }
-        return out;
-    }
+    private final AddressList.Host listHost = new AddressList.Host() {
+        @Override public Transition motion(View changing) { return visibilityMotion(changing); }
+        @Override public ViewGroup sceneRoot() { return settingsRoot; }
+        @Override public void onChanged() { validate(); }
+    };
 
     private static int indexOf(int[] steps, int v) {
         for (int i = 0; i < steps.length; i++) if (steps[i] == v) return i;
@@ -369,7 +321,7 @@ public class MainActivity extends AppCompatActivity {
 
         discoveryCard.setVisibility(wantDiscovery);
         directCard.setVisibility(wantDirect);
-        if (!direct.isChecked()) dropBlankRows();
+        peerList.setEnabled(direct.isChecked());
     }
 
     /**
@@ -383,24 +335,6 @@ public class MainActivity extends AppCompatActivity {
      */
     private static View turning(View v, int want) {
         return v != null && v.getVisibility() != want ? v : null;
-    }
-
-    /**
-     * Drops the blank rows when the list goes out of sight, keeping one. While the list is showing a
-     * blank row is an error the user can see and fix; once hidden it could neither be seen nor
-     * fixed, so refusing to save on it would be a dead end. Removing it instead keeps the stored
-     * value clean — the rows that are left are all real addresses, so nothing empty is ever joined
-     * into {@code peers}.
-     */
-    private void dropBlankRows() {
-        for (int i = peerRows.size() - 1; i >= 0 && peerRows.size() > 1; i--) {
-            TextInputLayout row = peerRows.get(i);
-            if (text((TextInputEditText) row.findViewById(R.id.peer)).trim().isEmpty()) {
-                peersBox.removeView(row);
-                peerRows.remove(i);
-            }
-        }
-        refreshPeerRows();
     }
 
     /**
@@ -480,7 +414,8 @@ public class MainActivity extends AppCompatActivity {
         Properties v = new Properties();
         v.setProperty("discovery", String.valueOf(discovery.isChecked()));
         v.setProperty("direct", String.valueOf(direct.isChecked()));
-        v.setProperty("peers", Config.storePeers(peerValues()));
+        v.setProperty("peers", Config.storePeers(peerList.values()));
+        v.setProperty("own_addresses", Config.storePeers(ownList.values()));
         v.setProperty("port", text(port));
         v.setProperty("psk", text(psk));
         v.setProperty("mdns_timeout_ms", String.valueOf(browseValue()));
@@ -507,7 +442,11 @@ public class MainActivity extends AppCompatActivity {
         pathsError.setVisibility(anyPath ? View.GONE : View.VISIBLE);
 
         boolean ok = anyPath;
-        ok &= validatePeers();
+        // The own list first: the peer list is checked against it, so it has to be current.
+        ok &= ownList.validate(Set.of(), null, null);
+        ok &= peerList.validate(ownList.normalised(),
+                getString(R.string.peer_empty_last, getString(R.string.switch_direct)),
+                getString(R.string.peer_empty));
         ok &= show(portL, Config.checkPort(text(port)));
         ok &= show(pskL, Config.checkPsk(text(psk)));
         ok &= show(textKbL, Config.checkRange(text(textKb), 1, 65536, "KB"));
@@ -518,37 +457,6 @@ public class MainActivity extends AppCompatActivity {
         ok &= show(keepMbL, Config.checkRange(text(keepMb), 0, 1024 * 1024, "MB"));
         configValid = ok;
         refreshActions();
-        return ok;
-    }
-
-    /**
-     * Each row carries its own error, and a repeat is reported on the second one — the first is not
-     * wrong, and marking both would leave the user with no clue which to change.
-     */
-    private boolean validatePeers() {
-        if (!direct.isChecked()) {
-            for (TextInputLayout row : peerRows) show(row, null);
-            return true;
-        }
-        boolean ok = true;
-        List<String> seen = new ArrayList<>();
-        for (TextInputLayout row : peerRows) {
-            String raw = text((TextInputEditText) row.findViewById(R.id.peer));
-            // A blank row is refused rather than quietly dropped on save: a row the user left half
-            // finished is a mistake worth pointing at, and nothing blank ever reaches the file.
-            // The message says what belongs in the field, because with no supporting line under the
-            // switch this error is the only place that says it — and it names the way out, which
-            // differs: the last row cannot be removed, so turning the switch off is the way out.
-            String problem = raw.trim().isEmpty()
-                    ? peerRows.size() > 1
-                        ? getString(R.string.peer_empty)
-                        : getString(R.string.peer_empty_last, getString(R.string.switch_direct))
-                    : Config.checkPeer(raw);
-            String normal = Config.normalisePeer(raw);
-            if (problem == null && seen.contains(normal)) problem = getString(R.string.peer_duplicate);
-            if (problem == null) seen.add(normal);
-            ok &= show(row, problem);
-        }
         return ok;
     }
 
@@ -570,7 +478,6 @@ public class MainActivity extends AppCompatActivity {
             e.addTextChangedListener(revalidate);
         discovery.setOnCheckedChangeListener((b, checked) -> { applySwitches(true); validate(); });
         direct.setOnCheckedChangeListener((b, checked) -> { applySwitches(true); validate(); });
-        peerAdd.setOnClickListener(v -> { addPeerRow("", true); validate(); });
         pskRandom.setOnClickListener(v -> newPsk());
         threads.setLabelFormatter(v -> String.valueOf(Config.THREAD_STEPS[Math.max(0, Math.min(4, Math.round(v)))]));
         threads.addOnChangeListener((s, v, u) -> threadsLabel.setText(getString(R.string.threads_label, threadsValue())));
@@ -980,7 +887,8 @@ public class MainActivity extends AppCompatActivity {
             String msg = e.getMessage() == null ? "invalid value" : e.getMessage();
             String key = msg.contains(":") ? msg.substring(0, msg.indexOf(':')) : "";
             TextInputLayout target = switch (key) {
-                case "peers", "discovery" -> peerRows.isEmpty() ? portL : peerRows.get(0);
+                case "peers", "discovery" -> peerList.firstRow() instanceof TextInputLayout t ? t : portL;
+                case "own_addresses" -> ownList.firstRow() instanceof TextInputLayout t ? t : portL;
                 case "port" -> portL; case "psk" -> pskL;
                 case "max_bytes" -> textKbL; case "max_file_bytes" -> fileMbL; case "max_file_bytes_local" -> fileMbLocalL;
                 case "files_dir" -> pathL; case "keep_hours" -> keepHoursL; case "keep_max_mb" -> keepMbL;

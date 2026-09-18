@@ -1,8 +1,12 @@
 """
 ClipSync - Windows side (server).
 
-Listens on [::]:PORT (dual-stack), accepts Android clients, and mirrors the Windows
-clipboard both ways.  Run with pythonw.exe so no console window shows.
+Listens on [::]:PORT (dual-stack), accepts clients, dials the peers it is configured with, and
+mirrors the Windows clipboard both ways.  Run with pythonw.exe so no console window shows.
+
+Inbound and outbound connections are the same thing once the handshake is over: the same
+SecureChannel, the same registry in SyncState.clients, the same broadcast.  Only the nonce exchange
+differs, by which end opened the socket.
 
 Protocol (must match the Android side, see Connection.java / SyncService.java):
   handshake : client -> 32B Nc ; server -> 32B Ns
@@ -35,9 +39,10 @@ Discovery has two independent halves, named for how a peer is found rather than 
 taken to it.  `peers` is a list of host names or literal addresses that devices connect to
 directly — a dynamic DNS name, a static address, a LAN address, all the same to the code.
 `discovery` advertises this PC on the LAN as _clipsync._tcp via mDNS (python-zeroconf), so a
-device can find it with nothing configured at all.  When addresses are listed, only a PC that
-actually owns one of them advertises (see owns_a_listed_name).  The network side starts
-`start_delay` seconds after logon, which is 0 by default.
+device can find it with nothing configured at all, and browses for other nodes to dial.
+`own_addresses` is the other side of `peers`: the names that point at THIS machine, which is how
+it recognises itself and refuses to dial itself.  The network side starts `start_delay` seconds
+after logon, which is 0 by default.
 """
 import ctypes
 import ctypes.wintypes as wt
@@ -71,11 +76,15 @@ except ImportError:                    # pragma: no cover
 # can import the rules instead of restating them. That module is deliberately free of side effects;
 # this one is not (it configures logging and registers a clipboard format below), which is why the
 # dependency only runs one way.
-from clipsync_config import CHUNK, LOG_PATH, Cfg   # noqa: E402
+from clipsync_config import CHUNK, LOG_PATH, Cfg, is_self   # noqa: E402
+from clipsync_node import declaration, node_id, node_name, short_id   # noqa: E402
 
 (T_HELLO, T_CLIP, T_PING, T_PONG, T_FILE, T_OFFER, T_WANT, T_HAVE, T_SKIP, T_DATA, T_END,
  T_ABORT, T_CHUNK, T_PULL) = 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14
-PROTOCOL_VERSION = 1
+# 2: HELLO is exchanged in both directions and carries the node id, type, persistence and battery
+# bucket (docs/p2p-plan.md §2). A clean break, by §9 — a version 1 peer is refused rather than
+# tolerated, because a peer that cannot name itself cannot be deduplicated or recognised as self.
+PROTOCOL_VERSION = 2
 READ_TIMEOUT = 90          # seconds without any frame -> drop client
 MAP_SAVE_EVERY = 8         # persist the received-chunk bitmap every N chunks
 WANT_RETRIES = 3           # how often the receiver re-asks for missing chunks in one session
@@ -165,23 +174,57 @@ def hkdf_sha256(ikm: bytes, salt: bytes, info: bytes, length: int = 32) -> bytes
 
 
 class SecureChannel:
-    """One TCP connection with per-direction AEAD keys and nonce counters."""
+    """
+    One TCP connection with per-direction AEAD keys and nonce counters.
 
-    def __init__(self, sock: socket.socket, psk: bytes, max_frame: int):
+    `initiator` says which half of the nonce exchange to perform. The two key labels are named for
+    who opened the connection, not for who is a server — this PC now dials as well as accepts, and a
+    channel it dialled is the "c" side of its own link. Getting this backwards does not fail at the
+    handshake, which exchanges plaintext nonces; it fails at the first frame, as a decrypt error.
+    """
+
+    def __init__(self, sock: socket.socket, psk: bytes, max_frame: int, initiator: bool = False):
         self.sock = sock
         self.max_frame = max_frame
+        self.initiator = initiator
         self.device = "?"
+        self.node_id = None            # peer's id, set from HELLO
+        self.node_type = "?"
+        self.persistent = False
+        self.battery = "medium"
         self.lan = False
         self.limit = 0                 # file size limit for this client (set after HELLO)
         self.send_lock = threading.Lock()
-        ns = os.urandom(32)
-        nc = self._recv_exact(32)
-        sock.sendall(ns)
-        salt = nc + ns
-        self.rx = ChaCha20Poly1305(hkdf_sha256(psk, salt, b"clipsync c2s"))
-        self.tx = ChaCha20Poly1305(hkdf_sha256(psk, salt, b"clipsync s2c"))
+        mine = os.urandom(32)
+        if initiator:
+            sock.sendall(mine)
+            theirs = self._recv_exact(32)
+            salt = mine + theirs       # nc || ns
+        else:
+            theirs = self._recv_exact(32)
+            sock.sendall(mine)
+            salt = theirs + mine
+        c2s = ChaCha20Poly1305(hkdf_sha256(psk, salt, b"clipsync c2s"))
+        s2c = ChaCha20Poly1305(hkdf_sha256(psk, salt, b"clipsync s2c"))
+        self.tx, self.rx = (c2s, s2c) if initiator else (s2c, c2s)
         self.rx_ctr = 0
         self.tx_ctr = 0
+
+    def read_hello(self) -> dict:
+        """The first frame on a control connection, and the only one read before anything is trusted."""
+        typ, payload = self.recv()
+        if typ != T_HELLO:
+            raise ConnectionError("expected HELLO")
+        hello = json.loads(payload.decode("utf-8"))
+        if hello.get("v") != PROTOCOL_VERSION:
+            raise ConnectionError("protocol version mismatch (peer speaks %s, we speak %d)"
+                                  % (hello.get("v"), PROTOCOL_VERSION))
+        self.device = str(hello.get("device", "?"))
+        self.node_id = hello.get("id")
+        self.node_type = str(hello.get("type", "?"))
+        self.persistent = bool(hello.get("persistent", False))
+        self.battery = str(hello.get("battery", "medium"))
+        return hello
 
     def _recv_exact(self, n: int) -> bytes:
         buf = bytearray()
@@ -1126,54 +1169,74 @@ def parse_clip(payload: bytes, cfg: Cfg):
 
 
 # ----------------------------------------------------------------------------- server
+def serve(ch: SecureChannel, cfg: Cfg, state: SyncState):
+    """
+    The frame loop of one control connection, whichever end opened it.
+
+    Extracted so the client role reuses it rather than growing a second copy. Nothing in here ever
+    needed to know which side dialled — that is settled by the time the first frame arrives, and a
+    peer is a peer from then on. Returns when the peer closes or the read times out; the caller owns
+    registration and cleanup.
+    """
+    while True:
+        typ, payload = ch.recv()
+        if typ == T_PING:
+            ch.send(T_PONG)
+        elif typ == T_CLIP:
+            item = parse_clip(payload, cfg)
+            if item:
+                state.on_remote_text(item, ch)
+        elif typ == T_OFFER:
+            state.on_offer(json.loads(payload.decode("utf-8")), ch)
+        elif typ == T_WANT:
+            state.on_want(json.loads(payload.decode("utf-8")), ch)
+        elif typ == T_HAVE:
+            log.info("%s already has %s", ch.device, json.loads(payload.decode("utf-8")).get("sha256", "")[:12])
+        elif typ == T_SKIP:
+            m = json.loads(payload.decode("utf-8"))
+            log.info("%s skipped %s: %s", ch.device, m.get("sha256", "")[:12], m.get("reason", ""))
+        elif typ == T_ABORT:
+            m = json.loads(payload.decode("utf-8"))
+            state.abort(str(m.get("sha256", "")), f"{ch.device}: {m.get('reason', '')}")
+        elif typ == T_PONG:
+            pass
+        else:
+            log.warning("unknown frame type %d", typ)
+
+
 def client_thread(sock: socket.socket, addr, cfg: Cfg, state: SyncState):
     sock.settimeout(READ_TIMEOUT)
     sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     ch = None
     try:
         ch = SecureChannel(sock, cfg.psk, cfg.max_frame)
-        typ, payload = ch.recv()
-        if typ != T_HELLO:
-            raise ConnectionError("expected HELLO")
-        hello = json.loads(payload.decode("utf-8"))
-        if hello.get("v") != PROTOCOL_VERSION:
-            raise ConnectionError("protocol version mismatch")
-        ch.device = str(hello.get("device", "?"))
+        hello = ch.read_hello()
         if hello.get("role") == "data":
             data_thread(ch, hello, state)
             return
+        # Refuse to talk to ourselves. Both ends hold the same PSK, so the handshake succeeds and the
+        # node would enrol itself as a peer — broadcasting to itself and comparing versions against
+        # its own clips. This is the authority for that; the declared own_addresses are only a fast
+        # path that catches it before a socket is opened.  (docs/p2p-plan.md §5)
+        if ch.node_id and ch.node_id == node_id():
+            raise ConnectionError("that is this device")
         ch.lan = bool(hello.get("lan", False))
         ch.limit = cfg.max_file_bytes_local if ch.lan else cfg.max_file_bytes
+        # The accepter answers with its own declaration, so both ends know who they are talking to.
+        # Before protocol 2 this was one-way and only the PC learned anything.
+        # last_seq is 0 because this end keeps no cursor into the peer's sequence space: it means
+        # "I have nothing of yours", which makes the dialler catch us up exactly as we catch up an
+        # inbound client. Symmetry here is the point — an outbound link that never received the
+        # peer's current clipboard would look like a link that works only in one direction.
+        ch.send_json(T_HELLO, {"v": PROTOCOL_VERSION, "last_seq": 0, **declaration()})
         with state.lock:
             state.clients.add(ch)
             n = len(state.clients)
-        log.info("client %s connected (%s, %s link, file limit %d MB), %d online", addr[0], ch.device,
-                 "lan" if ch.lan else "internet", ch.limit // (1024 * 1024), n)
+        log.info("client %s connected (%s %s, %s link, file limit %d MB), %d online", addr[0],
+                 ch.device, short_id(ch.node_id), "lan" if ch.lan else "internet",
+                 ch.limit // (1024 * 1024), n)
         state.catch_up(ch, int(hello.get("last_seq", 0)))
-        while True:
-            typ, payload = ch.recv()
-            if typ == T_PING:
-                ch.send(T_PONG)
-            elif typ == T_CLIP:
-                item = parse_clip(payload, cfg)
-                if item:
-                    state.on_remote_text(item, ch)
-            elif typ == T_OFFER:
-                state.on_offer(json.loads(payload.decode("utf-8")), ch)
-            elif typ == T_WANT:
-                state.on_want(json.loads(payload.decode("utf-8")), ch)
-            elif typ == T_HAVE:
-                log.info("%s already has %s", ch.device, json.loads(payload.decode("utf-8")).get("sha256", "")[:12])
-            elif typ == T_SKIP:
-                m = json.loads(payload.decode("utf-8"))
-                log.info("%s skipped %s: %s", ch.device, m.get("sha256", "")[:12], m.get("reason", ""))
-            elif typ == T_ABORT:
-                m = json.loads(payload.decode("utf-8"))
-                state.abort(str(m.get("sha256", "")), f"{ch.device}: {m.get('reason', '')}")
-            elif typ == T_PONG:
-                pass
-            else:
-                log.warning("unknown frame type %d", typ)
+        serve(ch, cfg, state)
     except Exception as e:
         log.info("client %s (%s) dropped: %s", addr[0], ch.device if ch else "?", e)
     finally:
@@ -1258,75 +1321,120 @@ def server_thread(cfg: Cfg, state: SyncState):
         threading.Thread(target=client_thread, args=(sock, addr, cfg, state), daemon=True).start()
 
 
+# ----------------------------------------------------------------------------- client role
+DIAL_RETRY_MIN = 5         # seconds before re-dialling a peer that would not answer
+DIAL_RETRY_MAX = 300       # ... doubling to here, per peer, so one dead name does not slow the rest
+
+
+def on_lan(sock: socket.socket) -> bool:
+    """
+    Is the far end of this socket on a local network?
+
+    Decides which of the two file-size limits applies, so it has to be decided by the dialler — an
+    inbound client tells us, but there is nobody to ask on the way out.
+
+    Private, unique-local and link-local addresses are LAN; everything else is treated as the
+    internet. This is deliberately the conservative direction: a peer on the same LAN reached at a
+    *global* IPv6 address is called "internet" and gets the smaller limit, which costs a large
+    transfer that would have been allowed. The opposite error would push a 100 MB file over a
+    metered link. The Android side answers the same question properly, by comparing against the
+    prefixes of the interface in use; doing that here needs per-interface prefixes that
+    local_addresses() does not currently collect.
+    """
+    try:
+        ip = ipaddress.ip_address(sock.getpeername()[0].split("%")[0])
+    except (OSError, ValueError, IndexError):
+        return False
+    return ip.is_private or ip.is_link_local or ip.is_loopback
+
+
+def dial_thread(peer: str, cfg: Cfg, state: SyncState):
+    """
+    Keep one outbound connection to one listed peer.
+
+    This is the client role the PC did not have: it only ever accepted before, which is why a PC
+    could not reach a phone and two PCs could not find each other at all. One thread per peer, with
+    its own back-off, because a peer that is switched off must not slow down the redial of one that
+    is merely rebooting — a single shared back-off is the mistake the Android side still has to undo
+    in phase 4.
+
+    A connection that comes up is an ordinary client of `state`, indistinguishable from an inbound
+    one from there on: the same SecureChannel, the same registry, the same broadcast. Only the
+    handshake differs, and only in which half of the nonce exchange it performs.
+    """
+    # Checked once, not each round: cfg is a start-up snapshot, and Apply restarts the service.
+    if is_self(peer, cfg.own):
+        log.info("not dialling %s: that is this PC", peer)
+        return
+    backoff = DIAL_RETRY_MIN
+    while True:
+        ch = None
+        try:
+            sock = socket.create_connection((peer, cfg.port), timeout=10)
+            sock.settimeout(READ_TIMEOUT)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            lan = on_lan(sock)
+            ch = SecureChannel(sock, cfg.psk, cfg.max_frame, initiator=True)
+            # The dialler declares first and the accepter answers — the same order as before, now
+            # with the PC on the other end of it.
+            ch.send_json(T_HELLO, {"v": PROTOCOL_VERSION, "lan": lan, "last_seq": 0, **declaration()})
+            reply = ch.read_hello()
+            if ch.node_id and ch.node_id == node_id():
+                log.info("%s is this PC; not dialling it again", peer)
+                return
+            ch.lan = lan
+            ch.limit = cfg.max_file_bytes_local if lan else cfg.max_file_bytes
+            with state.lock:
+                state.clients.add(ch)
+                n = len(state.clients)
+            log.info("dialled %s (%s %s, %s link, file limit %d MB), %d online", peer, ch.device,
+                     short_id(ch.node_id), "lan" if lan else "internet",
+                     ch.limit // (1024 * 1024), n)
+            backoff = DIAL_RETRY_MIN
+            # Symmetric with the inbound path: tell the peer whatever it is behind on. Without this
+            # an outbound link delivers nothing until the next local copy, which reads as a link
+            # that works in one direction only.
+            state.catch_up(ch, int(reply.get("last_seq", 0)))
+            serve(ch, cfg, state)
+        except Exception as e:
+            log.info("dial %s: %s", peer, e)
+        finally:
+            if ch is not None:
+                with state.lock:
+                    state.clients.discard(ch)
+                try:
+                    ch.sock.close()
+                except OSError:
+                    pass
+        time.sleep(backoff)
+        backoff = min(backoff * 2, DIAL_RETRY_MAX)
+
+
+def client_role_thread(cfg: Cfg, state: SyncState):
+    """One dialler per listed peer. Discovery-found peers join in phase 4, when the PC browses."""
+    for peer in cfg.peers:
+        threading.Thread(target=dial_thread, args=(peer, cfg, state), daemon=True,
+                         name="clipsync-dial-%s" % peer).start()
+
+
 # ----------------------------------------------------------------------------- mDNS (LAN fallback path)
 MDNS_TYPE = "_clipsync._tcp.local."
 MDNS_SCAN = 5              # seconds between local-address rescans (local only, cheap)
-MDNS_PROBE = 60            # seconds between name-owner probes (hits the network, can be slow)
-MDNS_PROBE_FIRST = 10      # and how long the first one waits for the resolver to be up
 
 
-def owns_a_listed_name(peers: list, port: int) -> bool:
-    """
-    Am I one of the machines the configured addresses point at?  Only ever used to *withdraw* an
-    mDNS advertisement, so that when several PCs share one config.json the ones that own none of
-    the names stop announcing themselves and devices cannot reach the wrong hub.  A single-PC setup
-    always answers True here.  With no addresses listed, every PC is a host.
-
-    (This whole mechanism disappears in phase 3 of docs/p2p-plan.md: with many peers, several nodes
-    advertising is normal rather than a conflict.)
-
-    Decision:
-      * name resolves to one of my IPv6 addresses            -> host
-      * DNS fails (no internet / no AAAA)                     -> host   (cannot decide; mDNS is the path
-                                                                         wanted when the name is broken)
-      * name points elsewhere AND that address accepts TCP    -> NOT host (another live PC owns it)
-        on our port
-      * name points elsewhere but nothing answers there       -> host   (stale record: my address changed
-                                                                         and whatever updates the record has
-                                                                         not caught up — exactly when clients
-                                                                         need mDNS to find me)
-    """
-    if not peers:
-        return True
-    local = {p for p in local_addresses() if len(p) == 16 and not ipaddress.ip_address(p).is_link_local}
-    answered_elsewhere = []
-    for host in peers:
-        try:
-            remote = {ipaddress.ip_address(sa[0].split("%")[0]).packed
-                      for _, _, _, _, sa in socket.getaddrinfo(host, None, socket.AF_INET6)}
-        except socket.gaierror as e:
-            _say(log.warning, "cannot resolve %s (%s); assuming this PC is a host" % (host, e))
-            return True
-        if remote & local:
-            return True              # one of the listed names is mine: I am a host
-        for p in remote:
-            addr = str(ipaddress.ip_address(p))
-            try:
-                with socket.create_connection((addr, port), timeout=2) as s:
-                    if s.getsockname()[0].split("%")[0] == addr:
-                        return True  # connected to myself (address not listed by getaddrinfo)
-                    answered_elsewhere.append("%s -> %s" % (host, addr))
-            except OSError:
-                pass
-    if answered_elsewhere:
-        _say(log.info, "%s answers on port %d: that PC is the host"
-             % ("; ".join(answered_elsewhere), port))
-        return False
-    _say(log.warning, "none of %s is me and nothing answers there: stale record, acting as host"
-         % ", ".join(peers))
-    return True
-
-
-def _say(level, msg):
-    """Log `msg` only when it differs from the last one said this way.
-
-    The host probe repeats every MDNS_PROBE seconds and its findings are usually unchanged — a
-    stale DNS record stays stale until whatever updates it runs. Saying so once per minute buries
-    the events that do matter; saying it when the answer changes is the whole of its value.
-    """
-    if getattr(_say, "last", None) != msg:
-        _say.last = msg
-        level(msg)
+# owns_a_listed_name(), its DNS-and-TCP probe, the 60-second thread that drove it and the de-duplicated
+# logger it needed are gone — see docs/p2p-plan.md §4. The probe existed to stop two PCs on one LAN
+# both claiming to be *the* hub, by guessing, from DNS, which of them a shared configuration named.
+# Two things removed the need for it at once:
+#
+#   * a node now declares its own addresses (§4a), so the question "is this name mine?" is answered
+#     from the configuration instead of resolved over the network; and
+#   * with many peers there is no hub to be, so several PCs advertising on one LAN is the normal
+#     case rather than the conflict the probe was arbitrating.
+#
+# What it cost while it existed is worth recording: a resolver timeout on the advertising path, a
+# stale-record heuristic that could not be right in every case, and a warning that repeated once a
+# minute forever unless suppressed.
 
 
 def local_addresses():
@@ -1363,16 +1471,11 @@ def mdns_thread(cfg: Cfg):
     """
     Advertise _clipsync._tcp on every network this PC is attached to.
 
-    Two cadences, on two threads, because the two questions cost very different amounts:
-
-      * "what are my addresses?" is local and instant, so it is asked every MDNS_SCAN seconds and
-        is what drives the advertisement;
-      * "does someone else own a listed address?" resolves a name and may sit out a TCP timeout —
-        tens of seconds on a slow or broken resolver — so it runs on its own thread every MDNS_PROBE
-        seconds and can only ever *withdraw* the advertisement.
-
-    Keeping the slow question off the publishing path is the point: a device on the LAN is looking
-    for us during exactly the seconds a broken name would otherwise make us wait.
+    One cadence now, on one thread: "what are my addresses?" is local and instant, so it is asked
+    every MDNS_SCAN seconds and is the only thing that drives the advertisement. The second thread
+    that used to run beside it asked whether another PC owned a listed address, and it is gone with
+    the hub it was arbitrating (see the note above local_addresses). The advertising path no longer
+    waits on a resolver.
     """
     try:
         from zeroconf import IPVersion, ServiceInfo, Zeroconf
@@ -1425,28 +1528,6 @@ def mdns_thread(cfg: Cfg):
         else:
             log.info("mDNS advertising %s on port %d (%d addresses)", name, cfg.port, len(addrs))
 
-    host_now = True             # advertise by default; only a positive probe takes it away
-    was_host = None
-
-    def probe_loop():
-        nonlocal host_now, was_host
-        # Nothing depends on the first answer, so it waits for the resolver to come up rather than
-        # racing it at logon and logging a "cannot resolve" warning on every single boot.
-        time.sleep(MDNS_PROBE_FIRST)
-        while True:
-            try:
-                probed = owns_a_listed_name(cfg.peers, cfg.port)
-                if probed != was_host:
-                    log.info("this PC %s a listed host (%s)", "is" if probed else "is NOT",
-                             ", ".join(cfg.peers) or "no addresses listed")
-                    was_host = probed
-                host_now = probed
-            except Exception as e:
-                log.warning("mDNS host probe: %s", e)
-            time.sleep(MDNS_PROBE)
-
-    threading.Thread(target=probe_loop, daemon=True, name="clipsync-mdns-probe").start()
-
     seen = None
     while True:
         try:
@@ -1460,10 +1541,7 @@ def mdns_thread(cfg: Cfg):
             settled = addrs == seen
             seen = addrs
 
-            if not host_now:
-                if zc is not None:
-                    stop("another PC owns a listed address")
-            elif addrs and settled and addrs != published:
+            if addrs and settled and addrs != published:
                 publish(addrs)
         except Exception as e:
             log.warning("mDNS error: %s", e)
@@ -1474,6 +1552,10 @@ def mdns_thread(cfg: Cfg):
 def main():
     cfg = Cfg()
     state = SyncState(cfg, FileCache(cfg))
+    # First line of every run. The id is per-process (see clipsync_node), so this is what ties every
+    # later "client <id> connected" in this file to the session it belongs to — the thing the old
+    # persisted id used to provide for free, and the only thing worth keeping from it.
+    log.info("ClipSync %s, node %s (protocol %d)", node_name(), short_id(node_id()), PROTOCOL_VERSION)
     if Image is None:
         log.info("Pillow not installed: images are still exchanged as files; install 'pillow' to paste them as pictures")
 
@@ -1481,6 +1563,8 @@ def main():
         threading.Thread(target=server_thread, args=(cfg, state), daemon=True).start()
         if cfg.discovery:
             threading.Thread(target=mdns_thread, args=(cfg,), daemon=True).start()
+        if cfg.direct and cfg.peers:
+            client_role_thread(cfg, state)
 
     # Reading the clipboard can mean writing a screenshot to disk, and handling the result means
     # hashing a file that may be 100 MB — none of which belongs on the thread that pumps the

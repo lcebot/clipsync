@@ -11,6 +11,7 @@ import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Properties;
+import java.util.Set;
 
 /**
  * Everything is configured at runtime, in files/clipsync.conf, which MainActivity writes. There are
@@ -37,6 +38,14 @@ public final class Config {
     public final List<String> peers;    // host names or literal addresses, in the order entered
     public final boolean direct;        // dial the list at all
     public final boolean discovery;     // look for peers on the local network (mDNS)
+    /**
+     * The names and literals that point at THIS device — typically a domain a dynamic DNS client
+     * here keeps pointed at it. See docs/p2p-plan.md §4a. Read whether or not {@link #direct} is on:
+     * it is what the node knows itself by, which stays true when it is dialling nobody.
+     */
+    public final List<String> ownAddresses;
+    /** {@link #ownAddresses} normalised, for the membership tests that actually run. */
+    public final Set<String> own;
     public final int port;
     public final byte[] psk;
     public final String pskHex;
@@ -54,6 +63,8 @@ public final class Config {
         direct = bool(p.getProperty("direct", "true"));
         discovery = bool(p.getProperty("discovery", "true"));
         peers = direct ? peerList(p.getProperty("peers", "")) : List.of();
+        ownAddresses = peerList(p.getProperty("own_addresses", ""));
+        own = Set.copyOf(ownAddresses);          // peerList already normalised and deduped them
         port = Integer.parseInt(p.getProperty("port").trim());
         pskHex = p.getProperty("psk").trim().toLowerCase();
         psk = hex(pskHex);
@@ -108,6 +119,7 @@ public final class Config {
     public static Properties raw(Context ctx) {
         Properties p = new Properties();
         p.setProperty("peers", "");
+        p.setProperty("own_addresses", "");     // most devices have no name of their own
         p.setProperty("direct", "false");      // nothing to dial until the user adds an address
         p.setProperty("discovery", "true");    // works with no configuration at all
         p.setProperty("port", "47521");
@@ -141,7 +153,12 @@ public final class Config {
         // the old three-way mode made this impossible to express; two switches can, so it is checked
         if (!direct && !discovery)
             throw new IllegalArgumentException("discovery: turn on local network discovery or direct connections");
-        if (direct) fail("peers", checkPeers(p.getProperty("peers", "")));
+        fail("own_addresses", checkAddresses(p.getProperty("own_addresses", ""), true, Set.of()));
+        // Checked against the own list, so this device's own name pasted into the peer list is
+        // refused here rather than dialled, connected, handshaken and discarded. The id comparison
+        // in HELLO stays the authority: a second name for the same host looks like any other name.
+        if (direct) fail("peers", checkAddresses(p.getProperty("peers", ""), false,
+                Set.copyOf(peerList(p.getProperty("own_addresses", "")))));
         fail("port", checkPort(p.getProperty("port", "")));
         fail("psk", checkPsk(p.getProperty("psk", "")));
         fail("mdns_timeout_ms", checkRange(p.getProperty("mdns_timeout_ms", ""), 500, 60000, "ms"));
@@ -194,8 +211,17 @@ public final class Config {
         return null;
     }
 
-    /** The whole list: every entry valid, at least one entry, no repeats. */
-    public static String checkPeers(String stored) {
+    /**
+     * A whole address list: every entry valid, no repeats, and optionally at least one entry.
+     *
+     * <p>Used for both lists, which is the point — {@code peers} and {@code own_addresses} accept
+     * exactly the same things and must not drift into accepting different ones. They differ in two
+     * parameters only: the peer list needs an entry while Direct connections is on and the own list
+     * never does, and a peer entry is additionally refused when it names this device.
+     *
+     * @param own normalised own-address list; empty when checking the own list itself
+     */
+    public static String checkAddresses(String stored, boolean allowEmpty, Set<String> own) {
         List<String> seen = new ArrayList<>();
         boolean any = false;
         for (String s : stored.split(",")) {
@@ -205,9 +231,23 @@ public final class Config {
             if (problem != null) return problem;
             String t = normalisePeer(s);
             if (seen.contains(t)) return "listed twice: " + t;
+            if (own.contains(t)) return "that is this device: " + t;
             seen.add(t);
         }
-        return any ? null : "add an address, or turn direct connections off";
+        if (!any && !allowEmpty) return "add an address, or turn direct connections off";
+        return null;
+    }
+
+    /**
+     * Does this address name this device, as far as the declared list can tell?
+     *
+     * <p>A string comparison on the normalised form, never a DNS lookup — this runs on every
+     * keystroke on the UI thread, which is the same reason {@link #isIpLiteral} uses
+     * {@code InetAddresses.isNumericAddress}. It therefore catches the spellings that were declared
+     * and nothing else; a second name for the same host still reaches the handshake.
+     */
+    public static boolean isSelf(String address, Set<String> own) {
+        return own.contains(normalisePeer(address));
     }
 
     /**

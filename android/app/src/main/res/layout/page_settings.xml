@@ -125,6 +125,57 @@
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
+        <!-- This device's own addresses (docs/p2p-plan.md §4a).
+
+             Above the two switches, not below, for a reason beyond reading order: the peer list
+             validates against this one, so it has to be the thing already on screen when the user
+             starts typing addresses into the list below it. It extends the "who we are" half that
+             the port and PSK card began.
+
+             No switch, so it is a bare card in a column of switch-and-card pairs — the one place
+             that pattern does not hold, and it does not hold because there is nothing to turn off:
+             an empty list already means "this device has no name of its own", and disabling such a
+             list could only cause the mistakes it exists to prevent. Its label therefore lives
+             inside the card; a fourth section heading would flatten the three the page has. -->
+        <com.google.android.material.card.MaterialCardView
+            style="?attr/materialCardViewFilledStyle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp">
+
+            <LinearLayout style="@style/ClipSync.CardBody">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:paddingStart="16dp"
+                    android:textAppearance="?attr/textAppearanceBodyLarge"
+                    android:text="@string/section_own" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:paddingStart="16dp"
+                    android:textAppearance="?attr/textAppearanceBodySmall"
+                    android:textColor="?attr/colorOnSurfaceVariant"
+                    android:text="@string/own_help" />
+
+                <LinearLayout
+                    android:id="@+id/own_box"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/own_add"
+                    style="@style/ClipSync.SettingsButton"
+                    android:layout_marginTop="4dp"
+                    android:text="@string/peer_add"
+                    app:icon="@drawable/ic_add" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
         <!-- The two switches are named for HOW a peer is found, not for the route to it: a listed
              address is very often a LAN address too. Named that way, neither needs a subtitle.
 

@@ -2,8 +2,8 @@
 #
 # The APK carries NO configuration. There is no build-time config and no CLIPSYNC_* secret: the app
 # is set up on the device, which is what makes it safe to attach a build to a public release — there
-# is no field in it that could hold anybody's key. (The PSK guard further down covers clipsync.ini,
-# which really does ship inside windows.zip.)
+# is no field in it that could hold anybody's key. Neither does windows.zip: no config.json is
+# committed or shipped — the settings window writes one on the machine it runs on.
 #
 # Secrets (Settings > Secrets and variables > Actions), signing only:
 #   KEYSTORE_B64       - base64 of your personal keystore (see below)
@@ -161,28 +161,27 @@ jobs:
         run: gradle assembleRelease --no-daemon $VERSION_ARGS
 
       # The PC side ships as a zip built from a named list — never by zipping the folder, which
-      # would sweep up clipsync.log, install-state.json and received/ as well.
+      # would sweep up clipsync.log, install-state.json, config.json and received/ as well.
       #
-      # clipsync.ini comes from the checkout, where it is committed with an empty psk and no host.
-      # That is the file a release must contain, and it is also the one to be careful with: it is
-      # tracked, so .gitignore cannot protect it from a local edit. Keep your own values out of a
-      # commit with
-      #     git update-index --skip-worktree windows/clipsync.ini
-      # which leaves the clean version in the repository and stops your working copy being staged.
+      # NO config.json SHIPS, and none is committed. configurator.py opens on the defaults when the
+      # file is absent and writes a complete one on Apply, so a template bought nothing — while being
+      # the one tracked file that could carry a real PSK, which .gitignore cannot protect from a
+      # local edit. Deleting it removed the leak, the guard that watched for it, and the
+      # skip-worktree dance the guard needed, all at once.
+      #
+      # What is left is a tripwire, because the accident this prevents is expensive and silent, and
+      # someone adding the file back would not think of it.
       - name: package the PC side
         working-directory: windows
         run: |
-          # Fail on a key that looks real rather than demanding an exactly blank line, so wording
-          # changes never block a release. The committed default is 64 zeros — long, but obviously
-          # not a key — so length alone is not the test: it must also contain a non-zero digit.
-          psk=$(sed -nE 's/^[[:space:]]*psk[[:space:]]*=[[:space:]]*([0-9A-Fa-f]*).*/\1/p' clipsync.ini | head -n1)
-          if [ "${#psk}" -ge 32 ] && printf '%s' "$psk" | grep -q '[^0]'; then
-            echo "windows/clipsync.ini carries a real-looking psk — refusing to publish it."
-            echo "See the note above this step: the committed file must ship blank or all zeros."
+          if [ -e config.json ]; then
+            echo "windows/config.json is committed. It must not be: it is the only file here that"
+            echo "can hold a PSK, and the settings window creates it locally on first Apply."
             exit 1
           fi
           mkdir -p "$RUNNER_TEMP/pc"
-          cp clipsync.py install.ps1 uninstall.ps1 requirements.txt clipsync.ini "$RUNNER_TEMP/pc/"
+          cp clipsync.py clipsync_config.py clipsync_node.py configurator.py \
+             install.ps1 uninstall.ps1 requirements.txt "$RUNNER_TEMP/pc/"
           (cd "$RUNNER_TEMP/pc" && zip -q -r "$RUNNER_TEMP/windows.zip" .)
 
       # Everything that ships is staged in one flat folder first. upload-artifact keeps the common
