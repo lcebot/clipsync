@@ -108,20 +108,20 @@
                      slot is the reveal toggle, and the leading slot — which does fit — puts an action
                      where a text field's leading icon is read as decoration.
 
-                     ClipSync.SettingsTextButton carries the alignment; themes.xml says why each of
-                     its items is needed. The short version is that the inherited android:paddingLeft
-                     is 24dp and had to be cleared, not just paired with a paddingStart.
-                     No icon, deliberately, and not for a reason a layout could fix: Material Symbols
-                     are drawn on a 24dp grid with a trim area, so "add" spans x=5..19 of its viewport
-                     and its ink begins ~4dp inside the 20dp the button draws it at. Trimming the asset
-                     would put that one icon on a different optical grid from every other icon in the
-                     app; a -4dp margin would hardcode a number read off one drawable's path data. An
-                     icon can come back once this column is confirmed on a device. -->
+                     ClipSync.SettingsButton carries the geometry; themes.xml says why each of its
+                     items is there. Now that the button is outlined, its border lines up with the
+                     fields' borders and the icon is free to come back: the earlier problem — a Material
+                     Symbol's trim area putting the icon's ink ~4dp off a text column — only mattered
+                     while the label was the thing holding that column.
+                     marginTop is 4dp, not 8dp: the button's background is drawn 4dp inside its view
+                     box (containerInsetTop), so 4dp of margin reads as the same 8dp gap the fields
+                     leave between each other. -->
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/psk_random"
-                    style="@style/ClipSync.SettingsTextButton"
+                    style="@style/ClipSync.SettingsButton"
                     android:layout_marginTop="4dp"
-                    android:text="@string/psk_generate" />
+                    android:text="@string/psk_generate"
+                    app:icon="@drawable/ic_dice" />
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
@@ -170,7 +170,7 @@
             style="?attr/materialCardViewFilledStyle"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="2dp">
+            android:layout_marginTop="3dp">
 
             <LinearLayout style="@style/ClipSync.CardBody">
 
@@ -215,7 +215,7 @@
             style="?attr/materialCardViewFilledStyle"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="2dp">
+            android:layout_marginTop="3dp">
 
             <LinearLayout style="@style/ClipSync.CardBody">
 
@@ -228,11 +228,29 @@
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/peer_add"
-                    style="@style/ClipSync.SettingsTextButton"
+                    style="@style/ClipSync.SettingsButton"
                     android:layout_marginTop="4dp"
-                    android:text="@string/peer_add" />
+                    android:text="@string/peer_add"
+                    app:icon="@drawable/ic_add" />
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
+
+        <!-- Config.from() refuses a config with both switches off, so Apply has to refuse it too, and
+             something has to say why: with both off, both group cards are hidden and there is no field
+             left to hang an error on. Placed under the pair rather than on either switch, because
+             neither is wrong on its own. Styled as a TextInputLayout error would be — bodySmall on
+             colorError — and indented to the fields' label column so it reads as one. -->
+        <TextView
+            android:id="@+id/paths_error"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:paddingHorizontal="28dp"
+            android:textAppearance="?attr/textAppearanceBodySmall"
+            android:textColor="?attr/colorError"
+            android:text="@string/paths_none"
+            android:visibility="gone"
+            tools:visibility="visible" />
 
         <!-- ===== Transfer limits ===== -->
         <TextView style="@style/ClipSync.SectionTitle" android:text="@string/section_limits" />

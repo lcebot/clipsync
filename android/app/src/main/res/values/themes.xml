@@ -33,9 +33,19 @@
     </style>
 
 
-    <!-- A low-emphasis action inside a settings card: "Generate random PSK key", "Add address".
-         Its label has to start where the fields' own labels do, which is 16dp into the card body.
-         Getting there took three tries, so the reason each item is here:
+    <!-- An action inside a settings card: "Generate random PSK key", "Add address".
+
+         Outlined, not borderless. Its left edge then sits exactly where the outlined text fields'
+         left edges sit — 12dp into the card body for both — so the alignment that carries the page is
+         outline to outline, between two things of the same kind. That is also what makes an icon
+         harmless again: with a border to read, nothing depends on where the label happens to land.
+         The stroke and its colour come from the parent, which is the point of using it — Expressive's
+         outlined button strokes ?attr/colorOutlineVariant at ?attr/containerStrokeWidth, and there is
+         no Expressive ".Icon" variant to reach for because its padding is already symmetric.
+
+         The padding items below are probably redundant under this parent, which supplies 16dp through
+         containerPaddingStart/End. They are kept because this exact set is what was confirmed correct
+         on a device, and because the inherited absolute pair is still live underneath:
            paddingLeft/Right  Widget.Material3.Button — the parent two levels up — sets
                               android:paddingLeft/Right to m3_btn_padding_left = 24dp, and the
                               Expressive child adds paddingStart/End WITHOUT clearing them. Both stay
@@ -50,7 +60,7 @@
            gravity            the inherited gravity is centre, so any stretch pushes the label right.
          Named parent rather than ?attr/borderlessButtonStyle because a style cannot take an attribute
          as its parent, and the padding being overridden is the parent's own. -->
-    <style name="ClipSync.SettingsTextButton" parent="Widget.Material3Expressive.Button.TextButton">
+    <style name="ClipSync.SettingsButton" parent="Widget.Material3Expressive.Button.OutlinedButton">
         <item name="android:layout_width">wrap_content</item>
         <item name="android:layout_height">wrap_content</item>
         <item name="android:minWidth">0dp</item>

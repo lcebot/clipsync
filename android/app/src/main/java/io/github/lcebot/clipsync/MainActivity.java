@@ -70,6 +70,8 @@ public class MainActivity extends AppCompatActivity {
     private MaterialButton peerAdd, pskRandom;
     /** The group each switch governs. Whole cards now, because the switches sit outside them. */
     private View discoveryCard, directCard;
+    /** Shown under the pair when both switches are off — see {@link #validate()}. */
+    private View pathsError;
     private Slider browse, threads;
     private TextView browseLabel, threadsLabel;
     private ViewGroup settingsRoot;
@@ -209,6 +211,7 @@ public class MainActivity extends AppCompatActivity {
         keepMbL = findViewById(R.id.keep_mb_layout);  keepMb = findViewById(R.id.keep_mb);
         discoveryCard = findViewById(R.id.discovery_card);
         directCard = findViewById(R.id.direct_card);
+        pathsError = findViewById(R.id.paths_error);
         browse = findViewById(R.id.browse);
         browseLabel = findViewById(R.id.browse_label);
         threads = findViewById(R.id.threads);
@@ -280,12 +283,13 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void addPeerRow(String value, boolean animate) {
-        if (animate) TransitionManager.beginDelayedTransition(settingsRoot, fieldMotion());
         TextInputLayout row = (TextInputLayout) getLayoutInflater().inflate(R.layout.item_peer, peersBox, false);
         TextInputEditText field = row.findViewById(R.id.peer);
         field.setText(value);
         field.addTextChangedListener(revalidate);
         row.setEndIconOnClickListener(v -> removePeerRow(row));
+        // Inflated before the transition begins so the new row can be named as the thing that fades.
+        if (animate) TransitionManager.beginDelayedTransition(settingsRoot, visibilityMotion(row));
         peersBox.addView(row);
         peerRows.add(row);
         refreshPeerRows();
@@ -293,7 +297,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void removePeerRow(TextInputLayout row) {
         if (peerRows.size() <= 1) return;                 // the icon is hidden, but be certain
-        TransitionManager.beginDelayedTransition(settingsRoot, fieldMotion());
+        TransitionManager.beginDelayedTransition(settingsRoot, visibilityMotion(row));
         peersBox.removeView(row);
         peerRows.remove(row);
         refreshPeerRows();
@@ -347,14 +351,14 @@ public class MainActivity extends AppCompatActivity {
     /**
      * Show / hide the card each switch governs. The switches are rows at page level above their
      * cards, so the card is the whole hideable unit and the switch is never inside what it hides.
+     * Both cards are named as the fading views, because either or both can turn over in one call.
      *
-     * <p>MaterialFade is M3's own transition for an element entering or leaving inside a container
-     * — the same motion vocabulary as the page cross-fade — but it only fades and scales the
-     * element itself, so ChangeBounds is paired with it to close the gap it leaves. One duration
-     * for both, or the fade and the reflow drift apart.
+     * @see #visibilityMotion(View...)
      */
     private void applySwitches(boolean animate) {
-        if (animate) TransitionManager.beginDelayedTransition(settingsRoot, fieldMotion());
+        if (animate)
+            TransitionManager.beginDelayedTransition(
+                    settingsRoot, visibilityMotion(discoveryCard, directCard, pathsError));
         discoveryCard.setVisibility(discovery.isChecked() ? View.VISIBLE : View.GONE);
         directCard.setVisibility(direct.isChecked() ? View.VISIBLE : View.GONE);
         if (!direct.isChecked()) dropBlankRows();
@@ -409,11 +413,42 @@ public class MainActivity extends AppCompatActivity {
         return t.equals("true") || t.equals("1") || t.equals("yes") || t.equals("on");
     }
 
-    private TransitionSet fieldMotion() {
+    /**
+     * Fade a view in or out while its siblings reflow around it.
+     *
+     * <p>Three things here are not obvious, and each of them silently cost a fade:
+     *
+     * <ul>
+     *   <li><b>No duration on the set.</b> {@link TransitionSet#setDuration} loops over its children
+     *       and sets theirs too, and {@code MaterialFade} only applies M3's own durations while its
+     *       duration is still unset ({@code TransitionUtils.maybeApplyThemeDuration} guards on -1).
+     *       Pinning the set therefore replaces the spec — 400 ms in, 150 ms out, asymmetric on
+     *       purpose — with one symmetric number. The reflow is pinned on its own instead.
+     *   <li><b>FadeProvider reaches full alpha at 30% of the duration.</b> So the number the set was
+     *       pinning was not even the fade's length: at 220 ms the fade-in ran 66 ms, which is not a
+     *       fade, it is an appearance. At M3's 400 ms it is 120 ms, which reads.
+     *   <li><b>ChangeBounds has to be kept off the view that is fading.</b> Untargeted, it captures
+     *       the fading view too and animates bounds that are degenerate on the GONE side, fighting
+     *       the visibility animator on the same view.
+     * </ul>
+     *
+     * <p>1.14.0 has no spring-driven Transition — the Expressive spring attributes feed
+     * SpringAnimation directly and are not wired into androidx.transition — so MaterialFade under its
+     * own themed durations is the M3 Expressive answer here.
+     */
+    private TransitionSet visibilityMotion(View... fading) {
+        MaterialFade fade = new MaterialFade();
+        ChangeBounds bounds = new ChangeBounds();
+        bounds.setDuration(220);
+        for (View v : fading) {
+            if (v == null) continue;
+            fade.addTarget(v);
+            bounds.excludeTarget(v, true);
+        }
         return new TransitionSet()
-                .addTransition(new MaterialFade())
-                .addTransition(new ChangeBounds())
-                .setDuration(220);
+                .setOrdering(TransitionSet.ORDERING_TOGETHER)
+                .addTransition(fade)
+                .addTransition(bounds);
     }
 
     private Properties values() {
@@ -440,7 +475,14 @@ public class MainActivity extends AppCompatActivity {
     // ------------------------------------------------------------------ live validation
     /** Runs every field check, shows errors, and gates Apply. Returns true when everything is valid. */
     private boolean validate() {
-        boolean ok = validatePeers();
+        // Config.from() refuses a config with neither path enabled, so Apply has to refuse it first.
+        // This check has no field of its own: with both switches off, both group cards are hidden,
+        // which is exactly why it needs its own line rather than an error on one of the fields.
+        boolean anyPath = discovery.isChecked() || direct.isChecked();
+        pathsError.setVisibility(anyPath ? View.GONE : View.VISIBLE);
+
+        boolean ok = anyPath;
+        ok &= validatePeers();
         ok &= show(portL, Config.checkPort(text(port)));
         ok &= show(pskL, Config.checkPsk(text(psk)));
         ok &= show(textKbL, Config.checkRange(text(textKb), 1, 65536, "KB"));

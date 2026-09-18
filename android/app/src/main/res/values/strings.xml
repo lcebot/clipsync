@@ -46,6 +46,9 @@
     <string name="peer_remove">Remove</string>
     <string name="peer_duplicate">Already listed above</string>
     <string name="browse_label">mDNS browse timeout: %1$d ms</string>
+    <!-- Both switches off leaves no way to reach anything. Shown under the pair, because it is about
+         the pair; neither switch on its own is wrong. -->
+    <string name="paths_none">Turn on at least one of these. With both off there is no way to reach another device.</string>
 
     <!-- transfer limits -->
     <string name="section_limits">Transfer limits</string>
