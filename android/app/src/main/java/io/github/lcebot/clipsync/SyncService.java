@@ -849,7 +849,27 @@ public class SyncService extends Service {
         final String target;
         volatile Link live;
         private volatile boolean stop;
-        private long backoff = BACKOFF_MIN_MS;
+        private volatile long backoff = BACKOFF_MIN_MS;
+        /**
+         * The link that won this target's peer, while a duplicate is being suppressed.
+         *
+         * <p>Dial-time suppression (§5): once a handshake has proved that two targets are one
+         * machine, there is no reason to keep proving it. Held as the winning Link rather than as a
+         * flag so it heals itself — the moment that link closes, this target starts dialling again,
+         * which is what makes it a suppression rather than a permanent surrender.
+         */
+        private volatile Link deferredTo;
+        /**
+         * The back-off's own monitor, and the reason this class has two.
+         *
+         * <p>It used to wait on {@code lock}, which is also what {@code wake()} notifies on every
+         * clipboard copy — so every copy cancelled every dialer's back-off. The log of that is
+         * unambiguous: "retry in 60s" followed four seconds later by a full connect and handshake,
+         * once per copy, forever. The two waits are asking different questions. The gate asks "is
+         * there work", which a new clip answers; the back-off asks "has the world changed", which
+         * only a network change or a shutdown answers.
+         */
+        private final Object retry = new Object();
 
         Dialer(String target) {
             this.target = target;
@@ -857,12 +877,16 @@ public class SyncService extends Service {
 
         void cancel() {
             stop = true;
+            synchronized (retry) { retry.notifyAll(); }
             Link l = live;
             if (l != null) l.close();
         }
 
         void resetBackoff() {
-            backoff = BACKOFF_MIN_MS;
+            synchronized (retry) {
+                backoff = BACKOFF_MIN_MS;
+                retry.notifyAll();      // a new network is a real new chance: do not sit out the wait
+            }
         }
 
         @Override public void run() {
@@ -877,21 +901,32 @@ public class SyncService extends Service {
                 }
                 if (!running || stop) return;
 
+                // Dial-time suppression (§5). Once a handshake has proved this target is a machine
+                // another target already holds, stop proving it: a successful connect, handshake and
+                // BYE once per back-off is the most expensive way possible to learn something we
+                // already know. It lapses the moment the winning link closes, so this is a deferral
+                // and not a surrender — if the other route dies, this one takes over.
+                Link held = deferredTo;
+                if (held != null && held.isOpen()) {
+                    waitBackoff();
+                    continue;
+                }
+                deferredTo = null;
+
                 boolean burst = false;
                 Link l = null;
                 try {
                     l = open();
                     live = l;
-                    if (register(l)) {
+                    Link winner = register(l);
+                    if (winner == null) {
                         backoff = BACKOFF_MIN_MS;
                         burst = l.run();
                     } else {
-                        // A duplicate of a peer another target already holds. Not transient, so it
-                        // waits the longest interval rather than falling through to an immediate
-                        // redial — without that it would re-dial, re-handshake and be rejected again
-                        // with no delay at all, which is a TCP connect plus an HKDF handshake per
-                        // iteration. Not permanent either: if the link that won goes away, this
-                        // target is how the peer is reached again.
+                        // A duplicate of a peer another target already holds. Remember which link
+                        // won, so the next round skips the dial entirely instead of connecting and
+                        // handshaking only to be rejected again.
+                        deferredTo = winner;
                         backoff = backoffMax();
                     }
                 } catch (Connection.SelfConnection e) {
@@ -937,10 +972,18 @@ public class SyncService extends Service {
             if ((!screenOn && pendingLocal == null) || !hasNetwork) return;
             long wait = Math.min(backoff, backoffMax());
             Logger.i(target + ": retry in " + wait / 1000 + "s (" + (onLan ? "lan" : "mobile") + ")");
-            synchronized (lock) {
-                try { lock.wait(wait); } catch (InterruptedException ignored) {}
+            // A deadline and a loop, not a bare wait(ms): a single wait returns on ANY notify, and
+            // the wait it replaced was on the monitor a clipboard copy notifies. Waiting out the
+            // remainder each time is what makes the logged interval the interval that is served.
+            long until = System.currentTimeMillis() + wait;
+            synchronized (retry) {
+                for (long left; running && !stop && (left = until - System.currentTimeMillis()) > 0; ) {
+                    long was = backoff;
+                    try { retry.wait(left); } catch (InterruptedException ignored) { return; }
+                    if (backoff != was) return;     // resetBackoff(): a genuinely new chance
+                }
             }
-            if (backoff == wait) backoff = Math.min(wait * 2, backoffMax());   // unless a change reset it
+            if (backoff == wait) backoff = Math.min(wait * 2, backoffMax());
             else if (backoff > backoffMax()) backoff = backoffMax();
         }
     }
@@ -949,9 +992,11 @@ public class SyncService extends Service {
      * The target name for "whatever local discovery finds".
      *
      * <p>An asterisk because it cannot appear in a host name, so this collides with nothing a user
-     * can type — and <b>not</b> a {@code \u0000} sentinel, which would have been the obvious
-     * choice and does not compile: Java processes unicode escapes before lexing, so that one puts a
-     * real NUL in the source file rather than in the string.
+     * can type — and <b>not</b> a NUL (\\u0000) sentinel, which was the first
+     * choice and does not compile: Java resolves backslash-u escapes before lexing, and it does so
+     * inside comments too, so writing one puts a real NUL into the source file rather than into the
+     * string. Worth knowing before reaching for one again — including while writing the comment
+     * that explains why not to, which is how this paragraph came to contain one.
      */
     private static final String MDNS = "*discovery*";
 
@@ -968,14 +1013,14 @@ public class SyncService extends Service {
      * Rule 3 is the one that fits, and it is also the stable choice: the older link is the one that
      * is already carrying traffic.
      */
-    private boolean register(Link l) {
+    private Link register(Link l) {
         String id = l.peerId();                         // never null: hello() refuses a peer with no id
         Link existing = byPeer.putIfAbsent(id, l);
-        if (existing == null || existing == l) return true;
+        if (existing == null || existing == l) return null;
         // It died between the handshake and now. replace() and not put(): a third link may have
         // registered in the meantime, and overwriting it unconditionally would lose it from the map
         // while it went on running — invisible to the heartbeat, the broadcast and the status.
-        if (!existing.isOpen() && byPeer.replace(id, existing, l)) return true;
+        if (!existing.isOpen() && byPeer.replace(id, existing, l)) return null;
         Logger.i(l.target + " is " + existing.target + " by another name [" + Node.shortId(id)
                 + "] — closing the newer link");
         l.bye("duplicate");

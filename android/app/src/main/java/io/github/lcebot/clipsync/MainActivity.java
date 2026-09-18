@@ -564,14 +564,29 @@ public class MainActivity extends AppCompatActivity {
             try { startActivity(i); } catch (Exception e) { startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)); }
         });
 
-        // Scrolling to the end has to wait until the new text has actually been laid out; posting
-        // it is a race the layout pass usually wins, which is how the log ended up pinned at the
-        // top. scrollTo, not fullScroll: fullScroll moves focus into the (selectable) TextView,
-        // and the scroll container then scrolls that view's *top* into view.
+        // Scrolling to the end has to wait until the new text has actually been laid out, which is
+        // what the layout listener is for. scrollTo and not fullScroll: fullScroll moves focus into
+        // the (selectable) TextView, and the scroll container then scrolls that view's *top* into
+        // view — the original bug.
+        //
+        // Two details here are both load-bearing, and getting either wrong lands the view partway
+        // down and then <b>keeps</b> it there. The flag is only re-armed by showLog() when the view
+        // is already at the bottom, so a single short landing is permanent: every later line pushes
+        // the end further away, which is why this failed as "scrolls to about a quarter".
+        //
+        //   posted — this callback runs DURING layout, where the scroll range is computed from
+        //            dimensions that are not final yet, and a scroll clamped against a stale range
+        //            lands short;
+        //   MAX_VALUE — not log.getBottom(). NestedScrollView clamps to its true maximum, so asking
+        //            for more than exists is exactly right and cannot be short by construction,
+        //            whereas a computed target is only as good as the moment it was computed.
         log.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
             if (!logToBottom) return;
-            logToBottom = false;
-            pageLog.scrollTo(0, log.getBottom());            // NestedScrollView clamps this
+            pageLog.post(() -> {
+                if (!logToBottom) return;
+                logToBottom = false;
+                pageLog.scrollTo(0, Integer.MAX_VALUE);
+            });
         });
 
         // Shrink to the icons while the page scrolls down, extend again on the way up.
