@@ -207,8 +207,11 @@ class Provider:
         Opens the window.  Blocking -- the key derivation is deliberately slow -- so call it off the
         UI thread.
 
-        :param on_paired: (device, type) -> None, once, when the key has been given away
-        :param on_closed: burned: bool -> None, once, if the window ends without pairing anyone
+        :param on_paired: (device, type) -> None, ONCE PER DEVICE.  The window does not end on a
+                          success: setting up three devices is the ordinary case, and closing after
+                          the first would mean a new window and a new code read out for each of the
+                          others -- two minutes of work to save nothing.
+        :param on_closed: burned: bool -> None, once, when the window is over
         """
         try:
             from zeroconf import IPVersion, ServiceInfo, Zeroconf
@@ -281,7 +284,7 @@ class Provider:
                            % (base_port + 1, base_port + PAIR_PORT_SPAN, last))
 
     def _run(self):
-        burned = paired = False
+        burned = False
         try:
             while not self._closed and time.monotonic() < self.closes_at:
                 try:
@@ -291,17 +294,21 @@ class Provider:
                 except OSError:
                     break                    # closed from under us
                 if self._serve(conn):
-                    paired = True
-                    break
+                    # A success does NOT end the window; the next device wants the same key and the
+                    # same code is still on screen.  It does clear the strikes, because five wrong
+                    # codes means someone guessing, and a caller who has just proved it knows the
+                    # code is evidence that nobody was.
+                    self._failures = 0
+                    continue
                 self._failures += 1
                 if self._failures >= MAX_TRIES:
                     burned = True
                     break
         finally:
             self._shut()
-            # Exactly one ending is reported: the success was announced from _serve, and a window the
-            # caller closed itself needs no telling.
-            if not paired and not self._closed:
+            # Only for an ending nobody asked for: a window the caller closed itself needs no
+            # telling, and each success was announced as it happened.
+            if not self._closed:
                 self._closed = True
                 self._on_closed(burned)
             self._closed = True

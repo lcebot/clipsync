@@ -23,17 +23,45 @@ import com.google.android.material.transition.MaterialSharedAxis;
  * there is to do, and a surface that can be dismissed by tapping beside it is the wrong shape for
  * that.
  *
- * <p>It returns a choice rather than acting on one. The pairing sheets belong to the settings page,
- * where the fields they rewrite live, so this hands back {@link #EXTRA_CHOICE} and lets
- * {@link MainActivity} open them — which is also what makes the button in Settings and the first run
- * the same code path rather than two that drift.
+ * <p>The pairing sheets open <b>over</b> this screen rather than being handed back to the settings
+ * page. A sheet is a sheet — it belongs on top of whatever asked for it — and finishing the setup
+ * flow in order to perform the one thing the setup flow exists for put the user back on a page they
+ * had not chosen to be on. {@link PairSheet.Host} is what lets one sheet serve both callers; only
+ * *Set up manually* still leaves, because leaving is what it means.
  */
 public final class WelcomeActivity extends AppCompatActivity {
-    /** {@link #JOIN}, {@link #GENERATE} or {@link #MANUAL}; absent if the user backed out. */
+    /**
+     * {@link #MANUAL} if the user chose to type a key in themselves; absent otherwise.
+     *
+     * <p>The only choice that still travels, because it is the only one that means "leave this
+     * screen". Joining and generating open a sheet over this activity and finish it when they are
+     * done, so there is nothing for the settings page to act on.
+     */
     static final String EXTRA_CHOICE = "choice";
-    static final String JOIN = "join", GENERATE = "generate", MANUAL = "manual";
+    static final String MANUAL = "manual";
 
     private View intro, choose;
+
+    /** True once a key exists, by either route: this screen's whole job, done. */
+    private boolean setUp;
+
+    /**
+     * Nothing to reload — unlike the settings page there are no fields here showing the old key —
+     * so this only has to notice whether the screen still has a reason to exist.
+     *
+     * <p>Keyed on the key being written rather than on a device having paired, because generating
+     * one and then pairing nobody is still a finished setup: there is a key now, and the offer can
+     * be made again from Settings whenever the other devices are to hand.
+     */
+    private final PairSheet.Host host = new PairSheet.Host() {
+        @Override public void keyChanged() {
+            setUp = true;
+        }
+
+        @Override public void closed() {
+            if (setUp) finish();
+        }
+    };
 
     @Override
     protected void onCreate(Bundle state) {
@@ -43,8 +71,12 @@ public final class WelcomeActivity extends AppCompatActivity {
         choose = findViewById(R.id.page_choose);
 
         Haptics.onClick(findViewById(R.id.intro_next), () -> page(true));
-        Haptics.onClick(findViewById(R.id.choose_join), () -> finishWith(JOIN));
-        Haptics.onClick(findViewById(R.id.choose_generate), () -> finishWith(GENERATE));
+        // Pairing happens ON this screen, over it, rather than by handing the job back: the sheet is
+        // a sheet, and a sheet that can only exist on the settings page would mean leaving the setup
+        // flow to do the one thing the setup flow is for. Only "set up manually" leaves, because
+        // leaving IS what it means.
+        Haptics.onClick(findViewById(R.id.choose_join), () -> PairSheet.join(this, host));
+        Haptics.onClick(findViewById(R.id.choose_generate), () -> PairSheet.generateAndOffer(this, host));
         Haptics.onClick(findViewById(R.id.choose_manual), () -> finishWith(MANUAL));
 
         // Back walks the pages before it leaves, which is what a series of screens promises by

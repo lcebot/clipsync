@@ -126,7 +126,9 @@
     <!-- pairing (docs/p2p-plan.md §12). "Pair" throughout, matching _clipsync-pair._tcp and
          PAIR_ASK: a separate user-facing word would only mean the log, the sheet and the settings
          page each naming the same act differently. -->
-    <string name="pair_button">Pair a new device</string>
+    <!-- Plural: one window hands the key to as many devices as walk up to it while the code is
+         showing, so promising "a device" would undersell what pressing it does. -->
+    <string name="pair_button">Pair new devices</string>
     <string name="setup_button">Set up ClipSync</string>
     <!-- Pairing cannot run with local discovery off, at either end. Said rather than done silently:
          a control that quietly changes another one is worse than either refusing or asking. -->
@@ -134,25 +136,31 @@
     <string name="pair_no_key">Set a PSK key first — there is nothing to share yet</string>
 
     <!-- offering: this device has the key -->
-    <string name="pair_offer_title">Pair a new device</string>
+    <string name="pair_offer_title">Pair new devices</string>
     <string name="pair_offer_opening">Opening…</string>
     <!-- Says where to type it, because the code is useless on the device displaying it and that is
-         not obvious the first time. -->
-    <string name="pair_offer_body">On the new device, choose “I have another ClipSync device” and enter this code</string>
+         not obvious the first time. Plural, and "each": the window does not close on the first one. -->
+    <string name="pair_offer_body">On each new device, choose “I have another ClipSync device” and enter this code</string>
+    <!-- Six dashes, the same length and font as the code that replaces them. Holds the height while
+         the key is being derived; see sheet_pair.xml. -->
+    <string name="pair_code_placeholder">------</string>
     <string name="pair_opening">Starting</string>
     <!-- The countdown is the only "waiting" wording: a plain one would be replaced within a frame
          by this, and two strings for one moment is one too many. -->
     <string name="pair_waiting_for">Waiting — %1$d s left</string>
-    <string name="pair_offer_done">%1$s has the key. It should connect in a moment.</string>
-    <!-- The two ways a window can end on its own, told apart on purpose: a timer running out invites
-         another go, five wrong codes is worth saying out loud. -->
+    <!-- One line per device, appended under the code while the window stays open. -->
+    <string name="pair_offer_gave">%1$s has the key</string>
+    <!-- The three ways a window can end, told apart on purpose: a timer running out with nobody
+         joined invites another go, five wrong codes is worth saying out loud, and a window that
+         did its job should say so rather than report the clock. -->
+    <string name="pair_offer_over">Finished. Every device that took the key is connecting now.</string>
     <string name="pair_expired">Nobody joined before the code expired.</string>
     <string name="pair_burned">Too many wrong codes — the window was closed. Try again for a new code.</string>
     <string name="pair_cannot_open">Could not open a pairing window: %1$s</string>
 
     <!-- joining: this device wants the key -->
     <string name="pair_join_title">Pair with a device</string>
-    <string name="pair_join_body">On the device that already works, open Settings and tap “Pair a new device”</string>
+    <string name="pair_join_body">On the device that already works, open Settings and tap “Pair new devices”</string>
     <string name="pair_searching">Looking on this network</string>
     <string name="pair_none_found">Nothing is offering to pair on this network. Check that the other device has the pairing window open, and that both are on the same Wi-Fi.</string>
     <string name="pair_search_again">Look again</string>
@@ -166,8 +174,10 @@
     <string name="pair_close">Close</string>
 
     <!-- the welcome screen: the only thing a device with no key can usefully do -->
-    <string name="welcome_title">One clipboard, every device</string>
-    <string name="welcome_body">Copy on your phone, paste on your PC. ClipSync keeps the clipboard the same on all of your devices, over your own network — nothing passes through anyone else\'s server.</string>
+    <!-- Broken by hand, not left to wrap: the two halves are a pair and the line should land between
+         them at every width, not wherever the measured text happens to run out. -->
+    <string name="welcome_title">One clipboard,\nevery device</string>
+    <string name="welcome_body">ClipSync keeps the clipboard the same on all of your devices, over your own network.</string>
     <string name="welcome_next">Get started</string>
     <string name="welcome_choose_title">Set up this device</string>
     <string name="welcome_choose_body">Every device shares one key. Take it from a device that already has it, or make one here and hand it out.</string>

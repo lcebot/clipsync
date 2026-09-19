@@ -566,7 +566,7 @@ class App:
             messagebox.showinfo(
                 "Nothing found",
                 "No device is offering to pair on this network.\n\nOn the other device open "
-                "Settings and tap “Pair a new device”, then try again while its code is showing.",
+                "Settings and tap “Pair new devices”, then try again while its code is showing.",
                 parent=self.root)
             return
 
@@ -631,15 +631,21 @@ class App:
         win.transient(self.root)
         state = {"provider": None, "tick": None, "over": False}
 
-        ttk.Label(win, wraplength=380, text="On the other device choose “I have another ClipSync "
+        ttk.Label(win, wraplength=380, text="On each new device choose “I have another ClipSync "
                                            "device”, pick this PC, and enter this code.").grid(
             row=0, column=0, sticky="w", padx=PAD, pady=(PAD, 0))
         # Big and monospaced: it is read across a room and typed on a phone in the other hand, and
-        # six digits that run together are six digits typed wrong.
-        code_label = ttk.Label(win, text="……", font=("Consolas", 28))
+        # six digits that run together are six digits typed wrong.  Six dashes to start, the same
+        # length in the same font, so the window does not resize when the real code arrives -- the
+        # key derivation is 200 000 PBKDF2 rounds and cannot have finished by now.
+        code_label = ttk.Label(win, text="------", font=("Consolas", 28))
         code_label.grid(row=1, column=0, padx=PAD, pady=(PAD, 0))
         status = ttk.Label(win, text="Starting…", foreground="#49454f")
         status.grid(row=2, column=0, sticky="w", padx=PAD, pady=(0, PAD))
+        # One line per device, appended under the status while the window stays open.
+        given = ttk.Label(win, text="", foreground="#1a5e20", justify="left")
+        given.grid(row=3, column=0, sticky="w", padx=PAD, pady=(0, PAD))
+        state["given"] = []
 
         def finish(message, over=True):
             state["over"] = over
@@ -657,7 +663,7 @@ class App:
             win.destroy()
 
         bar = ttk.Frame(win)
-        bar.grid(row=3, column=0, sticky="e", padx=PAD, pady=(0, PAD))
+        bar.grid(row=4, column=0, sticky="e", padx=PAD, pady=(0, PAD))
         ttk.Button(bar, text="Close", command=close).pack(side="left")
         win.protocol("WM_DELETE_WINDOW", close)
         self._centre(win)
@@ -665,12 +671,20 @@ class App:
 
         # Callbacks arrive on the provider's own thread; `after(0, ...)` is what hands them to tk,
         # which has exactly one and does not forgive being touched from another.
+        def gave(device):
+            # Appended, not replacing: the code is still valid and still on screen, so the window
+            # goes on serving whoever else walks up to it.
+            state["given"].append(device)
+            given.config(text="\n".join("%s has the key" % d for d in state["given"]))
+
         def paired(device, _type):
-            win.after(0, lambda: finish("Paired with %s. It should connect in a moment." % device))
+            win.after(0, lambda: gave(device))
 
         def closed(burned):
-            win.after(0, lambda: finish("Too many wrong codes — closed." if burned
-                                        else "Nobody joined before the code expired."))
+            win.after(0, lambda: finish(
+                "Too many wrong codes — closed." if burned
+                else "Finished. Every device that took the key is connecting now."
+                if state["given"] else "Nobody joined before the code expired."))
 
         # The field, if it holds a valid port, rather than the saved file: the user may be mid-edit,
         # and the range install.ps1 opened is keyed to whatever port they are about to apply.

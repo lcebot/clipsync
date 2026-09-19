@@ -33,11 +33,18 @@ import java.util.Map;
 final class PairProvider implements Closeable {
     /** What the UI needs to show, and the only way out of this class. */
     interface Listener {
-        /** A device completed the handshake and was given the key. The window is over. */
+        /**
+         * A device completed the handshake and was given the key.
+         *
+         * <p><b>May fire more than once.</b> The window does not end on a success: setting up three
+         * devices is the ordinary case, and closing after the first would mean opening a new window
+         * and reading out a new code for each of the others — two minutes of work to save nothing.
+         * One code, one window, as many devices as walk up to it.
+         */
         void onPaired(String device, String type);
 
         /**
-         * The window ended without pairing anyone.
+         * The window is over, whether or not anyone joined.
          *
          * @param burned true when {@link Pairing#MAX_TRIES} wrong codes ended it early, rather than
          *               the clock. The distinction is the user's: a timer running out invites
@@ -105,7 +112,8 @@ final class PairProvider implements Closeable {
     }
 
     private void run() {
-        boolean burned = false, paired = false;
+        boolean burned = false;
+        int paired = 0;
         try {
             while (!closed) {
                 Socket s;
@@ -114,12 +122,17 @@ final class PairProvider implements Closeable {
                 } catch (SocketTimeoutException e) {
                     break;                      // the window simply ran out
                 }
-                // Serially, one caller at a time. Pairing is a thing a person does with two devices
-                // in front of them, so there is no concurrency to serve — and refusing to spawn a
+                // Serially, one caller at a time. Pairing is a thing a person does with devices in
+                // front of them, so there is no concurrency to serve — and refusing to spawn a
                 // thread per connection is what stops a flood from costing anything but a queue.
                 if (serve(s)) {
-                    paired = true;
-                    break;
+                    paired++;
+                    // A success does NOT end the window: the next device in the pile wants the same
+                    // key, and the same code is still on screen. It does clear the strikes, because
+                    // five wrong codes means someone guessing, and a caller who has just proved it
+                    // knows the code is evidence that nobody was.
+                    failures = 0;
+                    continue;
                 }
                 if (++failures >= Pairing.MAX_TRIES) {
                     burned = true;
@@ -129,12 +142,12 @@ final class PairProvider implements Closeable {
         } catch (Exception e) {
             if (!closed) Logger.w("pairing: " + e);
         } finally {
-            Logger.i("pairing: window closed" + (paired ? " — paired" : burned ? " — too many wrong codes" : ""));
+            Logger.i("pairing: window closed after " + paired + " device(s)"
+                    + (burned ? " — too many wrong codes" : ""));
             shut();
-            // Exactly one ending is reported. The success was announced from serve(), and a window
-            // the caller closed itself needs no telling — so this is only the two ways it can end
-            // without anyone having asked: the clock, and five wrong codes.
-            if (!paired && !closed) listener.onClosed(burned);
+            // Only for an ending nobody asked for: a window the caller closed itself needs no
+            // telling. Each success was announced as it happened.
+            if (!closed) listener.onClosed(burned);
             closed = true;
         }
     }

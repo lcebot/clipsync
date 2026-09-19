@@ -88,7 +88,7 @@ In the settings window, either:
 
 - **Generate random PSK key**, if this is your first device — then **Share this key…** when you set
   up the next one; or
-- **Pair with a device…**, if a phone is already set up: tap **Pair a new device** there, and type the
+- **Pair with a device…**, if a phone is already set up: tap **Pair new devices** there, and type the
   six digits it shows.
 
 If your devices will reach this PC at an address, turn on **Direct connections** and add it — a DDNS

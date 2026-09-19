@@ -1,15 +1,19 @@
 package io.github.lcebot.clipsync;
 
+import android.app.Activity;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowInsets;
+import android.widget.EditText;
 import android.widget.TextView;
 
 import androidx.transition.TransitionManager;
 
 import com.google.android.material.bottomsheet.BottomSheetDialog;
 import com.google.android.material.button.MaterialButton;
+import com.google.android.material.color.MaterialColors;
 import com.google.android.material.textfield.TextInputLayout;
 
 import java.util.List;
@@ -31,7 +35,7 @@ import java.util.concurrent.Executors;
  * happen on it.
  */
 final class PairSheet {
-    private final MainActivity a;
+    private final Activity a;
     private final BottomSheetDialog sheet;
     private final TextView title, text, code, progressText;
     private final View progress;
@@ -55,30 +59,70 @@ final class PairSheet {
     private volatile boolean closed;
     /** False until the first state has been applied; see {@link #state}. */
     private boolean settled;
+    /** How many devices took the key in this window. Decides what its ending is called. */
+    private int paired;
+
+    private int dp(int v) {
+        return Math.round(v * a.getResources().getDisplayMetrics().density);
+    }
+
+    /** The sheet's one horizontal measurement, matching every view in its layout. */
+    private int gutter() {
+        return dp(24);
+    }
 
     /** How long a browse runs before reporting what it has. */
     private static final long BROWSE_MS = 4_000;
 
+    /**
+     * What the screen behind the sheet wants to know.
+     *
+     * <p>The sheet runs over the settings page and over the welcome screen, and those want different
+     * things from it — one has fields showing the old key, the other has nothing to update and a
+     * reason to close itself. An interface rather than an Activity type is what lets the same sheet
+     * serve both; before this it took a {@code MainActivity} and could only ever appear there, which
+     * is why the welcome screen used to have to finish first and hand the job back.
+     */
+    interface Host {
+        /** The key in the configuration has just changed. */
+        default void keyChanged() { }
+
+        /**
+         * The sheet has closed, however it ended.
+         *
+         * <p>Reported unconditionally, and the host decides what it means — which is the division
+         * that matters here. The sheet cannot know: generating a key and then pairing nobody is a
+         * *finished* setup on the welcome screen (there is a key now) and nothing at all on the
+         * settings page. A sheet that only reported successful pairings left the welcome screen
+         * stranded in exactly that case.
+         */
+        default void closed() { }
+    }
+
+    private final Host host;
+
     // ------------------------------------------------------------------ entry points
-    /** The device that holds the key offers it. Reached from *Pair new device*. */
-    static void offer(MainActivity a) {
+    /** The device that holds the key offers it. Reached from *Pair new devices*. */
+    static void offer(Activity a, Host host) {
         String psk = Config.raw(a).getProperty("psk", "");
+        PairSheet sheet = new PairSheet(a, host);
         if (Config.checkPsk(psk) != null) {
-            // Nothing to give away yet. Said rather than silently disabled, because the button is in
-            // a card the user has just opened deliberately and a control that does nothing when
-            // pressed teaches less than one that explains itself.
-            a.snack(R.string.pair_no_key);
+            // Nothing to give away yet. Said in the sheet rather than as a snackbar: the user pressed
+            // a button and a surface opening to explain itself is a better answer than a surface not
+            // opening at all.
+            sheet.finish(a.getString(R.string.pair_no_key));
             return;
         }
-        new PairSheet(a).startOffering(psk);
+        sheet.startOffering(psk);
     }
 
-    /** The device that wants the key goes looking. Reached from first run. */
-    static void join(MainActivity a) {
-        new PairSheet(a).startJoining();
+    /** The device that wants the key goes looking. */
+    static void join(Activity a, Host host) {
+        new PairSheet(a, host).startJoining();
     }
 
-    private PairSheet(MainActivity a) {
+    private PairSheet(Activity a, Host host) {
+        this.host = host;
         this.a = a;
         sheet = new BottomSheetDialog(a);
         sheet.setContentView(R.layout.sheet_pair);
@@ -113,6 +157,7 @@ final class PairSheet {
         provider = null;
         if (p != null) p.close();
         worker.shutdownNow();
+        host.closed();
     }
 
     /** Post to the main thread, unless the sheet has already gone. */
@@ -124,7 +169,10 @@ final class PairSheet {
 
     // ------------------------------------------------------------------ offering
     private void startOffering(String pskHex) {
-        state(false, true, false, false, false);
+        // The code is shown from the start, as a placeholder: it cannot be computed yet, and a
+        // sheet that opens without a line of display type and grows into one a moment later is the
+        // height jump. See the layout.
+        state(true, true, false, false, false);
         title.setText(R.string.pair_offer_title);
         text.setText(R.string.pair_offer_opening);
         progressText.setText(R.string.pair_opening);
@@ -132,19 +180,40 @@ final class PairSheet {
             try {
                 PairProvider p = new PairProvider(a, pskHex, new PairProvider.Listener() {
                     @Override public void onPaired(String device, String type) {
-                        post(() -> done(a.getString(R.string.pair_offer_done, device)));
+                        post(() -> gave(device));
                     }
 
                     @Override public void onClosed(boolean burned) {
-                        post(() -> failed(a.getString(burned ? R.string.pair_burned : R.string.pair_expired)));
+                        post(() -> finish(a.getString(burned ? R.string.pair_burned
+                                : paired == 0 ? R.string.pair_expired
+                                : R.string.pair_offer_over)));
                     }
                 });
                 post(() -> offering(p));
             } catch (Exception e) {
                 Logger.w("pairing: cannot open a window: " + e);
-                post(() -> failed(a.getString(R.string.pair_cannot_open, String.valueOf(e.getMessage()))));
+                post(() -> finish(a.getString(R.string.pair_cannot_open, String.valueOf(e.getMessage()))));
             }
         });
+    }
+
+    /**
+     * One more device has the key, and the window stays open for the next.
+     *
+     * <p>Appended rather than replacing the screen, because the code is still valid and still on
+     * display: closing after the first device would mean a new window and a new code read out for
+     * every other one, which is two minutes of work to save nothing. The list grows under the
+     * countdown and is the record of what the window achieved.
+     */
+    private void gave(String device) {
+        paired++;
+        TextView line = new TextView(a);
+        line.setText(a.getString(R.string.pair_offer_gave, device));
+        line.setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodyMedium);
+        line.setTextColor(MaterialColors.getColor(line, androidx.appcompat.R.attr.colorPrimary));
+        line.setPadding(gutter(), 0, gutter(), dp(4));
+        list.addView(line);
+        state(true, true, true, false, false);
     }
 
     private void offering(PairProvider p) {
@@ -214,6 +283,28 @@ final class PairSheet {
         text.setText(a.getString(R.string.pair_enter_code, device.name));
         codeLayout.setError(null);
         button(R.string.pair_connect, v -> connect(device));
+        typeCode();
+    }
+
+    /**
+     * Put the cursor in the code field and raise the keyboard.
+     *
+     * <p>There is exactly one thing to do at this point and it needs six keystrokes, so making the
+     * user tap the field first is a tap that carries no decision. Posted rather than called inline:
+     * the field has only just been made visible, and a view that has not been laid out cannot take
+     * focus — the request would be dropped and the keyboard would never come.
+     */
+    private void typeCode() {
+        EditText field = codeLayout.getEditText();
+        if (field == null) return;
+        field.post(() -> {
+            if (closed || !field.requestFocus()) return;
+            // The platform controller rather than InputMethodManager.showSoftInput: it is the API
+            // that actually knows about the window this sheet lives in, and needs no guesses about
+            // which flags mean "show it because the user is about to type".
+            android.view.WindowInsetsController ime = field.getWindowInsetsController();
+            if (ime != null) ime.show(WindowInsets.Type.ime());
+        });
     }
 
     private void connect(Mdns.Instance device) {
@@ -230,9 +321,13 @@ final class PairSheet {
                 PairJoiner.Result r = PairJoiner.join(a, device, typed);
                 PairJoiner.apply(a, r.pskHex);
                 post(() -> {
-                    // The form is showing the key that was there a moment ago, which is now wrong.
-                    a.reloadAfterPairing();
-                    done(a.getString(R.string.pair_join_done, r.device));
+                    paired++;
+                    // Whatever is behind the sheet is showing the key that was there a moment ago.
+                    host.keyChanged();
+                    // The key is in place, so the service should be running on it rather than on
+                    // whatever it started the day holding.
+                    SyncService.startOrReload(a);
+                    finish(a.getString(R.string.pair_join_done, r.device));
                 });
             } catch (Exception e) {
                 Logger.i("pairing: " + e);
@@ -249,17 +344,6 @@ final class PairSheet {
     }
 
     // ------------------------------------------------------------------ endings
-    private void done(String message) {
-        finish(message);
-        // Only on success, and only here: the key is in place, so the service should be running with
-        // it rather than with whatever it started the day holding.
-        a.restartServiceAfterPairing();
-    }
-
-    private void failed(String message) {
-        finish(message);
-    }
-
     private void finish(String message) {
         if (countdown != null) ui.removeCallbacks(countdown);
         provider = null;
@@ -300,7 +384,7 @@ final class PairSheet {
         // the animation at that moment, and a second one running inside it reads as a stutter rather
         // than as a change.
         if (!changing.isEmpty() && root != null && settled) {
-            TransitionManager.beginDelayedTransition(root, a.visibilityMotion(changing.toArray(new View[0])));
+            TransitionManager.beginDelayedTransition(root, MainActivity.visibilityMotion(changing.toArray(new View[0])));
         }
         settled = true;
         for (int i = 0; i < views.length; i++) {
@@ -313,21 +397,20 @@ final class PairSheet {
      * Make a key, then hand it out — which is what "this is my first device" means: there is nothing
      * to pair with yet, so this device becomes the one the others join.
      *
-     * <p>Called by {@link MainActivity} with the welcome screen's answer. The choice is presented
-     * there and acted on here, because the sheets belong to the page whose fields they rewrite.
+     * <p>Discovery is turned on with it, because the next thing this device does is advertise.
      */
-    static void generateAndOffer(MainActivity a) {
+    static void generateAndOffer(Activity a, Host host) {
         try {
             Properties v = new Properties();
             v.setProperty("psk", Crypto.randomPskHex());
             v.setProperty("discovery", "true");
             Config.save(a, v);
-            a.reloadAfterPairing();
-            a.restartServiceAfterPairing();
-            offer(a);
+            host.keyChanged();
+            SyncService.startOrReload(a);
+            offer(a, host);
         } catch (Exception e) {
             Logger.w("pairing: cannot generate a key: " + e);
-            a.snack(R.string.pair_cannot_generate);
+            new PairSheet(a, host).finish(a.getString(R.string.pair_cannot_generate));
         }
     }
 }

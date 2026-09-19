@@ -27,21 +27,29 @@
         android:paddingVertical="32dp">
 
         <!-- The hero, in a tonal circle. A bare glyph on a surface reads as an icon that lost its
-             button; the container is what makes it a picture. -->
+             button; the container is what makes it a picture.
+
+             The app's own launcher glyph, not one of the settings icons: this screen is the first
+             thing a new install shows, and what it should look like is what the user just tapped on
+             their home screen.
+
+             match_parent, not a chosen size. The adaptive-icon artwork is drawn on a 108-unit canvas
+             where the glyph occupies the middle 48 — so filling the circle puts the glyph at 120 ×
+             48/108 ≈ 53dp with even clearance, and any figure picked by hand would be fighting that
+             built-in margin. Tinted because the source is a white-on-colour launcher foreground and
+             the colour is already underneath it. -->
         <FrameLayout
             android:id="@+id/intro_hero"
             android:layout_width="120dp"
             android:layout_height="120dp"
             android:layout_gravity="center_horizontal"
             android:layout_marginTop="24dp"
-            android:background="@drawable/welcome_hero"
-            android:elevation="0dp">
+            android:background="@drawable/welcome_hero">
 
             <ImageView
-                android:layout_width="56dp"
-                android:layout_height="56dp"
-                android:layout_gravity="center"
-                android:src="@drawable/ic_pair"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:src="@drawable/ic_launcher_foreground"
                 android:importantForAccessibility="no"
                 android:tint="?attr/colorOnPrimaryContainer" />
         </FrameLayout>
@@ -87,11 +95,18 @@
         android:paddingVertical="32dp"
         android:visibility="gone">
 
+        <!-- Weighted above the title as well as below the illustration, so the text sits off the
+             top edge rather than against it. 1:2 rather than centring: text hung slightly above the
+             middle is the shape the eye expects to read from, and dead centre looks like it fell. -->
+        <Space
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1" />
+
         <TextView
             android:id="@+id/choose_title"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
             android:textAppearance="?attr/textAppearanceHeadlineMedium"
             android:textColor="?attr/colorOnSurface"
             android:text="@string/welcome_choose_title" />
@@ -106,10 +121,22 @@
             android:textColor="?attr/colorOnSurfaceVariant"
             android:text="@string/welcome_choose_body" />
 
-        <Space
+        <!-- The illustration takes whatever is left between the text and the buttons, which is what
+             fills a page that was otherwise mostly gap. fitCenter inside a weighted box is what
+             makes it genuinely elastic: it grows on a tall screen and shrinks on a short one, and
+             the horizontal padding — not a maxHeight, which a weighted view ignores — is what stops
+             it becoming enormous, since fitCenter honours whichever dimension runs out first. -->
+        <ImageView
+            android:id="@+id/choose_art"
             android:layout_width="match_parent"
             android:layout_height="0dp"
-            android:layout_weight="1" />
+            android:layout_weight="2"
+            android:paddingHorizontal="64dp"
+            android:paddingVertical="24dp"
+            android:scaleType="fitCenter"
+            android:importantForAccessibility="no"
+            android:src="@drawable/ic_pair"
+            android:tint="?attr/colorPrimary" />
 
         <!-- Filled, then tonal, then text: the emphasis ladder IS the recommendation. Taking the key
              from a device that has it is what almost everyone should do, making one is what the

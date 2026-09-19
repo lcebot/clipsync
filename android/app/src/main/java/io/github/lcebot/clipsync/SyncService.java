@@ -348,6 +348,26 @@ public class SyncService extends Service {
     /** Re-read files/clipsync.conf and reconnect, in place (no service restart, no process churn). */
     public static final String ACTION_RELOAD = "io.github.lcebot.clipsync.RELOAD";
 
+    /**
+     * Get the service running on whatever the configuration now says.
+     *
+     * <p>Two branches, and which one applies is not the caller's business: a running service takes a
+     * reload in place — no restart, no process churn, no reconnect storm — and one that was never
+     * started has to be started. Here rather than in an Activity because pairing reaches it from two
+     * screens now, and a second copy would be a second thing to keep in step.
+     *
+     * @return true if this was a cold start, which is the only case with anything to wait for
+     */
+    public static boolean startOrReload(Context ctx) {
+        Intent svc = new Intent(ctx, SyncService.class);
+        if (Status.read(ctx).alive()) {
+            ctx.startService(svc.setAction(ACTION_RELOAD));
+            return false;
+        }
+        ctx.startForegroundService(svc);
+        return true;
+    }
+
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (started && intent != null && ACTION_RELOAD.equals(intent.getAction())) {

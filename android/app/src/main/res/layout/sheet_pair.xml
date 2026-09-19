@@ -41,7 +41,13 @@
     <!-- The code, on the device that holds the key. Display type and wide tracking because it is
          read aloud across a room and typed on a phone in the other hand — six digits that run
          together are six digits typed wrong. Monospace so every digit takes the same width and the
-         eye can group them without the text reflowing as they change. -->
+         eye can group them without the text reflowing as they change.
+
+         It starts as six dashes rather than empty, and that is what stops the sheet jumping open.
+         The code cannot exist yet when this is laid out — deriving it is 200 000 PBKDF2 rounds on a
+         worker — so an empty view meant the sheet measured itself without a line of display type
+         and then grew by exactly that much a moment later. A placeholder of the same length in the
+         same font reserves the space it will need. -->
     <TextView
         android:id="@+id/pair_code"
         android:layout_width="match_parent"
@@ -51,12 +57,20 @@
         android:gravity="center"
         android:fontFamily="monospace"
         android:letterSpacing="0.3"
+        android:text="@string/pair_code_placeholder"
         android:textAppearance="?attr/textAppearanceDisplaySmall"
         android:textColor="?attr/colorPrimary"
         android:visibility="gone" />
 
-    <!-- Waiting. An indeterminate spinner is honest about a browse: nothing here knows how long a
-         multicast answer takes, and a determinate bar would be inventing one. -->
+    <!-- Waiting. Indeterminate is honest about a browse: nothing here knows how long a multicast
+         answer takes, and a determinate bar would be inventing one.
+
+         LoadingIndicator, which is M3 Expressive's own — a morphing sequence of shapes rather than
+         the spinning arc of CircularProgressIndicator. The arc is the Material 2 shape that M3
+         inherited, and next to Expressive's springy motion everywhere else on this surface it reads
+         as a different app's idea of waiting. Left on its default style deliberately: its size and
+         colours come from the theme, which is the whole point of using the component instead of
+         drawing one. -->
     <LinearLayout
         android:id="@+id/pair_progress"
         android:layout_width="match_parent"
@@ -67,12 +81,9 @@
         android:orientation="horizontal"
         android:visibility="gone">
 
-        <com.google.android.material.progressindicator.CircularProgressIndicator
+        <com.google.android.material.loadingindicator.LoadingIndicator
             android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:indeterminate="true"
-            app:indicatorSize="24dp"
-            app:trackThickness="3dp" />
+            android:layout_height="wrap_content" />
 
         <TextView
             android:id="@+id/pair_progress_text"

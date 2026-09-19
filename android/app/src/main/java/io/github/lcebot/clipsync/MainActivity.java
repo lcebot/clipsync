@@ -296,7 +296,7 @@ public class MainActivity extends AppCompatActivity {
         browseLabel = findViewById(R.id.browse_label);
         // Offers this device's key, rather than going looking for one: a device with the key is the
         // provider, and a device without it goes through the welcome screen instead.
-        Haptics.onClick(findViewById(R.id.pair), () -> { if (needsDiscovery()) PairSheet.offer(this); });
+        Haptics.onClick(findViewById(R.id.pair), () -> { if (needsDiscovery()) PairSheet.offer(this, pairHost); });
         Haptics.onClick(findViewById(R.id.setup), () -> welcome.launch(new Intent(this, WelcomeActivity.class)));
         threads = findViewById(R.id.threads);
         threadsLabel = findViewById(R.id.threads_label);
@@ -500,7 +500,7 @@ public class MainActivity extends AppCompatActivity {
      * SpringAnimation directly and are not wired into androidx.transition — so MaterialFade under its
      * own themed durations is the M3 Expressive answer here.
      */
-    TransitionSet visibilityMotion(View... fading) {
+    static TransitionSet visibilityMotion(View... fading) {
         MaterialFade fade = new MaterialFade();
         ChangeBounds bounds = new ChangeBounds();
         bounds.setDuration(REFLOW_MS);
@@ -793,15 +793,24 @@ public class MainActivity extends AppCompatActivity {
      */
     private final androidx.activity.result.ActivityResultLauncher<Intent> welcome =
             registerForActivityResult(new androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult(), r -> {
-                if (r.getData() == null) return;             // backed out; nothing was chosen
-                String choice = r.getData().getStringExtra(WelcomeActivity.EXTRA_CHOICE);
-                if (WelcomeActivity.JOIN.equals(choice)) {
-                    if (needsDiscovery()) PairSheet.join(this);
-                } else if (WelcomeActivity.GENERATE.equals(choice)) {
-                    if (needsDiscovery()) PairSheet.generateAndOffer(this);
-                }
-                // MANUAL wants nothing done: the page behind this is the manual setup.
+                // Whatever happened there, the key may have changed — pairing now runs on that
+                // screen rather than handing the job back, so this is a refresh and not a dispatch.
+                // MANUAL needs nothing done either: the page behind it IS the manual setup.
+                reloadAfterPairing();
             });
+
+    /** What the pairing sheets do to this page when they change the key. */
+    private final PairSheet.Host pairHost = new PairSheet.Host() {
+        @Override public void keyChanged() {
+            reloadAfterPairing();
+            // The service is started by the sheet; this is only the part of it this page owns —
+            // the buttons have to show that something is expected to come up.
+            setAutoStart(true);
+            waitingForStart = !Status.read(MainActivity.this).alive();
+            waitingSince = System.currentTimeMillis();
+            refreshActions();
+        }
+    };
 
     /**
      * Pairing is mDNS at both ends, so it cannot run with local discovery off — turn it on.
@@ -835,30 +844,6 @@ public class MainActivity extends AppCompatActivity {
     void reloadAfterPairing() {
         loadFields();
         validate();
-    }
-
-    /**
-     * Get the service running on the key that was just written.
-     *
-     * <p>The same two branches as Apply, and for the same reason: a running service takes a reload
-     * in place, and one that was never started has to be started. Pairing is a configuration change
-     * like any other — it is only reached differently.
-     */
-    void restartServiceAfterPairing() {
-        try {
-            setAutoStart(true);
-            Intent svc = new Intent(this, SyncService.class);
-            if (Status.read(this).alive()) {
-                startService(svc.setAction(SyncService.ACTION_RELOAD));
-            } else {
-                startForegroundService(svc);
-                waitingForStart = true;
-                waitingSince = System.currentTimeMillis();
-                refreshActions();
-            }
-        } catch (Exception e) {
-            Logger.w("pairing: cannot start the service: " + e);
-        }
     }
 
     /**
