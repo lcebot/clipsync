@@ -369,7 +369,16 @@ public class SyncService extends Service {
         registerReceiver(screenReceiver, f, Context.RECEIVER_NOT_EXPORTED);   // system broadcasts only
         screenOn = power.isInteractive();
 
-        readNetwork(connectivity.getNetworkCapabilities(connectivity.getActiveNetwork()));
+        // The handle is seeded here, before the callback exists, and that ordering is the whole
+        // point. registerDefaultNetworkCallback delivers the current network immediately — so with
+        // netHandle still 0, that first delivery read as "the network changed" and re-advertised on
+        // top of the registration startListening() had just made. NsdManager's unregister is
+        // asynchronous, so the replacement raced a registration that was still live, mDNS resolved
+        // the name collision by suffixing, and the device ended up advertising as both "NAME" and
+        // "NAME (2)" — finding both, building a dialer for each, and recognising itself twice.
+        Network active = connectivity.getActiveNetwork();
+        netHandle = active == null ? 0 : active.getNetworkHandle();
+        readNetwork(connectivity.getNetworkCapabilities(active));
         connectivity.registerDefaultNetworkCallback(netCallback);
 
         syncDialers();
@@ -602,6 +611,10 @@ public class SyncService extends Service {
             // metered-ness, several times a minute on a moving phone, and tearing down the mDNS
             // registration that often would make the device invisible more than it made it visible.
             // A different handle is a different network, which is the only thing that matters here.
+            //
+            // This fires once with the current network as soon as the callback is registered, so
+            // netHandle is seeded in onCreate before that happens: an unseeded 0 made the very
+            // first delivery look like a move and cost a duplicate advertisement (see there).
             long handle = n == null ? 0 : n.getNetworkHandle();
             boolean moved = handle != netHandle;
             netHandle = handle;
