@@ -215,6 +215,13 @@
     <string name="pair_code_hint">Nine-digit code</string>
     <string name="pair_code_length">Nine digits</string>
     <string name="pair_connect">Connect</string>
+    <!-- The way out of the offering window, and it is the same button throughout: "Cancel" while
+         nothing has come of the window, "Done" once a device has the key. Two labels rather than one
+         neutral "Close" because the two moments are not the same moment — leaving before anything
+         happened abandons the attempt, leaving after it succeeded finishes it, and a button that
+         cannot tell the user which one they are doing is a button they hesitate over. -->
+    <string name="pair_cancel">Cancel</string>
+    <string name="pair_done">Done</string>
     <!-- Two labels for one button press, and the split is not cosmetic. Turning the nine digits
          into a channel key is a deliberately slow scrypt (Pairing.SCRYPT_N), and no socket is
          opened until it is done — so "Connecting" was describing something that had not started, at

@@ -46,6 +46,7 @@ import struct
 import threading
 import time
 
+from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 
 __all__ = [
@@ -479,7 +480,25 @@ class SecureChannel:
                     pass
             raise ConnectionError("no accepted key could authenticate this peer")
 
-        pt = self.rx.decrypt(self._nonce(self.rx_ctr), ct, None)
+        try:
+            pt = self.rx.decrypt(self._nonce(self.rx_ctr), ct, None)
+        except InvalidTag:
+            # Said out loud, because `InvalidTag` says nothing: its str() is the empty string, so
+            # letting it escape produced log lines that ended in "dropped: " with the reason
+            # missing. The multi-key arm above has always named this failure; this one did not, and
+            # the two arms are the same event.
+            #
+            # On the FIRST frame it means the peer holds a different key -- the frame arrived whole
+            # and did not authenticate -- which is the only common cause and the only one the user
+            # can act on. Later in a session it means the stream desynchronised, which is a bug
+            # here rather than a misconfiguration, so the two are worth telling apart.
+            if self.rx_ctr == 0:
+                mine = (self.matched_secret or b"").hex()[:8] or "none"
+                raise ConnectionError(
+                    "first frame did not authenticate: this end holds key %s…, the peer holds "
+                    "another one" % mine) from None
+            raise ConnectionError(
+                "frame %d did not authenticate (stream out of step)" % self.rx_ctr) from None
         self.rx_ctr += 1
         self.authed = True
         return pt[0], pt[1:]

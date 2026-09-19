@@ -83,11 +83,10 @@
          the arithmetic above stops being arithmetic.
 
          This is a single-line TextView, so tracking changes its width and never its height. The size
-         change does change the line's height — but pair_code is HIDE in all three of the joiner
-         states that have to measure equal (see pair_progress and PairSheet.KEEP), so the
-         three-state equal-height layout is untouched either way. On the offering side the height is
-         steady for the other reason below: the placeholder is the same eleven characters at the same
-         size as the real code.
+         change does change the line's height, but this view is GONE for the whole of the joining
+         side and never shares a state with the code field, so nothing there measures it. On the
+         offering side the height is steady for the other reason below: the placeholder is the same
+         eleven characters at the same size as the real code.
 
          It starts as nine greyed digits, grouped the same way, rather than empty, and that is what
          stops the sheet jumping open. The code cannot exist yet when this is laid out — deriving it
@@ -119,13 +118,13 @@
          colours come from the theme, which is the whole point of using the component instead of
          drawing one.
 
-         On the joining side this row is INVISIBLE rather than GONE for part of its life, and that is
-         deliberate — see PairSheet.KEEP. Typing a code, waiting for it to be checked, and being told
-         it was wrong are three states of one screen, and this row and the button below take turns:
-         the row appears exactly when the button goes. Removing either one's space while the other
-         arrives moved the sheet's top edge twice in a second, once in each direction. Holding this
-         row's space through all three is what makes that screen one height. Do not "save a
-         measurement" by turning it back into GONE; the measurement is what is being paid for. -->
+         GONE when it is not wanted, like everything else here. It was INVISIBLE for a while so that
+         this row and the button below could trade places without the sheet's height moving — but
+         holding a row of space open through the whole of the code-entry screen cost more than the
+         movement did. It pushed the field down into a sheet that had already reserved two lines of
+         body text and a permanent error line, and what the user got was a tall sheet with a
+         squeezed field in it, which is worse than an edge that slides. Ui.visibilityMotion animates
+         the height either way, so the row growing in is a slide and not a jump. -->
     <LinearLayout
         android:id="@+id/pair_progress"
         android:layout_width="match_parent"
@@ -140,9 +139,14 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content" />
 
+        <!-- 0dp + weight, not match_parent. In a horizontal LinearLayout a match_parent child is
+             measured against the WHOLE parent width rather than what is left of it, so this row
+             measured wider than the sheet and squeezed everything sharing a line with it. Weight is
+             how "the rest of the row" is spelled here. -->
         <TextView
             android:id="@+id/pair_progress_text"
-            android:layout_width="match_parent"
+            android:layout_width="0dp"
+            android:layout_weight="1"
             android:layout_height="wrap_content"
             android:layout_marginStart="16dp"
             android:textAppearance="?attr/textAppearanceBodyMedium"
@@ -209,10 +213,9 @@
             android:letterSpacing="0.2" />
     </com.google.android.material.textfield.TextInputLayout>
 
-    <!-- The one button. It is the other half of the exchange described on pair_progress: while a
-         code is being checked this goes INVISIBLE and not GONE, so the row above it can appear into
-         a sheet that does not move. INVISIBLE also takes it out of the accessibility tree and out of
-         reach of a tap, which is what is wanted anyway — there is nothing to press while waiting. -->
+    <!-- The one button, GONE while a code is being checked: there is nothing to press then, and the
+         progress row above takes its place. The two used to hold each other's space open (see the
+         note on pair_progress for why that was given up). -->
     <com.google.android.material.button.MaterialButton
         android:id="@+id/pair_action"
         android:layout_width="wrap_content"

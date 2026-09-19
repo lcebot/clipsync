@@ -266,7 +266,13 @@ final class PairSheet {
         // size: the code as a greyed placeholder in the same grouped nine digits, and the instruction in its
         // final wording rather than a short "Opening…" that is replaced by three lines a moment
         // later. That swap was most of the height jump — the code line was only ever one of two.
-        state(SHOW, SHOW, HIDE, HIDE, HIDE);
+        // The way out is on screen from the first frame, dimmed and reading "Cancel". A window that
+        // stays open for two minutes waiting for somebody to walk over with a phone needs a way to
+        // say "never mind" that is not the back gesture — and putting it here from the start rather
+        // than growing it in later is the same argument as the code placeholder above: the sheet
+        // measures once, at the size it is going to be.
+        state(SHOW, SHOW, HIDE, HIDE, SHOW);
+        button(R.string.pair_cancel, false, v -> sheet.dismiss());
         title.setText(R.string.pair_offer_title);
         text.setText(R.string.pair_offer_body);
         code.setText(R.string.pair_code_placeholder);
@@ -326,6 +332,13 @@ final class PairSheet {
         }
         list.addView(line);
         list.setVisibility(View.VISIBLE);
+        // Inside the transition begun above, so the button's change of width slides with the line
+        // arriving rather than snapping beside it. The window is still open and the code is still
+        // valid — nothing here ends anything — but what leaving MEANS has changed: until now it
+        // abandoned an attempt, and from now on it finishes one. Lighting the button up is how the
+        // user is told that the thing they came to do is done, without taking the window away from
+        // them while a second device might still be on its way over.
+        button(R.string.pair_done, true, v -> sheet.dismiss());
         settled = true;
     }
 
@@ -467,9 +480,11 @@ final class PairSheet {
     }
 
     private void askCode(Mdns.Instance device) {
-        // The progress row is reserved and not removed: this state, "checking", and "wrong code" are
-        // one screen, and the row and the button below it take turns on it. See KEEP.
-        state(HIDE, KEEP, HIDE, SHOW, SHOW);
+        // The progress row is gone, not reserved. Holding it open through the whole code-entry
+        // screen — on top of two reserved lines of body text and a permanent error line — pushed
+        // the field down and squeezed it, which is a worse thing to look at than an edge that
+        // slides. Ui.visibilityMotion animates the row in when it is wanted.
+        state(HIDE, HIDE, HIDE, SHOW, SHOW);
         text.setText(a.getString(R.string.pair_enter_code, device.name));
         codeLayout.setError(null);
         button(R.string.pair_connect, v -> connect(device));
@@ -483,18 +498,43 @@ final class PairSheet {
      * user tap the field first is a tap that carries no decision. Posted rather than called inline:
      * the field has only just been made visible, and a view that has not been laid out cannot take
      * focus — the request would be dropped and the keyboard would never come.
+     *
+     * <p>Re-checked when the progress row stopped being reserved: the field is set VISIBLE
+     * synchronously inside {@link #state}, before this posts, so the animation that now runs on the
+     * sheet's height is beside the point — it moves an edge, it does not delay the layout pass this
+     * waits for. The retry below is there anyway, because "focus failed" and "keyboard never came"
+     * look identical to a user and cost one frame to rule out.
      */
     private void typeCode() {
         EditText field = codeLayout.getEditText();
         if (field == null) return;
-        field.post(() -> {
-            if (closed || !field.requestFocus()) return;
-            // The platform controller rather than InputMethodManager.showSoftInput: it is the API
-            // that actually knows about the window this sheet lives in, and needs no guesses about
-            // which flags mean "show it because the user is about to type".
-            android.view.WindowInsetsController ime = field.getWindowInsetsController();
-            if (ime != null) ime.show(WindowInsets.Type.ime());
+        field.post(new Runnable() {
+            private boolean retried;
+
+            @Override public void run() {
+                if (closed) return;
+                if (!field.requestFocus()) {
+                    // One more frame, once. A view that is visible but not yet attached refuses
+                    // focus and says so by returning false; a view that will never take it refuses
+                    // twice, and a second post is cheaper than a keyboard that does not appear.
+                    if (!retried) {
+                        retried = true;
+                        field.post(this);
+                    }
+                    return;
+                }
+                raiseIme(field);
+            }
         });
+    }
+
+    /** The keyboard, once the field has the focus that makes asking for it meaningful. */
+    private void raiseIme(EditText field) {
+        // The platform controller rather than InputMethodManager.showSoftInput: it is the API that
+        // actually knows about the window this sheet lives in, and needs no guesses about which
+        // flags mean "show it because the user is about to type".
+        android.view.WindowInsetsController ime = field.getWindowInsetsController();
+        if (ime != null) ime.show(WindowInsets.Type.ime());
     }
 
     private void connect(Mdns.Instance device) {
@@ -516,8 +556,9 @@ final class PairSheet {
             codeLayout.setError(a.getString(R.string.pair_code_length));
             return;
         }
-        // The button's space is held, the row takes the sheet's attention: one height, either way.
-        state(HIDE, SHOW, HIDE, SHOW, KEEP);
+        // The button goes and the row arrives in its place. The sheet grows or shrinks by the
+        // difference and Ui.visibilityMotion slides it there.
+        state(HIDE, SHOW, HIDE, SHOW, HIDE);
         // After state(), like every other text on this sheet — beginDelayedTransition has captured
         // the start scene by now, so whatever this does to the height is animated rather than
         // snapped. It should do nothing to it, the line being reserved, but the order is the rule.
@@ -536,12 +577,11 @@ final class PairSheet {
         // honest label for a slow or loaded device, where that second is two, and the sheet would
         // otherwise be claiming to be on the network while it is not.
         //
-        // The flicker is free, and that is the part that had to be checked rather than assumed: the
-        // three joiner states that share this screen — askCode, this one, and the error branch —
-        // pass SHOW or KEEP for both the progress row and the button and HIDE/SHOW identically for
-        // everything else, so all three measure the same height (see KEEP). Swapping between them
-        // moves no edge, at any speed. A fast changeover is a label changing inside a row that was
-        // already reserved, which is the one kind of change this sheet does not have to animate.
+        // Now that the derivation is usually a few frames rather than seconds, this label may come
+        // and go quickly. That is fine: the change swaps the button for the progress row, and
+        // Ui.visibilityMotion animates it. The sheet used to hold both spaces open so that nothing
+        // moved at all, which cost more in height than the movement was worth — see the note where
+        // KEEP used to be.
         progressText.setText(R.string.pair_checking);
         worker.execute(() -> {
             try {
@@ -563,7 +603,7 @@ final class PairSheet {
                     // Back to the code field rather than to the start: the overwhelmingly likely
                     // cause is a mistyped digit, and making the user find the device again would
                     // spend another of the provider's five attempts on the way.
-                    state(HIDE, KEEP, HIDE, SHOW, SHOW);
+                    state(HIDE, HIDE, HIDE, SHOW, SHOW);
                     codeLayout.setError(String.valueOf(e.getMessage()));
                     button(R.string.pair_connect, v -> connect(device));
                 });
@@ -585,7 +625,31 @@ final class PairSheet {
     // ------------------------------------------------------------------ small helpers
     /** Label and action for the one button. Whether it is <em>shown</em> is {@link #state}'s job. */
     private void button(int labelRes, View.OnClickListener onClick) {
+        button(labelRes, true, onClick);
+    }
+
+    /**
+     * The same, choosing how loudly it asks to be pressed.
+     *
+     * <p>Only the offering window uses anything but {@code true}. Everywhere else the button is the
+     * one thing left to do, so it is filled; there it sits on screen for two minutes next to a code
+     * the user is reading out, and a filled button beside the thing you are meant to be looking at
+     * is a button that gets pressed by mistake.
+     */
+    private void button(int labelRes, boolean bright, View.OnClickListener onClick) {
         action.setText(labelRes);
+        // Tinted rather than restyled: a MaterialButton's style is fixed when it is inflated, so
+        // "make it a tonal button now and a filled one later" is not a thing that can be asked for
+        // at runtime. Tint plus text colour is, and it lands on the same two M3 roles the two
+        // styles would have used.
+        int bg = bright
+                ? MaterialColors.getColor(action, androidx.appcompat.R.attr.colorPrimary)
+                : MaterialColors.getColor(action, com.google.android.material.R.attr.colorSurfaceContainerHighest);
+        int fg = bright
+                ? MaterialColors.getColor(action, com.google.android.material.R.attr.colorOnPrimary)
+                : MaterialColors.getColor(action, com.google.android.material.R.attr.colorOnSurfaceVariant);
+        action.setBackgroundTintList(android.content.res.ColorStateList.valueOf(bg));
+        action.setTextColor(fg);
         Haptics.onClick(action, () -> onClick.onClick(action));
     }
 
@@ -593,30 +657,13 @@ final class PairSheet {
     private static final int SHOW = View.VISIBLE;
     /** Off screen, and its space with it: the sheet is shorter by exactly this view. */
     private static final int HIDE = View.GONE;
-    /**
-     * Off screen, but still measured — a placeholder.
-     *
-     * <p>For the pieces that take turns. Three of the joiner's states are one screen with one thing
-     * different about it: the field with a button under it, the field with the progress row while
-     * the code is checked, the field with a button and a complaint. The row and the button swap, and
-     * a swap in which both sides are GONE moves the sheet's top edge twice within a second — up as
-     * the button goes, down as the row arrives — which is the jump this exists to stop. Whichever of
-     * the two is not wanted is KEEP, so the screen has one height from the moment it opens until it
-     * leaves, and the derivation being seconds long or milliseconds long stops mattering: nothing
-     * the clock does can move the sheet.
-     *
-     * <p>That last clause is load-bearing and was re-checked when the derivation went from four
-     * seconds of PBKDF2 to under a second of scrypt. It still holds, and it holds for the
-     * reason it was built to: the three states pass {@code (HIDE, KEEP, HIDE, SHOW, SHOW)},
-     * {@code (HIDE, SHOW, HIDE, SHOW, KEEP)} and {@code (HIDE, KEEP, HIDE, SHOW, SHOW)}, so the
-     * progress row and the button are each measured in all three and every other piece agrees.
-     * "Checking the code" now often lasts a few frames, and a few frames is exactly as harmless as
-     * four seconds was.
-     *
-     * <p>Not a spacer view and not a padded blank string: an INVISIBLE view is skipped by TalkBack
-     * and cannot be focused or tapped, so the reservation costs the user nothing to walk past.
-     */
-    private static final int KEEP = View.INVISIBLE;
+    // There was a third value here, KEEP = View.INVISIBLE, used on the joiner's code-entry screen so
+    // that the progress row and the button could trade places without the sheet's height moving.
+    // It is gone, and the reason is worth keeping: holding a row of space open for the whole of that
+    // screen — on top of the two lines pair_text reserves and the error line the field reserves —
+    // made the sheet tall and the field cramped. Three reservations stacked up to a worse result
+    // than the movement any one of them prevented. Ui.visibilityMotion animates the height change,
+    // so what is traded is a slide for a taller sheet, and the slide is the better half of that.
 
     /**
      * The five pieces that come and go, set in one call so the sheet can animate between states.
@@ -627,8 +674,7 @@ final class PairSheet {
      * captured. Collecting the differences first also means a state that changes nothing animates
      * nothing, which is what keeps the once-a-second countdown from re-running the motion.
      *
-     * <p>Each piece is {@link #SHOW}, {@link #HIDE} or {@link #KEEP} — the third being the one that
-     * holds the sheet's height still where two pieces trade places.
+     * <p>Each piece is {@link #SHOW} or {@link #HIDE}.
      *
      * <p>Call this first in a state, then set the text. {@code beginDelayedTransition} captures the
      * start values as it is called, so text set beforehand is text the transition thinks was always
@@ -640,10 +686,9 @@ final class PairSheet {
         int[] want = {codeShown, progressShown, listShown, fieldShown, actionShown};
         java.util.List<View> changing = new java.util.ArrayList<>();
         for (int i = 0; i < views.length; i++) {
-            // Three values rather than two, so this compares the value and not "is it VISIBLE": a
-            // view going VISIBLE -> KEEP is a fade like any other (MaterialFade, like every
-            // androidx Visibility transition, counts INVISIBLE as gone), and one going KEEP -> KEEP
-            // has not changed and must not restart the motion.
+            // Compared by value rather than by "is it VISIBLE", so that a state which changes
+            // nothing animates nothing — that is what keeps the once-a-second countdown from
+            // restarting the motion on every tick.
             if (views[i].getVisibility() != want[i]) changing.add(views[i]);
         }
         // Not on the first state, which is applied as the sheet is still sliding up: the entrance is
