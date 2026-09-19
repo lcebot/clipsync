@@ -39,10 +39,21 @@ public final class Status {
 
     /** A configured target that is not connected, and why. */
     public static final class Target {
-        public final String target, error;
+        public final String target, reason;
+        /**
+         * Is {@link #reason} a fault, or an expected outcome?
+         *
+         * <p>Not every target that is down is a problem, and the UI was colouring all of them as one.
+         * Two of them are the system working: a target deferring because the same peer is already
+         * held by another route is <b>choosing the better of two links</b>, and a target recognised as
+         * this device has nowhere to connect to by definition. Painting those red says something is
+         * broken when nothing is; red belongs to the reasons the user can act on — a timeout, a
+         * refusal, a name that does not resolve.
+         */
+        public final boolean fault;
 
-        Target(String target, String error) {
-            this.target = target; this.error = error;
+        Target(String target, String reason, boolean fault) {
+            this.target = target; this.reason = reason; this.fault = fault;
         }
     }
 
@@ -85,8 +96,8 @@ public final class Status {
         return new Peer(id, name, type, via, addr, lan);
     }
 
-    public static Target target(String target, String error) {
-        return new Target(target, error);
+    public static Target target(String target, String reason, boolean fault) {
+        return new Target(target, reason, fault);
     }
 
     private static File file(Context ctx) {
@@ -113,7 +124,8 @@ public final class Status {
             }
             JSONArray ts = new JSONArray();
             for (Target t : targets) {
-                ts.put(new JSONObject().put("target", str(t.target)).put("error", str(t.error)));
+                ts.put(new JSONObject().put("target", str(t.target)).put("reason", str(t.reason))
+                        .put("fault", t.fault));
             }
             String s = new JSONObject().put("state", state).put("detail", str(detail))
                     .put("ts", System.currentTimeMillis()).put("suspended", suspended)
@@ -152,7 +164,7 @@ public final class Status {
             for (int i = 0; ts != null && i < ts.length(); i++) {
                 JSONObject t = ts.optJSONObject(i);
                 if (t == null) continue;
-                targets.add(new Target(get(t, "target"), get(t, "error")));
+                targets.add(new Target(get(t, "target"), get(t, "reason"), t.optBoolean("fault")));
             }
             return new Snapshot(o.optString("state", "stopped"), get(o, "detail"),
                     o.optLong("ts", 0), o.optBoolean("suspended"), peers, targets);

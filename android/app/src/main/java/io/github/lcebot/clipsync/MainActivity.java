@@ -822,14 +822,15 @@ public class MainActivity extends AppCompatActivity {
         if (!s.targets.isEmpty()) {
             addHeader(list, R.string.sheet_not_connected);
             for (Status.Target t : s.targets) {
-                // The reason is the one line in this sheet that is about something being wrong, and
-                // it was rendered in the same muted role as a healthy peer's address. colorError is
-                // the role for it, and it is also what makes the group scannable: the eye finds the
-                // failing target without reading the words.
-                addRow(list, t.target, t.error == null ? "" : t.error, t.target, true);
+                View card = addCard(list, t.target, t.target);
+                // Red only when there is something to act on. A target deferring to another route to
+                // the same machine, or recognised as this device, is the system choosing correctly —
+                // painting that as an error says something is broken when nothing is. See
+                // Status.Target.fault.
+                if (t.reason != null) field(card, R.string.field_reason, t.reason, t.fault);
             }
         }
-        if (list.getChildCount() == 0) addRow(list, getString(R.string.sheet_none), "", null, false);
+        if (list.getChildCount() == 0) addCard(list, getString(R.string.sheet_none), null);
         sheet.show();
     }
 
@@ -838,14 +839,18 @@ public class MainActivity extends AppCompatActivity {
         addHeader(list, headerRes);
         for (Status.Peer p : peers) {
             String name = p.name == null || p.name.isEmpty() ? "?" : p.name;
-            // The id's first 8 characters, not all 36: the full one is unreadable in a list, and
-            // tapping the row copies everything anyway.
             String addr = p.addr == null ? "?" : p.addr;
-            String detail = Node.shortId(p.id) + "  ·  " + (p.type == null ? "?" : p.type) + "  ·  " + addr;
-            // The full id here, not the short one: the list shows 8 characters because 36 are
-            // unreadable, and copying is the way to get the rest. String.valueOf, so a missing id
-            // copies as "null" rather than throwing — but never as the literal text of a bug.
-            addRow(list, name, detail, name + "\n" + (p.id == null ? "" : p.id) + "\n" + addr, false);
+            // The copied text is unchanged: name, then the FULL id, then the address, one per line.
+            // The card shows the id's first 8 characters because 36 are unreadable at a glance, and
+            // copying is how you get the rest — so the two must not be the same string.
+            View card = addCard(list, name, name + "\n" + (p.id == null ? "" : p.id) + "\n" + addr);
+            // Monospace for the two that are machine-readable strings: hex digits and dotted quads are
+            // read character by character, and a proportional font makes 1/l and 0/O work for it.
+            field(card, R.string.field_id, Node.shortId(p.id), false)
+                    .setTypeface(android.graphics.Typeface.MONOSPACE);
+            field(card, R.string.field_type, p.type == null ? "?" : p.type, false);
+            field(card, R.string.field_address, addr, false)
+                    .setTypeface(android.graphics.Typeface.MONOSPACE);
         }
     }
 
@@ -858,23 +863,47 @@ public class MainActivity extends AppCompatActivity {
         list.addView(h);
     }
 
-    private void addRow(ViewGroup list, String title, String detail, String copyText, boolean error) {
-        View row = getLayoutInflater().inflate(R.layout.item_status_row, list, false);
-        ((TextView) row.findViewById(R.id.row_title)).setText(title);
-        TextView d = row.findViewById(R.id.row_detail);
-        d.setText(detail);
-        d.setVisibility(detail.isEmpty() ? View.GONE : View.VISIBLE);
-        if (error) d.setTextColor(MaterialColors.getColor(d, androidx.appcompat.R.attr.colorError));
+    /**
+     * One device card, empty of fields. Add them with {@link #field}.
+     *
+     * @param copyText what tapping the card copies, or null for a card that is not a device at all
+     *                 ("No peers connected") and therefore not a control
+     * @return the card, to pass back to {@code field}
+     */
+    private View addCard(ViewGroup list, String name, String copyText) {
+        View card = getLayoutInflater().inflate(R.layout.item_status_card, list, false);
+        ((TextView) card.findViewById(R.id.card_name)).setText(name);
         if (copyText != null) {
-            Haptics.onClick(row, () -> copy(copyText));
+            Haptics.onClick(card, () -> copy(copyText));
         } else {
-            // Not just unclickable: the row layout carries a ripple and takes focus, so leaving
-            // those on gives a placeholder the feedback of a control that does nothing.
-            row.setClickable(false);
-            row.setFocusable(false);
-            row.setBackground(null);
+            // Not just unclickable: a card with clickable=true carries a ripple and takes focus, so
+            // leaving those on gives a placeholder the feedback of a control that does nothing. The
+            // card keeps its surface; only the affordance goes.
+            card.setClickable(false);
+            card.setFocusable(false);
         }
-        list.addView(row);
+        list.addView(card);
+        return card;
+    }
+
+    /**
+     * One labelled field inside a card.
+     *
+     * @param fault the only thing in this sheet that gets colorError — see Status.Target.fault
+     * @return the value view, for the callers that want a different typeface on it
+     */
+    private TextView field(View card, int labelRes, String value, boolean fault) {
+        ViewGroup fields = card.findViewById(R.id.card_fields);
+        // Revealed on the first field rather than always visible: its 8dp top margin would otherwise
+        // hang off the bottom of a card that has no fields at all ("No peers connected").
+        fields.setVisibility(View.VISIBLE);
+        View row = getLayoutInflater().inflate(R.layout.item_status_field, fields, false);
+        ((TextView) row.findViewById(R.id.field_label)).setText(labelRes);
+        TextView v = row.findViewById(R.id.field_value);
+        v.setText(value == null || value.isEmpty() ? "?" : value);
+        if (fault) v.setTextColor(MaterialColors.getColor(v, androidx.appcompat.R.attr.colorError));
+        fields.addView(row);
+        return v;
     }
 
     private void copy(String text) {

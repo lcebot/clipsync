@@ -3,13 +3,17 @@
      Same treatment as a Settings section title, so the two surfaces read as one app — which means
      the same type role as well, titleSmall. It was labelMedium, which is the role for the text
      *on* a component, and it made the sheet's headings a size smaller than the ones the page uses
-     for the same job. -->
+     for the same job.
+
+     paddingBottom is 8dp, the same gap the cards keep between each other: a heading sitting 4dp above
+     its first card was closer to it than the cards are to one another, which groups the heading with
+     one card instead of with the group. -->
 <TextView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:paddingHorizontal="24dp"
     android:paddingTop="16dp"
-    android:paddingBottom="4dp"
+    android:paddingBottom="8dp"
     android:accessibilityHeading="true"
     android:textAppearance="?attr/textAppearanceTitleSmall"
     android:textColor="?attr/colorPrimary" />

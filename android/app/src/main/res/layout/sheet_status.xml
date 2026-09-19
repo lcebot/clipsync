@@ -40,10 +40,12 @@
             android:orientation="vertical" />
     </androidx.core.widget.NestedScrollView>
 
+    <!-- 8dp from the last card, which already carries 8dp of its own: the hint is about the cards, so
+         it sits closer to them than the sheet's own bottom padding puts it from the edge. -->
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="12dp"
+        android:layout_marginTop="8dp"
         android:paddingHorizontal="24dp"
         android:textAppearance="?attr/textAppearanceBodySmall"
         android:textColor="?attr/colorOnSurfaceVariant"

@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- One device in the peer sheet: a peer that is up, or a target that is not.
+
+     A card, and the same filled card the settings page uses, so the two surfaces read as one app.
+     What it replaces was a two-line row whose second line packed three unrelated values into one
+     string separated by middle dots — id, type and address run together, none of them labelled, and
+     nothing to tell the eye where one ended and the next began. A card per device with a labelled
+     field per value says the same thing without the reader having to parse it.
+
+     The whole card is the touch target and copies the device's details (see MainActivity.addCard).
+
+     The 24dp horizontal margin is so the card's edge lines up with the sheet's title and its group
+     headings rather than bulging out to the left of them. -->
+<com.google.android.material.card.MaterialCardView xmlns:android="http://schemas.android.com/apk/res/android"
+    style="?attr/materialCardViewFilledStyle"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginHorizontal="24dp"
+    android:layout_marginBottom="8dp"
+    android:clickable="true"
+    android:focusable="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <!-- The name carries the card on its own, so it is a title and not a body line. -->
+        <TextView
+            android:id="@+id/card_name"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textAppearance="?attr/textAppearanceTitleMedium"
+            android:textColor="?attr/colorOnSurface" />
+
+        <!-- 8dp from the title, and the fields themselves 4dp apart (set on each row): a field is
+             closer to its neighbours than the group is to the name it belongs to, which is what makes
+             them read as one block rather than four separate lines. -->
+        <LinearLayout
+            android:id="@+id/card_fields"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:orientation="vertical"
+            android:visibility="gone" />
+    </LinearLayout>
+</com.google.android.material.card.MaterialCardView>

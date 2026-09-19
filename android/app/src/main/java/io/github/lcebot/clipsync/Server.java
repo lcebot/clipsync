@@ -144,8 +144,21 @@ final class Server implements Closeable {
             if ("data".equals(hello.optString("role"))) handler.onData(c, hello);
             else handler.onControl(c);
         } catch (Connection.SelfConnection e) {
-            // Reached ourselves — a loopback address, or our own advertisement. Nothing to report:
-            // the dialling side logs it and stops, and this end could see it once per attempt.
+            // Reached ourselves — our own mDNS advertisement, most often, since a device browses the
+            // same LAN it advertises on.
+            //
+            // Answer the handshake anyway, then close. The dialler is this same process, and the only
+            // way it can discover that is to read back an id it recognises; closing without replying
+            // left it blocked in its own read, so it saw an EOFException — indistinguishable from a
+            // peer that crashed. It then retried its own advertisement every 60 s for the life of the
+            // process and reported the LAN as failing in the sheet. One frame on a connection that is
+            // about to die is the whole fix, and it keeps the self-check where it belongs: with
+            // whichever end is reading an id.
+            try {
+                if (c != null) c.sendHello(ctx, 0);
+            } catch (Exception ignored) {
+                // it is closing regardless; the dialler falls back to its own timeout
+            }
             Logger.i("inbound " + from + ": that is this device");
         } catch (Exception e) {
             Logger.i("inbound " + from + ": " + e);

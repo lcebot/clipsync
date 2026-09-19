@@ -128,13 +128,16 @@ public class SyncService extends Service {
         for (Dialer d : snapshotDialers()) {
             Link l = d.live;
             if (l != null && l.isOpen()) continue;
-            targets.add(Status.target(isMdns(d.target) ? instanceOf(d.target) : d.target, d.lastError));
+            targets.add(Status.target(isMdns(d.target) ? instanceOf(d.target) : d.target,
+                    d.lastError, d.lastFault));
         }
         // Discovery itself, when it is on and has nothing to show for it. Without this the sheet is
         // simply empty in exactly the case someone opens it to understand: the switch is on, no peer
         // has been found, and there is no target row to carry the reason because there is no target.
         String searching = discoveryState;
-        if (searching != null) targets.add(Status.target(getString(R.string.target_discovery), searching));
+        // Not a fault: browsing and finding nothing is a fact about the network, not a failure of
+        // this device, and the three ordinary causes are all outside it.
+        if (searching != null) targets.add(Status.target(getString(R.string.target_discovery), searching, false));
         Status.write(this, lastState, lastDetail, suspendedOnce, peers, targets);
     }
 
@@ -1398,6 +1401,24 @@ public class SyncService extends Service {
         /** Why this target is not connected, for the sheet. Null while it is. */
         volatile String lastError;
         /**
+         * Whether {@link #lastError} is a fault or an expected outcome.
+         *
+         * <p>Set only through {@link #note}, so the two cannot drift apart — which they would, being
+         * assigned at six different points in one loop. See {@link Status.Target#fault} for why the
+         * distinction is worth carrying at all.
+         */
+        volatile boolean lastFault;
+
+        private void note(String reason, boolean fault) {
+            lastError = reason;
+            lastFault = fault;
+        }
+
+        private void connected() {
+            lastError = null;
+            lastFault = false;
+        }
+        /**
          * The back-off's own monitor, and the reason this class has two.
          *
          * <p>It used to wait on {@code lock}, which is also what {@code wake()} notifies on every
@@ -1468,10 +1489,13 @@ public class SyncService extends Service {
                     Link winner = register(l);
                     if (winner == null) {
                         backoff = BACKOFF_MIN_MS;
-                        lastError = null;
+                        connected();
                         burst = l.run();
                     } else {
-                        lastError = getString(R.string.peer_same_as, winner.target);
+                        // Not a fault: two routes to one machine, and this is the pair choosing the
+                        // one already carrying traffic. Reported so the row is not silent, coloured
+                        // as ordinary information because that is what it is.
+                        note(getString(R.string.peer_same_as, winner.target), false);
                         // A duplicate of a peer another target already holds. Remember which link
                         // won, so the next round skips the dial entirely instead of connecting and
                         // handshaking only to be rejected again.
@@ -1487,15 +1511,18 @@ public class SyncService extends Service {
                     // the target as self is what stops the discovery loop recreating this dialer.
                     Logger.i(e.getMessage());
                     Connection.rememberSelf(target);
-                    lastError = getString(R.string.peer_is_self);
+                    // Not a fault either: a device that advertises on the LAN it browses finds itself
+                    // every time, and there is nothing here for the user to fix.
+                    note(getString(R.string.peer_is_self), false);
                     Logger.i("not retrying " + target + " until the configuration changes");
                     refreshStatus();                     // ... and the sheet has to say so
                     return;
                 } catch (Exception e) {
                     Logger.i(target + ": " + e);
-                    // The message, not the class name: "Connection timed out" is what the user can
-                    // act on, "java.net.SocketTimeoutException" is not.
-                    lastError = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+                    // The one branch that IS a fault: a timeout, a refusal, a name that will not
+                    // resolve. The message, not the class name — "Connection timed out" is what the
+                    // user can act on, "java.net.SocketTimeoutException" is not.
+                    note(e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName(), true);
                 } finally {
                     if (l != null) {
                         l.close();
@@ -1505,8 +1532,9 @@ public class SyncService extends Service {
                     live = null;
                     // A link that ended without an exception ended cleanly — the peer closed, or a
                     // burst finished. Without a reason here the target shows in the sheet with a
-                    // blank line and no account of the silence that follows.
-                    if (lastError == null) lastError = getString(R.string.peer_disconnected);
+                    // blank line and no account of the silence that follows. Not a fault: a clean
+                    // close is the screen-off path working, and there is nothing to act on.
+                    if (lastError == null) note(getString(R.string.peer_disconnected), false);
                     refreshStatus();
                 }
                 if (!running || stop) return;
@@ -1518,7 +1546,7 @@ public class SyncService extends Service {
                     Link winner = l.peerId() == null ? null : byPeer.get(l.peerId());
                     if (winner != null && winner.isOpen() && winner != l) {
                         deferredTo = winner;
-                        lastError = getString(R.string.peer_same_as, winner.target);
+                        note(getString(R.string.peer_same_as, winner.target), false);
                     }
                     backoff = backoffMax();
                 } else if (burst) {

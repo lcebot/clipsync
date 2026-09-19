@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- One labelled value inside a device card: "ID   1a2b3c4d".
+
+     Two columns rather than one "ID: value" string, so the values line up down the card and can be
+     compared between cards at a glance — which is the whole reason for labelling them.
+
+     The label column is minWidth and not a fixed width: at a large font scale a fixed one clips the
+     label, and a label pushing its own value right is a smaller problem than a label that cannot be
+     read. The value takes the remaining width so a long address wraps instead of being cut. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginTop="4dp"
+    android:baselineAligned="true"
+    android:orientation="horizontal">
+
+    <TextView
+        android:id="@+id/field_label"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:minWidth="84dp"
+        android:paddingEnd="8dp"
+        android:textAppearance="?attr/textAppearanceLabelLarge"
+        android:textColor="?attr/colorOnSurfaceVariant" />
+
+    <TextView
+        android:id="@+id/field_value"
+        android:layout_width="0dp"
+        android:layout_weight="1"
+        android:layout_height="wrap_content"
+        android:lineSpacingExtra="2dp"
+        android:textAppearance="?attr/textAppearanceBodyMedium"
+        android:textColor="?attr/colorOnSurface" />
+</LinearLayout>

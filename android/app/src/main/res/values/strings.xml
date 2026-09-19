@@ -106,7 +106,15 @@
     <string name="sheet_none">No peers connected</string>
     <string name="peer_same_as">Same device as %1$s</string>
     <string name="peer_disconnected">Disconnected</string>
-    <string name="dialog_tap_to_copy">Tap a row to copy it.</string>
+    <string name="dialog_tap_to_copy">Tap a card to copy it.</string>
+    <!-- Field labels inside a device card. Short, because they share a column with each other and
+         the column is as wide as the longest of them. No trailing colon: the gap between the two
+         columns is what separates a label from its value, and a colon in front of that gap reads as
+         punctuation left over from a sentence that is not there. -->
+    <string name="field_id">ID</string>
+    <string name="field_type">Type</string>
+    <string name="field_address">Address</string>
+    <string name="field_reason">Reason</string>
 
     <!-- snackbars -->
     <string name="snack_copied">Copied</string>
