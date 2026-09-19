@@ -39,23 +39,57 @@ public final class Status {
         }
     }
 
+    /**
+     * What kind of thing a not-connected reason is — the four answers to "so what do I do?".
+     *
+     * <p>*Not connected* began as a place to put errors, and was coloured as one: every reason in it
+     * got {@code colorError}. But most of what lands there is not an error at all, and the section's
+     * real job is to account for every configured target, whatever the account says. Grading it needs
+     * a vocabulary rather than a boolean, and the grades are chosen so that each one answers that
+     * question differently — a colour that does not change what the reader does next is decoration.
+     *
+     * <p>The order below is the order of visual weight, loudest first.
+     */
+    public enum Why {
+        /**
+         * Something is wrong and you can act on it: a timeout, a refusal, a name that will not
+         * resolve. {@code colorError}, and the only thing that gets it.
+         */
+        FAULT,
+        /**
+         * The peer <b>told us</b> it was going idle. The one row in the section carrying positive
+         * knowledge rather than the absence of it, so it takes an accent — {@code colorTertiary},
+         * which this app already uses for the chip's *Connecting…*: a state the system is passing
+         * through on purpose. Nothing to do; it will dial back when its screen comes on.
+         */
+        ASLEEP,
+        /**
+         * Not connected, no explanation offered, and expected to be connected again — *Disconnected*,
+         * or a discovery browse that has found nothing yet. The default, at plain
+         * {@code colorOnSurface}. Wait.
+         */
+        WAITING,
+        /**
+         * A fact about the setup rather than about a connection: *That is this device*, *Same device
+         * as …*. Nothing will change it but the configuration, and there is nothing to be done about
+         * it now — so it is the quietest, {@code colorOnSurfaceVariant}. These are footnotes
+         * explaining why a row exists at all.
+         */
+        NOTED;
+
+        static Why of(String name) {
+            for (Why w : values()) if (w.name().equals(name)) return w;
+            return WAITING;
+        }
+    }
+
     /** A configured target that is not connected, and why. */
     public static final class Target {
         public final String target, reason;
-        /**
-         * Is {@link #reason} a fault, or an expected outcome?
-         *
-         * <p>Not every target that is down is a problem, and the UI was colouring all of them as one.
-         * Two of them are the system working: a target deferring because the same peer is already
-         * held by another route is <b>choosing the better of two links</b>, and a target recognised as
-         * this device has nowhere to connect to by definition. Painting those red says something is
-         * broken when nothing is; red belongs to the reasons the user can act on — a timeout, a
-         * refusal, a name that does not resolve.
-         */
-        public final boolean fault;
+        public final Why why;
 
-        Target(String target, String reason, boolean fault) {
-            this.target = target; this.reason = reason; this.fault = fault;
+        Target(String target, String reason, Why why) {
+            this.target = target; this.reason = reason; this.why = why == null ? Why.WAITING : why;
         }
     }
 
@@ -98,8 +132,8 @@ public final class Status {
         return new Peer(id, name, type, via, addr, lan);
     }
 
-    public static Target target(String target, String reason, boolean fault) {
-        return new Target(target, reason, fault);
+    public static Target target(String target, String reason, Why why) {
+        return new Target(target, reason, why);
     }
 
     private static File file(Context ctx) {
@@ -156,7 +190,7 @@ public final class Status {
             JSONArray ts = new JSONArray();
             for (Target t : targets) {
                 ts.put(new JSONObject().put("target", str(t.target)).put("reason", str(t.reason))
-                        .put("fault", t.fault));
+                        .put("why", t.why.name()));
             }
             String s = new JSONObject().put("state", state).put("detail", str(detail))
                     .put("ts", System.currentTimeMillis()).put("suspended", suspended)
@@ -195,7 +229,7 @@ public final class Status {
             for (int i = 0; ts != null && i < ts.length(); i++) {
                 JSONObject t = ts.optJSONObject(i);
                 if (t == null) continue;
-                targets.add(new Target(get(t, "target"), get(t, "reason"), t.optBoolean("fault")));
+                targets.add(new Target(get(t, "target"), get(t, "reason"), Why.of(t.optString("why"))));
             }
             return new Snapshot(o.optString("state", "stopped"), get(o, "detail"),
                     o.optLong("ts", 0), o.optBoolean("suspended"), peers, targets);

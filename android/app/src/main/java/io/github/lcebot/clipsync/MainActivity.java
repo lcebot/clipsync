@@ -1028,19 +1028,18 @@ public class MainActivity extends AppCompatActivity {
             String name = p.name == null || p.name.isEmpty() ? "?" : p.name;
             String addr = p.addr == null ? "?" : p.addr;
             setTextIfChanged(card.findViewById(R.id.card_name), name);
-            value(card, 0, Node.shortId(p.id), false);
-            value(card, 1, p.type == null ? "?" : p.type, false);
-            value(card, 2, addr, false);
+            // A connected peer's own facts are never a verdict on anything, so they take the plain
+            // role — the grading in `value` is for the reasons a target is *not* connected.
+            value(card, 0, Node.shortId(p.id), Status.Why.WAITING);
+            value(card, 1, p.type == null ? "?" : p.type, Status.Why.WAITING);
+            value(card, 2, addr, Status.Why.WAITING);
             // The copied text is unchanged: name, then the FULL id, then the address, one per line.
             // The card shows the id's first 8 characters because 36 are unreadable at a glance, and
             // copying is how you get the rest — so the two must not be the same string.
             clickToCopy(card, name + "\n" + (p.id == null ? "" : p.id) + "\n" + addr);
         } else if (r.target != null) {
             setTextIfChanged(card.findViewById(R.id.card_name), r.target.target);
-            // Red only when there is something to act on. A target deferring to another route to the
-            // same machine, or recognised as this device, is the system choosing correctly — painting
-            // that as an error says something is broken when nothing is. See Status.Target.fault.
-            value(card, 0, r.target.reason, r.target.fault);
+            value(card, 0, r.target.reason, r.target.why);
             clickToCopy(card, r.target.target);
         } else {
             setTextIfChanged(card.findViewById(R.id.card_name), getString(R.string.sheet_none));
@@ -1079,22 +1078,38 @@ public class MainActivity extends AppCompatActivity {
     }
 
     /**
-     * Set one field's value by position.
+     * Set one field's value by position, in the colour its kind of reason calls for.
      *
-     * @param fault the only thing in this sheet that gets colorError — see Status.Target.fault. Reset
-     *              on every call, not only when true: a target can stop being a fault, and a colour
-     *              left behind outlives the condition that justified it.
+     * <p>Four roles, loudest first, and each one answers "so what do I do?" differently — a colour
+     * that does not change what the reader does next is decoration:
+     *
+     * <ul>
+     *   <li>{@code FAULT} → <b>colorError</b>. Something to fix.
+     *   <li>{@code ASLEEP} → <b>colorTertiary</b>. The peer said so itself, which makes this the one
+     *       row carrying positive knowledge rather than the absence of it. Tertiary is already this
+     *       app's colour for the chip's *Connecting…* — a state the system is passing through on
+     *       purpose — so the vocabulary is the same in both places.
+     *   <li>{@code WAITING} → <b>colorOnSurface</b>. The plain default: wait.
+     *   <li>{@code NOTED} → <b>colorOnSurfaceVariant</b>. A footnote about the setup, quietest,
+     *       because it explains why a row exists and asks for nothing.
+     * </ul>
+     *
+     * <p>Applied on every call rather than only when it changes kind: a target can stop being a
+     * fault, and a colour left behind outlives the condition that justified it.
      */
-    private void value(View card, int index, String text, boolean fault) {
+    private void value(View card, int index, String text, Status.Why why) {
         ViewGroup fields = card.findViewById(R.id.card_fields);
         if (index >= fields.getChildCount()) return;
         TextView v = fields.getChildAt(index).findViewById(R.id.field_value);
         setTextIfChanged(v, text == null || text.isEmpty() ? "?" : text);
         // Compared before it is set, like every other setter on the once-a-second path: setTextColor
         // invalidates whether or not the colour differs.
-        int want = MaterialColors.getColor(v, fault
-                ? androidx.appcompat.R.attr.colorError
-                : com.google.android.material.R.attr.colorOnSurface);
+        int want = MaterialColors.getColor(v, switch (why) {
+            case FAULT -> androidx.appcompat.R.attr.colorError;
+            case ASLEEP -> com.google.android.material.R.attr.colorTertiary;
+            case NOTED -> com.google.android.material.R.attr.colorOnSurfaceVariant;
+            case WAITING -> com.google.android.material.R.attr.colorOnSurface;
+        });
         if (v.getCurrentTextColor() != want) v.setTextColor(want);
     }
 

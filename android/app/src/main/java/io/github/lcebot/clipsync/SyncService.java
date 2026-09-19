@@ -129,15 +129,17 @@ public class SyncService extends Service {
             Link l = d.live;
             if (l != null && l.isOpen()) continue;
             targets.add(Status.target(isMdns(d.target) ? instanceOf(d.target) : d.target,
-                    d.lastError, d.lastFault));
+                    d.lastError, d.lastWhy));
         }
         // Discovery itself, when it is on and has nothing to show for it. Without this the sheet is
         // simply empty in exactly the case someone opens it to understand: the switch is on, no peer
         // has been found, and there is no target row to carry the reason because there is no target.
         String searching = discoveryState;
-        // Not a fault: browsing and finding nothing is a fact about the network, not a failure of
-        // this device, and the three ordinary causes are all outside it.
-        if (searching != null) targets.add(Status.target(getString(R.string.target_discovery), searching, false));
+        // Waiting, not a fault: browsing and finding nothing is a fact about the network, not a
+        // failure of this device, and the three ordinary causes are all outside it.
+        if (searching != null) {
+            targets.add(Status.target(getString(R.string.target_discovery), searching, Status.Why.WAITING));
+        }
         Status.write(this, lastState, lastDetail, suspendedOnce, peers, targets);
     }
 
@@ -428,8 +430,16 @@ public class SyncService extends Service {
                 refreshStatus();
             } else if (Intent.ACTION_SCREEN_OFF.equals(i.getAction())) {
                 screenOn = false;
-                dropConnection();       // let the radio sleep
-                refreshStatus();        // ... and say so, even when there was no link to lose
+                // On a worker, because saying goodbye is a socket write and this is the main thread.
+                // Worth saying: a link that simply closes leaves the peer unable to tell a device
+                // that went to sleep from one that crashed, for as long as its read timeout — and
+                // the two call for opposite responses, redial soon versus leave it alone.
+                try {
+                    pushWorker.execute(() -> { goIdle(); refreshStatus(); });
+                } catch (java.util.concurrent.RejectedExecutionException e) {
+                    dropConnection();   // shutting down: the close alone still ends the links
+                    refreshStatus();    // ... and say so, even when there was no link to lose
+                }
             }
         }
     };
@@ -1052,10 +1062,14 @@ public class SyncService extends Service {
             case Connection.T_BYE -> {
                 String why = new JSONObject(new String(f.payload, StandardCharsets.UTF_8)).optString("reason", "");
                 Logger.i(c.peer + " said goodbye: " + (why.isEmpty() ? "no reason given" : why));
-                // Marked, not just closed. Closing alone ends the session and the dialer redials on
-                // its usual back-off — handing the peer back exactly the link it discarded, which is
-                // the loop BYE exists to prevent. The dialer reads this and waits the long interval.
-                l.markBye();
+                // Marked with the reason, not just closed. Closing alone ends the session and the
+                // dialer redials on its usual back-off — handing the peer back exactly the link it
+                // discarded, which is the loop BYE exists to prevent. The reason then says which
+                // long wait this is: another route won, or the device went to sleep.
+                l.markBye(why);
+                // Recorded against the peer rather than the link, because the dialler that needs to
+                // know may not be the one this arrived on. See idlePeers.
+                if (Connection.BYE_IDLE.equals(why) && c.peerId != null) idlePeers.add(c.peerId);
                 l.close();
             }
             default -> { }
@@ -1115,7 +1129,34 @@ public class SyncService extends Service {
         return t;
     });
 
-    /** Close every live link. Screen off, reload and shutdown all mean this. */
+    /**
+     * Peers that said they were going idle, by node id.
+     *
+     * <p>By <b>peer</b>, not by dialler, and that is the whole reason this map exists rather than a
+     * field on the Dialer. Two devices that found each other over mDNS both dial, one of the two
+     * links is dropped as a duplicate, and the survivor may be the <em>inbound</em> one — so when
+     * that peer goes to sleep, the goodbye arrives on a link the dialler does not own and would
+     * never hear about. The dialler asks this instead, and is told.
+     *
+     * <p>Cleared by {@link #register}, because a peer that has just completed a handshake is by
+     * definition awake, and by a failed dial, because a device that will not answer is not merely
+     * asleep and the real error is the better thing to show.
+     */
+    private final java.util.Set<String> idlePeers = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /**
+     * Announce that this device is going idle, then close every link.
+     *
+     * <p>Called on a worker: {@link Link#bye} writes a frame before it closes.
+     */
+    private void goIdle() {
+        for (Link l : byPeer.values()) {
+            if (l.isOpen()) l.bye(Connection.BYE_IDLE);
+        }
+        dropConnection();
+    }
+
+    /** Close every live link. Network loss, reload and shutdown all mean this. */
     private void dropConnection() {
         dropConnection(null);
     }
@@ -1401,22 +1442,29 @@ public class SyncService extends Service {
         /** Why this target is not connected, for the sheet. Null while it is. */
         volatile String lastError;
         /**
-         * Whether {@link #lastError} is a fault or an expected outcome.
+         * What kind of reason {@link #lastError} is.
          *
          * <p>Set only through {@link #note}, so the two cannot drift apart — which they would, being
-         * assigned at six different points in one loop. See {@link Status.Target#fault} for why the
-         * distinction is worth carrying at all.
+         * assigned at seven different points in one loop. See {@link Status.Why}.
          */
-        volatile boolean lastFault;
+        volatile Status.Why lastWhy = Status.Why.WAITING;
+        /**
+         * The node the last handshake on this target reached.
+         *
+         * <p>The link is gone by the time the dialler asks what its silence means, so the id has to
+         * outlive it — it is the only handle on {@link #idlePeers}, which is keyed by peer and not
+         * by target precisely because a target is not who you reach.
+         */
+        private volatile String lastPeerId;
 
-        private void note(String reason, boolean fault) {
+        private void note(String reason, Status.Why why) {
             lastError = reason;
-            lastFault = fault;
+            lastWhy = why;
         }
 
         private void connected() {
             lastError = null;
-            lastFault = false;
+            lastWhy = Status.Why.WAITING;
         }
         /**
          * The back-off's own monitor, and the reason this class has two.
@@ -1486,6 +1534,7 @@ public class SyncService extends Service {
                 try {
                     l = open();
                     live = l;
+                    lastPeerId = l.peerId();
                     Link winner = register(l);
                     if (winner == null) {
                         backoff = BACKOFF_MIN_MS;
@@ -1495,7 +1544,7 @@ public class SyncService extends Service {
                         // Not a fault: two routes to one machine, and this is the pair choosing the
                         // one already carrying traffic. Reported so the row is not silent, coloured
                         // as ordinary information because that is what it is.
-                        note(getString(R.string.peer_same_as, winner.target), false);
+                        note(getString(R.string.peer_same_as, winner.target), Status.Why.NOTED);
                         // A duplicate of a peer another target already holds. Remember which link
                         // won, so the next round skips the dial entirely instead of connecting and
                         // handshaking only to be rejected again.
@@ -1513,16 +1562,32 @@ public class SyncService extends Service {
                     Connection.rememberSelf(target);
                     // Not a fault either: a device that advertises on the LAN it browses finds itself
                     // every time, and there is nothing here for the user to fix.
-                    note(getString(R.string.peer_is_self), false);
+                    note(getString(R.string.peer_is_self), Status.Why.NOTED);
                     Logger.i("not retrying " + target + " until the configuration changes");
                     refreshStatus();                     // ... and the sheet has to say so
                     return;
                 } catch (Exception e) {
-                    Logger.i(target + ": " + e);
-                    // The one branch that IS a fault: a timeout, a refusal, a name that will not
-                    // resolve. The message, not the class name — "Connection timed out" is what the
-                    // user can act on, "java.net.SocketTimeoutException" is not.
-                    note(e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName(), true);
+                    if (l != null && !l.isOpen()) {
+                        // We closed it: the screen went off, the network changed, the configuration
+                        // was reloaded, or the heartbeat found it dead. The read failing afterwards
+                        // is the consequence, not the cause — and calling it a fault put a red
+                        // "Socket closed" against every target every time the phone was locked.
+                        // Only the catch can tell these apart, because by the time the finally runs
+                        // the link has been closed either way.
+                        note(getString(R.string.peer_disconnected), Status.Why.WAITING);
+                    } else {
+                        Logger.i(target + ": " + e);
+                        // The one branch that IS a fault: a timeout, a refusal, a name that will not
+                        // resolve. The message, not the class name — "Connection timed out" is what
+                        // the user can act on, "java.net.SocketTimeoutException" is not.
+                        note(e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName(),
+                                Status.Why.FAULT);
+                        // And it is not merely asleep: a device that will not answer at all has a
+                        // better explanation than the last one it gave, and this is also what keeps a
+                        // peer switched off while idle from reading as *Idle* for the life of the
+                        // process.
+                        if (lastPeerId != null) idlePeers.remove(lastPeerId);
+                    }
                 } finally {
                     if (l != null) {
                         l.close();
@@ -1534,20 +1599,37 @@ public class SyncService extends Service {
                     // burst finished. Without a reason here the target shows in the sheet with a
                     // blank line and no account of the silence that follows. Not a fault: a clean
                     // close is the screen-off path working, and there is nothing to act on.
-                    if (lastError == null) note(getString(R.string.peer_disconnected), false);
+                    if (lastError == null) note(getString(R.string.peer_disconnected), Status.Why.WAITING);
                     refreshStatus();
                 }
                 if (!running || stop) return;
-                // Closed on purpose, from one end or the other — as a duplicate, most often. Either
-                // way redialling straight away would rebuild exactly the link that was discarded, so
-                // defer to whatever won instead, if it is still there: that turns an immediate
-                // redial into a suppression that lapses by itself when the winner closes.
-                if (l != null && (l.saidBye() || l.superseded())) {
-                    Link winner = l.peerId() == null ? null : byPeer.get(l.peerId());
-                    if (winner != null && winner.isOpen() && winner != l) {
-                        deferredTo = winner;
-                        note(getString(R.string.peer_same_as, winner.target), false);
-                    }
+                // Why this target is not connected, in the order the answers override each other.
+                //
+                // Another route won, first: it is the only one with somewhere better to point, and
+                // the only one that can lapse on its own when that route closes.
+                Link winner = l != null && (l.saidBye() || l.superseded()) && l.peerId() != null
+                        ? byPeer.get(l.peerId()) : null;
+                if (winner != null && winner.isOpen() && winner != l) {
+                    deferredTo = winner;
+                    note(getString(R.string.peer_same_as, winner.target), Status.Why.NOTED);
+                    backoff = backoffMax();
+                } else if (lastPeerId != null && idlePeers.contains(lastPeerId)) {
+                    // It said it was going to sleep. This device keeps listening and the peer dials
+                    // out the moment its screen comes on, so the long wait costs nothing that a
+                    // redial would buy. Asked of idlePeers rather than of this link, because the
+                    // goodbye may have arrived on an inbound one that this dialler never sees.
+                    //
+                    // The wait is long, not infinite, and that is deliberate: suppressing the dial
+                    // outright would be cheaper still, and would leave a peer that was switched off
+                    // while idle reading as *Idle* forever, since the only things that clear the
+                    // claim are a handshake and a failed dial. One connect per minute — and only
+                    // while this device's own screen is on, or the gate above stops it — buys a
+                    // state that corrects itself instead of one that needs a timeout to babysit it.
+                    note(getString(R.string.peer_idle), Status.Why.ASLEEP);
+                    backoff = backoffMax();
+                } else if (l != null && (l.saidBye() || l.superseded())) {
+                    // Closed on purpose, reason unknown or no longer relevant. Redialling straight
+                    // away would rebuild exactly the link that was just discarded.
                     backoff = backoffMax();
                 } else if (burst) {
                     // A burst ending is success, so no back-off ladder — but not *no delay*, and not
@@ -1634,6 +1716,8 @@ public class SyncService extends Service {
      */
     private Link register(Link l) {
         String id = l.peerId();                         // never null: the handshake refuses a peer with no id
+        // A peer that has just completed a handshake is awake, whatever it said last time it left.
+        idlePeers.remove(id);
         while (true) {
             Link other = byPeer.putIfAbsent(id, l);
             if (other == null || other == l) return null;

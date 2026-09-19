@@ -218,14 +218,27 @@ final class Link implements AutoCloseable {
 
     /** True once the peer has said goodbye: the link is closing on purpose, not failing. */
     boolean saidBye() {
+        return bye != null;
+    }
+
+    /**
+     * Why the peer said goodbye, or null if it did not.
+     *
+     * <p>Kept, where it used to be a bare flag, because the reason decides what the dialler does
+     * next: a duplicate means defer to the link that won, and an idle peer means wait for it to come
+     * back rather than dial into a device that has just gone to sleep. The peer took the trouble to
+     * say which; throwing that away and treating every goodbye alike is the version of this that
+     * wakes a sleeping phone once a minute.
+     */
+    @Nullable String byeReason() {
         return bye;
     }
 
-    void markBye() {
-        bye = true;
+    void markBye(String reason) {
+        bye = reason == null ? "" : reason;
     }
 
-    private volatile boolean bye;
+    private volatile String bye;
 
     /**
      * True once <em>this</em> end closed the link as a duplicate.
@@ -257,6 +270,12 @@ final class Link implements AutoCloseable {
         deliver();
         if (!owner.isScreenOn()) {
             burst();
+            // Say why before going. Every session that ends because *this* device is asleep ends
+            // here — the one the screen-off transition interrupted, and every later one a peer
+            // opens while we stay asleep — so this is the single place the fact can be told, and
+            // the second kind matters just as much: a peer that dials a sleeping device and is cut
+            // off without a word sees a reset, which reads as a fault and is not one.
+            bye(Connection.BYE_IDLE);
             return true;
         }
         while (alive()) {

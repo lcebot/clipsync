@@ -50,6 +50,16 @@ public final class Connection implements AutoCloseable {
      */
     public static final int T_BYE = 15;
     /**
+     * The {@code BYE} reason a device sends as it goes to sleep, and the one that does not mean
+     * "this link was redundant".
+     *
+     * <p>The two must not be confused, because they ask for opposite things: a duplicate tells the
+     * peer to defer to the link that won, while an idle peer has no winning link to defer to and
+     * wants to be left alone until it dials out again. It lives here, beside the frame type, because
+     * both ends compare against it and neither owns it.
+     */
+    public static final String BYE_IDLE = "idle";
+    /**
      * 2: HELLO is exchanged in both directions and carries the node id, type, persistence and
      * battery bucket (docs/p2p-plan.md §2). A clean break, by §9 — a version 1 peer is refused
      * rather than tolerated, because a peer that cannot name itself cannot be deduplicated or

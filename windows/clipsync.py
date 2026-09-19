@@ -86,6 +86,10 @@ from clipsync_node import declaration, node_id, node_name, short_id   # noqa: E4
 # scarce.  A close without one becomes a loop -- the far side sees only a disconnect, reconnects,
 # and rebuilds the link that was just discarded.  See docs/p2p-plan.md §5.
 T_BYE = 15
+# The reason a device sends as it goes to sleep, and the one BYE that does not mean "this link was
+# redundant".  A device that says it is idle will dial out again when its screen comes on, so the
+# right answer is to stop dialling it, not to look for another route to it.  (docs/p2p-plan.md §5)
+BYE_IDLE = "idle"
 # 2: HELLO is exchanged in both directions and carries the node id, type, persistence and battery
 # bucket (docs/p2p-plan.md §2). A clean break, by §9 — a version 1 peer is refused rather than
 # tolerated, because a peer that cannot name itself cannot be deduplicated or recognised as self.
@@ -1547,7 +1551,16 @@ def dial_thread(peer: str, cfg: Cfg, state: SyncState):
                 # this an outbound link delivers nothing until the next local copy, which reads as a
                 # link that works in one direction only.
                 state.catch_up(ch, int(reply.get("last_seq", 0)))
-                if serve(ch, cfg, state) is not None:
+                reason = serve(ch, cfg, state)
+                if reason == BYE_IDLE:
+                    # It has gone to sleep on purpose, and it dials out the moment its screen comes
+                    # on — this PC is always listening, so waiting costs nothing and a redial costs a
+                    # wake-up on a phone that has just settled.  Not the deferral path either: there
+                    # is no winning link to wait on, so that loop would find nothing holding the node
+                    # and dial again at its poll interval.
+                    log.info("%s is idle; leaving it alone until it comes back", peer)
+                    backoff = DIAL_RETRY_MAX
+                elif reason is not None:
                     # It closed us deliberately — a duplicate link, most often, because it reached
                     # us by another route as well. Redialling would rebuild exactly what it just
                     # discarded.
