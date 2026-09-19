@@ -134,7 +134,7 @@ $pairTo   = $port + 8
 #   * The service port is the only one that is meant to be reachable from the internet: README's
 #     "For Internet use" row is a DDNS name and an inbound hole in the router's IPv6 firewall, and a
 #     rule scoped to Private would close that from the inside on every coffee-shop Wi-Fi. Any.
-#   * The pairing range carries a window guarded by eight digits and a two-minute clock, and it is
+#   * The pairing range carries a window guarded by nine digits and a two-minute clock, and it is
 #     only ever used with both devices in the same room. On a public network Any means every other
 #     guest can reach it. Private,Domain.
 #   * mDNS is link-local by definition: a 5353 rule active on a public profile advertises this PC's

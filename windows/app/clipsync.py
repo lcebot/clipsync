@@ -3097,7 +3097,7 @@ def mdns_thread(cfg: Cfg):
     # filter could only be applied to peers running a build that came after the decision -- which is
     # exactly backwards, since the peers worth filtering are the old ones.  The same key on
     # _clipsync-pair._tcp already earns its keep (clipsync_pair.TXT_VERSION), where the cost of
-    # finding out at HELLO instead is a person who has typed an eight-digit code for nothing.
+    # finding out at HELLO instead is a person who has typed a nine-digit code for nothing.
     props = {"v": str(PROTOCOL_VERSION)}
 
     zc = None

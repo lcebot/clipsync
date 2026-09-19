@@ -80,7 +80,7 @@ public final class Connection implements AutoCloseable {
     public static final int T_CHUNK = 11, T_PULL = 12, T_END = 13, T_ABORT = 14;
 
     // Pairing: getting the PSK onto a second device without typing 64 hex characters into it. The
-    // channel is an ordinary one keyed by an eight-digit code instead of the PSK; see Pairing.
+    // channel is an ordinary one keyed by a nine-digit code instead of the PSK; see Pairing.
     /**
      * {@code PAIR_ASK} joiner → provider, "give me the key", and {@code PAIR_KEY} back with it.
      *

@@ -12,8 +12,15 @@ import androidx.annotation.Keep;
  *
  * <p>One device generates the key and advertises {@code _clipsync-pair._tcp} while a window is open;
  * another finds it, connects, and is given the key. The transfer cannot be protected by the PSK —
- * the PSK is what is being transferred — so <b>an eight-digit code is the whole of the
+ * the PSK is what is being transferred — so <b>a nine-digit code is the whole of the
  * authentication</b>: shown on the device that holds the key, typed on the device that wants it.
+ *
+ * <p><b>The code is nine digits, and nothing else.</b> It is <em>shown</em> in groups of three —
+ * "123 456 789" — because that is how a person reads a long number off a screen and says it out
+ * loud. The spaces are for the eye only: {@link #grouped} puts them in at the last moment, for
+ * display, and nothing else in this project ever sees them. What {@link #channelKey} stretches, and
+ * what the two ends have to agree on bit for bit, is the nine digits themselves. Feeding a grouped
+ * string to the derivation derives a different key and reports it to the user as a wrong code.
  *
  * <p>This class is the part with no I/O in it: the code, the key the code turns into, and the limits
  * on how long and how often it may be tried.
@@ -25,12 +32,12 @@ import androidx.annotation.Keep;
  * whatever rate its hardware allows. With a plain HKDF that is seconds of CPU for the key to the
  * user's clipboard, permanently. The window being short does not help: the recording outlives it.
  *
- * <p>Two knobs answer that, and they multiply. The code is <b>eight</b> digits rather than six,
- * which is the hundredfold part: a million codes is half a minute of offline work on a laptop, a
- * hundred million is not. And the derivation is deliberately slow, which is the constant factor on
- * top. Eight digits is where the cost to the user stops being free — it is two more characters to
- * read across a room, and it is the length a person can still hold in their head in one glance — so
- * it is not nine or twelve.
+ * <p>Two knobs answer that, and they multiply. The code is <b>nine</b> digits rather than six,
+ * which is the thousandfold part: a million codes is half a minute of offline work on a laptop, a
+ * billion is not. And the derivation is deliberately slow, which is the constant factor on top.
+ * Nine is where it stops: the three characters over six are the ones {@link #grouped} pays for by
+ * printing them as three groups of three, which is a shape a person reads in one glance and says
+ * aloud in three breaths — twelve would be a fourth group and a telephone number.
  *
  * <p>So the code goes through <b>scrypt</b> first. It does not remove the attack — nothing short of a
  * PAKE does, because a low-entropy secret is a low-entropy secret — but it moves the cost from
@@ -41,7 +48,7 @@ import androidx.annotation.Keep;
  *
  * <h2>What "expensive" is worth, in numbers</h2>
  *
- * The unit to measure in is: <em>how long does one consumer GPU need to walk the whole 10⁸ code
+ * The unit to measure in is: <em>how long does one consumer GPU need to walk the whole 10⁹ code
  * space?</em> Both figures below come from the same published RTX 4090 run of hashcat v6.2.6
  * (Chick3nman's benchmark gist), so they are comparable to each other rather than to a vendor claim.
  *
@@ -51,31 +58,32 @@ import androidx.annotation.Keep;
  *       PBKDF2-HMAC-SHA256 at 259 999 rounds and gets 30 676 H/s; PBKDF2 is exactly linear in the
  *       round count, so 600 000 rounds is ≈13 300 H/s. (Mode 10900 at 999 rounds, 8 865.7 kH/s,
  *       scales to ≈14 800 — the two agree within 10%, which is the cross-check that the scaling is
- *       honest.) 10⁸ ÷ 13 300 ≈ <b>2.1 hours</b> to exhaust, ~1 hour to expect a hit.
+ *       honest.) 10⁹ ÷ 13 300 ≈ <b>21 hours</b> to exhaust, ~10 hours to expect a hit.
  *   <li><b>What is here now — scrypt, N=2¹⁴, r=8, p=10.</b> Hashcat mode 8900 measures scrypt at exactly
  *       N=16384, r=8, p=1 and gets 7 126 H/s (modes 22700 and 27700 are the same parameters and
  *       report 7 156 and 7 107 — three independent confirmations of the same number). The p loop is
- *       p sequential ROMix calls over one buffer, so p=10 divides that by 10: ≈713 H/s. 10⁸ ÷ 713 ≈
- *       <b>1.6 days</b> to exhaust, ~0.8 days to expect a hit.
+ *       p sequential ROMix calls over one buffer, so p=10 divides that by 10: ≈713 H/s. 10⁹ ÷ 713 ≈
+ *       <b>16 days</b> to exhaust, ~8 days to expect a hit.
  * </ul>
  *
  * <p>Four reference points, so the number above has a scale to sit on — all of them one RTX 4090
- * walking the whole code space:
+ * walking the whole code space. <b>Three of them are history, kept for the shape of the curve</b>,
+ * not descriptions of what this build does:
  *
  * <ul>
  *   <li>six digits, PBKDF2-HMAC-SHA256 at 200 000 rounds (where this started): <b>~30 seconds</b>;
- *   <li>eight digits, scrypt p=8: <b>1.3 days</b>;
- *   <li>eight digits, scrypt p=10 (here): <b>1.6 days</b>;
- *   <li>nine digits, scrypt p=8 (what this was before the code shortened): <b>13 days</b>.
+ *   <li>nine digits, scrypt p=8 (the value before p was raised): <b>13 days</b>;
+ *   <li>eight digits, scrypt p=10 (the one revision the code was shortened for): <b>1.6 days</b>;
+ *   <li>nine digits, scrypt p=10 (<b>here</b>): <b>16 days</b>.
  * </ul>
  *
- * <p>Dropping the ninth digit is therefore a <b>10× loss</b>, of which p buys back 1.25× — p is
- * linear in attacker cost and the phone's time budget had that much left in it — so the net is
- * <b>8× cheaper to attack than one revision ago</b>. That trade was made deliberately — a digit is a thing the user reads and types, every pairing, forever —
- * and the honest way to state it is that this is now <em>a day and a half</em> of one card, not two
- * weeks. It is still several thousand times what it started at.
+ * <p>The ninth digit is therefore back, and it is a <b>10× gain</b> over the revision that dropped
+ * it: the digit was traded away for two fewer glyphs to read across a room, and grouping them
+ * three-and-three ({@link #grouped}) buys that legibility back without paying the factor of ten.
+ * p is unchanged at 10 — it was never the thing that moved — so the honest way to state it is
+ * <em>a fortnight</em> of one card rather than a day and a half.
  *
- * <p>So roughly <b>5 000× harder to brute-force than the six-digit PBKDF2 it started as, while the
+ * <p>So roughly <b>50 000× harder to brute-force than the six-digit PBKDF2 it started as, while the
  * phone spends less time than it used to</b>. The multiplier is not the interesting part;
  * <em>where</em> it comes from is. PBKDF2's state
  * is a few dozen bytes, so a GPU runs as many instances as it has cores. scrypt at these parameters
@@ -85,9 +93,9 @@ import androidx.annotation.Keep;
  * with r=1 (2 MiB) and runs at 83 890 H/s — <b>8× the memory costs the GPU 11.8×</b>, superlinearly,
  * which is the memory-hardness doing something PBKDF2 cannot do at any round count.
  *
- * <p>None of which makes it safe against somebody who wants it, and at eight digits that is truer
- * than it was: a day and a half on one card is a couple of hours on sixteen, and an afternoon of
- * rented cloud time is not a deterrent to anyone who has decided to spend it. What it still does is
+ * <p>None of which makes it safe against somebody who wants it. A fortnight on one card is a day on
+ * sixteen, and a day of rented cloud time is not a deterrent to anyone who has decided to spend it.
+ * The ninth digit moved that line by 10× and did not move which side of it anybody is on. What it still does is
  * make recording a pairing <em>on the off-chance</em> not worth the electricity, which is the threat
  * that is actually there. Against an attacker who is specifically after this clipboard, the answer
  * was never the code length — it is a PAKE, and that is a different project.
@@ -127,15 +135,20 @@ final class Pairing {
     static final int MAX_TRIES = 5;
 
     /**
-     * How many digits {@link #newCode()} produces, and how many the field accepts.
+     * How many digits {@link #newCode()} produces, and how many the field accepts once the spaces
+     * are taken back out.
      *
-     * <p>Eight, down from nine: the ninth digit cost every user two extra glyphs to read across a
-     * room and type on a phone, every pairing, and bought a factor of ten that the class comment
-     * now prices honestly (13 days on one card versus 1.6). <b>It is a deliberate 8× reduction in
-     * offline cost</b>, not an oversight. {@link #SCRYPT_P} spends what the time budget still had
-     * left, which is 1.25× of the ten.
+     * <p>Nine, restored from the eight one revision spent. The argument for dropping it was that a
+     * ninth glyph is a real cost to a user reading a code across a room; the answer to that turned
+     * out not to be a shorter code but a better-shaped one, so nine digits are now <em>shown</em>
+     * as three groups of three ({@link #grouped}) and the factor of ten is kept. 16 days on one
+     * card rather than 1.6 — see the class comment.
+     *
+     * <p><b>This counts digits, never the displayed spaces.</b> Nine is the length of what is
+     * generated, what is compared, and what {@link #channelKey} stretches; the field may hold
+     * eleven characters, and what it holds is stripped before it is measured against this.
      */
-    static final int CODE_DIGITS = 8;
+    static final int CODE_DIGITS = 9;
 
     /**
      * scrypt's cost parameter N, and the anchor of the whole choice below.
@@ -242,10 +255,10 @@ final class Pairing {
      * the project cares about, with the screen on and the CPU not already warm from a build.
      *
      * <p>If it turns out to be <b>slower</b> than the guess — a real measurement over ~1.2 s — drop
-     * to <b>p=8</b>, which is the value this carried at nine digits and is known to be tolerable in
-     * the same sense (i.e. not measured either, but it shipped). Below 8 is not worth doing: at
-     * eight digits it is already 1.3 GPU-days, and the answer to wanting more than that is a PAKE,
-     * not a smaller p.
+     * to <b>p=8</b>, which is the value this carried for the revisions before it and is known to be
+     * tolerable in the same sense (i.e. not measured either, but it shipped). Below 8 is not worth
+     * doing: at {@link #CODE_DIGITS} digits, p=8 is already 13 GPU-days, and the answer to wanting
+     * more than that is a PAKE, not a smaller p.
      *
      * <p>Whatever it becomes, {@code clipsync_pair.SCRYPT_P} moves with it in the same commit.
      */
@@ -330,19 +343,70 @@ final class Pairing {
     private Pairing() {}
 
     /**
-     * A fresh eight-digit code.
+     * A fresh nine-digit code, ungrouped. {@link #grouped} is what puts it on a screen.
      *
      * <p>{@code nextInt(bound)} rather than any arithmetic of our own: it rejection-samples
      * internally, so the distribution is flat without a loop here to get wrong. (It replaced one:
      * {@code Math.abs(nextInt())} is negative for {@code Integer.MIN_VALUE}, the one input where
      * abs has no answer, and the guard for that was a line nobody could check by reading.)
      *
-     * <p>Formatted with leading zeros, because "00742123" is eight digits and 742123 is not — a
-     * code the user reads as six digits is a code they will type as six.
+     * <p>{@code 1_000_000_000} still fits an {@code int} — {@link Integer#MAX_VALUE} is 2 147 483
+     * 647 — so the bound is exact and {@code nextInt} stays unbiased over every one of the 10⁹
+     * codes. A tenth digit would not fit and would need {@code nextLong(bound)} or two draws.
+     *
+     * <p>Formatted with leading zeros, because "007421234" is nine digits and 7421234 is not — a
+     * code the user reads as seven digits is a code they will type as seven.
      */
     static String newCode() {
         SecureRandom rng = Crypto.RNG;
-        return String.format(java.util.Locale.US, "%08d", rng.nextInt(100_000_000));
+        return String.format(java.util.Locale.US, "%09d", rng.nextInt(1_000_000_000));
+    }
+
+    /**
+     * The code as a person should see it: {@code "123456789"} → {@code "123 456 789"}.
+     *
+     * <p><b>Display only.</b> The spaces exist because a nine-digit run is read back wrong and said
+     * out loud worse, and for no other reason. Nothing derived from this string may reach
+     * {@link #channelKey}, the wire, or a length check — those all take the nine digits. The one
+     * safe direction is this one: digits in, decoration out, and the decoration is thrown away
+     * again by {@link #digitsOnly} on the side that types it.
+     *
+     * <p>A plain U+0020 and not a thin space: this is rendered in {@code monospace}, where every
+     * glyph including the space has the same advance, so the width is predictable and computable —
+     * which is what the budget in {@code sheet_pair.xml} is computed from. A U+2009 would either
+     * measure one full advance anyway (if the font has it) or fall back to another font and measure
+     * something nobody here can predict.
+     *
+     * <p>Anything that is not exactly {@link #CODE_DIGITS} digits is returned untouched, so a
+     * placeholder or an error string passed here by mistake is not silently mangled.
+     */
+    static String grouped(String code) {
+        if (code == null || code.length() != CODE_DIGITS) return code;
+        StringBuilder out = new StringBuilder(CODE_DIGITS + 2);
+        for (int i = 0; i < CODE_DIGITS; i++) {
+            if (i > 0 && i % 3 == 0) out.append(' ');
+            out.append(code.charAt(i));
+        }
+        return out.toString();
+    }
+
+    /**
+     * Everything that is not a digit, removed — the inverse of {@link #grouped}, and the gate the
+     * typed code goes through before anything else looks at it.
+     *
+     * <p>Because the code is <em>shown</em> grouped, it will be copied down grouped and typed
+     * grouped, and a user who types the spaces has not made a mistake. This is also why it strips
+     * rather than validating: what is left is then measured against {@link #CODE_DIGITS}, so a
+     * grouped code and a bare one are the same nine digits and anything else is still rejected.
+     */
+    static String digitsOnly(String typed) {
+        if (typed == null) return "";
+        StringBuilder out = new StringBuilder(typed.length());
+        for (int i = 0; i < typed.length(); i++) {
+            char c = typed.charAt(i);
+            if (c >= '0' && c <= '9') out.append(c);
+        }
+        return out.toString();
     }
 
     /** A fresh salt for one pairing window, published in the advertisement. */
@@ -360,9 +424,12 @@ final class Pairing {
      * Slow on purpose — of the order of a second, and 16 MiB of it, see {@link #SCRYPT_N}.
      * <b>Never on the main thread</b>, and never without something on screen saying so: a second on
      * a mid-range phone is longer than that on a slow one, and a frozen sheet right after the user
-     * has typed eight digits reads as a crash.
+     * has typed nine digits reads as a crash.
      *
-     * @param code the digits as the user sees them, leading zeros included
+     * @param code <b>the nine digits and nothing else</b>, leading zeros included and no grouping
+     *             spaces — {@link #digitsOnly} is what guarantees that of anything a user typed.
+     *             A grouped string derives a different key, silently, and is reported as a wrong
+     *             code
      * @param salt from the advertisement, so no table covers two pairings
      */
     static byte[] channelKey(String code, byte[] salt) {
@@ -385,7 +452,7 @@ final class Pairing {
             throw new IllegalStateException("scrypt unavailable", e);
         } finally {
             // The code, out of the heap as soon as it has been used. ScryptSpec holds this exact
-            // array rather than a copy, so zeroing it here is enough — and an eight-digit code is the
+            // array rather than a copy, so zeroing it here is enough — and a nine-digit code is the
             // whole of the authentication for the PSK itself, so it is worth the line. The caller's
             // own String cannot be cleared, which is exactly why the copy that can be, is.
             java.util.Arrays.fill(password, '\0');

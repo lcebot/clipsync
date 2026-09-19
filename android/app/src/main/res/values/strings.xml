@@ -165,13 +165,17 @@
     <!-- Says where to type it, because the code is useless on the device displaying it and that is
          not obvious the first time. Plural, and "each": the window does not close on the first one. -->
     <string name="pair_offer_body">On each new device, choose “I have another ClipSync device” and enter this code</string>
-    <!-- Eight DIGITS, not eight dashes, and greyed rather than in the code's own colour. Digits
+    <!-- Nine DIGITS, not nine dashes, and greyed rather than in the code's own colour. Digits
          because a dash and a digit do not draw to the same height, so a row of dashes still left the
          line to grow when the real code replaced it — the one thing the placeholder exists to
-         prevent. Grey because eight plausible digits in the code's colour are eight digits somebody
-         will try to type. Must stay exactly as long as a real code (Pairing.CODE_DIGITS), or the
-         sheet changes width the moment the real one arrives. -->
-    <string name="pair_code_placeholder">11451419</string>
+         prevent. Grey because nine plausible digits in the code's colour are nine digits somebody
+         will try to type.
+
+         Grouped three-and-three, like a real code (Pairing.grouped), and that is not decoration
+         here: it must be exactly as WIDE as a real code or the sheet changes width the moment the
+         real one arrives, and eleven characters against nine is a fifth of the line. Same digit
+         count (Pairing.CODE_DIGITS), same two spaces, same places. -->
+    <string name="pair_code_placeholder">114 514 191</string>
     <!-- On screen for longer than "Starting" suggests: opening a window derives the channel key
          first (Pairing.SCRYPT_N), then binds a socket and registers an mDNS advertisement. It is
          deliberately not more specific — unlike the joining side, nobody has just typed anything,
@@ -204,10 +208,14 @@
     <string name="pair_search_again">Look again</string>
     <string name="pair_pick">Found these. Pick the one showing a code.</string>
     <string name="pair_enter_code">Enter the code shown on %1$s</string>
-    <string name="pair_code_hint">Eight-digit code</string>
-    <string name="pair_code_length">Eight digits</string>
+    <!-- "Nine-digit code", and it counts digits rather than characters on purpose: the other device
+         shows "123 456 789", the field takes it either way (sheet_pair.xml says how), and telling
+         the user the length in characters would make the spaces sound like part of the code. They
+         are not — they never leave the screen they are drawn on. -->
+    <string name="pair_code_hint">Nine-digit code</string>
+    <string name="pair_code_length">Nine digits</string>
     <string name="pair_connect">Connect</string>
-    <!-- Two labels for one button press, and the split is not cosmetic. Turning the eight digits
+    <!-- Two labels for one button press, and the split is not cosmetic. Turning the nine digits
          into a channel key is a deliberately slow scrypt (Pairing.SCRYPT_N), and no socket is
          opened until it is done — so "Connecting" was describing something that had not started, at
          the exact moment the user is watching to see whether their typing did anything. This one

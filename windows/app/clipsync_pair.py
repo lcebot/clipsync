@@ -2,7 +2,7 @@
 Pairing on the PC: taking the PSK from a device that has it, and giving it to one that does not.
 
 The flow: the provider opens a window, advertises `_clipsync-pair._tcp` with a random salt in its
-TXT record, and shows an eight-digit code.  The joiner browses, picks a device, and types the code.
+TXT record, and shows a nine-digit code.  The joiner browses, picks a device, and types the code.
 Both derive the same channel key from the code and the salt, and the joiner then speaks the ordinary
 protocol on an ordinary SecureChannel -- HELLO with `role: pair`, then PAIR_ASK -- and gets PAIR_KEY
 with the PSK and the service port.  Nothing new is invented for it; only the key differs.
@@ -39,7 +39,7 @@ TXT_SALT = b"s"
 # The advertised protocol version.  Both providers have always published it and nobody read it,
 # which made it look like a mechanism when it was decoration.  `find` reads it now, and the reason
 # is specific to *pairing*: on an ordinary link a version mismatch costs a connection nobody was
-# watching, but here it costs the user reading eight digits off another screen, typing them, and
+# watching, but here it costs the user reading nine digits off another screen, typing them, and
 # waiting out a key derivation -- to be told "wrong code, or the window has closed" about a code
 # that was right.  Skipping the device before it is ever offered is the only place that failure can
 # be turned into something true.
@@ -77,10 +77,16 @@ DK_LEN = 32
 # while working fine on Android: a pairing broken on one end only, by a default nobody passed.
 # 64 MiB is four times what is needed, so no default on either side is load-bearing.
 SCRYPT_MAXMEM = 64 * 1024 * 1024
-# Eight, down from nine, and the cost of that digit is written out in Pairing.CODE_DIGITS: it is a
-# deliberate 8x reduction in offline attack cost, traded for two fewer glyphs the user reads across
-# a room and types.  SCRYPT_P buys back 1.25 of the 10.
-CODE_DIGITS = 8
+# Nine, restored from the eight one revision spent, and the reasoning is written out in
+# Pairing.CODE_DIGITS: the ninth digit is 10x the offline attack cost, and the legibility it used to
+# cost is bought back by SHOWING the code in groups of three instead of by shortening it.
+#
+# It counts DIGITS.  `format_code` below adds two spaces for display, and they are display and
+# nothing else: what is generated here, what travels, what is compared and what `channel_key`
+# stretches is always the nine digits.  A grouped string reaching the KDF derives a different key
+# and is reported to the user as a wrong code, which is why `join` refuses anything that is not
+# exactly nine ASCII digits rather than stripping for the caller.
+CODE_DIGITS = 9
 CODE_SPACE = 10 ** CODE_DIGITS
 # Two short JSON frames is all a pairing channel ever carries, so this is also a bound on what an
 # unauthenticated peer can make this end allocate.
@@ -122,7 +128,7 @@ def channel_key(code: str, salt: bytes) -> bytes:
     """
     The code, stretched.
 
-    Eight digits is 10**8 possibilities: the provider's five-try window bounds *online* guessing,
+    Nine digits is 10**9 possibilities: the provider's five-try window bounds *online* guessing,
     and nothing bounds an offline attack on a recorded handshake except the cost of trying a code.
     scrypt makes that cost real.  It does not make it impossible -- a low-entropy secret stays
     low-entropy, and a PAKE is the only real answer -- but it prices the attack out of being done on
@@ -131,18 +137,21 @@ def channel_key(code: str, salt: bytes) -> bytes:
     **The numbers, one RTX 4090 walking the whole code space**, all from a single published hashcat
     v6.2.6 run so they are comparable to each other.  scrypt at exactly our N and r with p=1 is
     hashcat mode 8900 and measures 7 126 H/s; p is that many sequential ROMix passes, so p=10 is
-    713 H/s and p=8 is 891 H/s:
+    713 H/s and p=8 is 891 H/s.  The first three lines are HISTORY, kept for the shape of the curve
+    and not descriptions of this build:
 
     * six digits, PBKDF2-HMAC-SHA256 at 200 000 rounds (where this started): **~30 seconds**
-    * eight digits, scrypt p=8: **1.3 days**
-    * eight digits, scrypt p=10 (here): **1.6 days**
-    * nine digits, scrypt p=8 (what this was one revision ago): **13 days**
+    * nine digits, scrypt p=8 (before p was raised): **13 days**
+    * eight digits, scrypt p=10 (the one revision the code was shortened for): **1.6 days**
+    * nine digits, scrypt p=10 (**here**): **16 days** (expected hit ~8 days)
 
-    So shortening the code to eight digits cost 8x and p bought 1.25x of it back; the honest
-    summary is a day and a half of one card, not two weeks.  The full argument, including why the
-    memory footprint rather than the work factor is what does the work, and why p stopped at 10, is
-    in the Pairing class comment on the Android side -- it is written out once, there, and this
-    end's job is to agree with it.
+    So the ninth digit is back and it is 10x on the revision that dropped it; p is unchanged at 10.
+    The digit had been traded for two fewer glyphs to read across a room, and grouping the code
+    three-and-three (`format_code`) buys that legibility back without paying the factor of ten.  The
+    honest summary is a fortnight of one card rather than a day and a half.  The full argument,
+    including why the memory footprint rather than the work factor is what does the work, and why p
+    stopped at 10, is in the Pairing class comment on the Android side -- it is written out once,
+    there, and this end's job is to agree with it.
 
     **The change also ended an asymmetry that used to be ten to one.**  PBKDF2 was a few hundred
     milliseconds here (`hashlib.pbkdf2_hmac` is C on top of OpenSSL) and 1.5-4 seconds on Android,
@@ -165,6 +174,26 @@ def channel_key(code: str, salt: bytes) -> bytes:
     # two ends agree, and the reason `join` below refuses a code that is not ASCII digits.
     return hashlib.scrypt(code.encode("ascii"), salt=salt, n=SCRYPT_N, r=SCRYPT_R, p=SCRYPT_P,
                           maxmem=SCRYPT_MAXMEM, dklen=DK_LEN)
+
+
+def format_code(code: str) -> str:
+    """
+    The code as a person should see it: "123456789" -> "123 456 789".
+
+    **Display only, and the distinction is load-bearing.**  A nine-digit run is read back wrong and
+    read *aloud* worse, and somebody copying a code off one device into another does both -- so the
+    two spaces go in here, at the last moment before a label, and nowhere else.  What is generated,
+    typed, compared and stretched by `channel_key` is always the nine digits (CODE_DIGITS).
+    Feeding the result of this function to a KDF derives a different key on one end only, and the
+    user is told their code was wrong.
+
+    A plain U+0020 rather than a thin space: both ends draw the code in a monospace font, where
+    every character has the same advance, so the width of the result is computable -- and the
+    Android sheet does compute it, against a layout budget eleven characters only just fit (see
+    pair_code in sheet_pair.xml).  U+2009 would measure a full advance anyway where the font has it
+    and something unpredictable where it does not.
+    """
+    return " ".join(code[i:i + 3] for i in range(0, len(code), 3))
 
 
 def find(timeout: float = 4.0) -> list:
@@ -254,6 +283,12 @@ def join(addrs, salt: bytes, code: str, device: str) -> dict:
     # right, and finding that out from the provider would spend one of its five attempts on a typo.
     # isascii() as well as isdigit(), because isdigit() is true of ٤ and ４ and channel_key encodes
     # the code as ASCII.
+    #
+    # It does NOT strip the display grouping, deliberately, although the code is shown as
+    # "123 456 789" and will be typed that way.  Dropping the spaces belongs to the window that
+    # collected the string, one step up; doing it here as well would make this function accept the
+    # display form, and "the display form is acceptable input" is exactly the belief that ends with
+    # somebody handing a spaced string to channel_key.  Nine ASCII digits or nothing.
     if len(code) != CODE_DIGITS or not (code.isascii() and code.isdigit()):
         raise ValueError("the code is %d digits" % CODE_DIGITS)
     key = channel_key(code, salt)
@@ -383,11 +418,13 @@ class Provider:
         self._closed = False
         self._failures = 0
 
-        # Rejection-sampled rather than reduced modulo 10**8, matching Pairing.java: 2**32 is not a
-        # multiple of 1e8, so the plain modulo favours the low values.  The bias is tiny and free to
+        # Rejection-sampled rather than reduced modulo 10**9, matching Pairing.java: 2**32 is not a
+        # multiple of 1e9, so the plain modulo favours the low values.  The bias is tiny and free to
         # avoid, and impossible to explain away afterwards.  Leading zeros kept, because a code the
-        # user reads as eight digits is a code they will type as eight.  (Four bytes are ample:
-        # 10**8 < 2**32 by a factor of 43, so the rejection loop almost never takes a second turn.)
+        # user reads as nine digits is a code they will type as nine.  (Four bytes are still enough,
+        # with less room than there was: 10**9 < 2**32 by a factor of 4.29, so the limit is 4e9 and
+        # the loop takes a second turn about 7% of the time -- a few extra reads of os.urandom, once
+        # per pairing window.  A tenth digit would not fit in four bytes at all.)
         limit = (1 << 32) - ((1 << 32) % CODE_SPACE)
         while True:
             n = int.from_bytes(os.urandom(4), "big")
@@ -563,14 +600,26 @@ class Provider:
                 pass
 
     def _shut(self):
-        try:
-            self._zc.unregister_service(self._info)
-        except Exception:
-            pass
-        try:
-            self._zc.close()
-        except Exception:
-            pass
+        """Take the window down.  Idempotent, and that is the whole of the fix below.
+
+        The window can end three ways -- the clock, MAX_TRIES, and close() from the UI -- and the
+        first two race the third, so this used to run twice.  It also used to call
+        `unregister_service(self._info)` before `close()`, which was redundant: Zeroconf.close()
+        unregisters everything that Zeroconf registered, goodbye packets and all.
+
+        Redundant *and* noisy.  `unregister_service` schedules `Zeroconf.async_unregister_service`
+        onto Zeroconf's event loop and waits for it; on the second call that loop is already gone,
+        so it raised with the coroutine never awaited, and the bare `except: pass` here swallowed
+        the exception -- leaving Python to print "coroutine 'Zeroconf.async_unregister_service' was
+        never awaited" from a line number that pointed at the `pass` rather than at the cause.
+        Taking the Zeroconf out of the field first means the second caller finds nothing to do.
+        """
+        zc, self._zc = self._zc, None
+        if zc is not None:
+            try:
+                zc.close()
+            except Exception:       # noqa: BLE001 - teardown must not take the window with it
+                pass
         try:
             self._sock.close()
         except OSError:

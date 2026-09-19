@@ -66,7 +66,7 @@ public final class Mdns {
      *
      * <p>Pairing does the reverse: {@link PairProvider} sends {@code v} and {@link PairJoiner} (with
      * {@code clipsync_pair.find}) checks it, because there the wasted connection costs a person
-     * copying eight digits and waiting for a key, only to be told the code was wrong when it
+     * copying nine digits and waiting for a key, only to be told the code was wrong when it
      * was not. Same field, opposite answer, because the thing being spent is different.
      *
      * <p>The PC's {@code v} on this type is left alone: removing it is a change to a file this side

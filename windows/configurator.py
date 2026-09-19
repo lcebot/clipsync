@@ -958,13 +958,23 @@ class App:
         ttk.Label(win, wraplength=380, text="On each new device choose “I have another ClipSync "
                                            "device”, pick this PC, and enter this code.").grid(
             row=0, column=0, sticky="w", padx=PAD, pady=(PAD, 0))
-        # Big and monospaced: it is read across a room and typed on a phone in the other hand, and
-        # eight digits that run together are eight digits typed wrong.  Greyed DIGITS to start, not
-        # dashes: the same length in the same font, so the window does not resize when the real code
-        # arrives -- the key derivation is a deliberately slow scrypt and cannot have finished by now --
-        # and digits because a dash and a digit do not draw to the same height.
-        code_label = ttk.Label(win, text="1" * _code_digits(), font=("Consolas", 28),
-                               foreground="#79747e")
+        # Big, monospaced and grouped three-and-three: it is read across a room and typed on a phone
+        # in the other hand, and nine digits that run together are nine digits typed wrong.  The two
+        # spaces are put in by clipsync_pair.format_code and go no further than this label -- what
+        # the provider derived its channel key from, and what the phone must end up with, is the
+        # nine digits.
+        #
+        # Greyed DIGITS to start, not dashes: the same length in the same font, so the window does
+        # not resize when the real code arrives -- the key derivation is a deliberately slow scrypt
+        # and cannot have finished by now -- and digits because a dash and a digit do not draw to
+        # the same height.  Grouped here too, for the same reason the count matches: eleven
+        # characters against nine is a fifth of the line.
+        # The same placeholder digits as the Android sheet (strings.xml, pair_code_placeholder), so
+        # that a screenshot of either end is recognisable as the same state rather than looking like
+        # two different bugs.  Sliced to CODE_DIGITS rather than written out, so it stays the right
+        # length if that constant ever moves again -- which it has, three times.
+        code_label = ttk.Label(win, text=clipsync_pair.format_code(PLACEHOLDER_CODE[:_code_digits()]),
+                               font=("Consolas", 28), foreground="#79747e")
         code_label.grid(row=1, column=0, padx=PAD, pady=(PAD, 0))
         status = ttk.Label(win, text="Starting…", foreground="#49454f")
         status.grid(row=2, column=0, sticky="w", padx=PAD, pady=(0, PAD))
@@ -1086,7 +1096,9 @@ class App:
             finish("Could not open a pairing window: %s" % e)
             return
         state["provider"] = p
-        code_label.config(text=p.code, foreground="#1d192b")   # real now, and no longer greyed
+        # Real now, and no longer greyed.  format_code and not p.code: p.code is the nine digits the
+        # channel key was derived from, and the spaces are added here, for this label, only.
+        code_label.config(text=clipsync_pair.format_code(p.code), foreground="#1d192b")
 
         def tick():
             left = max(0.0, p.closes_at - time.monotonic())
@@ -1162,8 +1174,14 @@ class App:
 
         The length comes from clipsync_pair rather than being written out here, because it is a
         protocol constant shared with Pairing.java: a window that asks for eight digits while the
-        provider generates eight is a pairing that cannot succeed and says "wrong code" about it.
-        (That is not hypothetical — the count has been six, then nine, then eight.)
+        provider generates nine is a pairing that cannot succeed and says "wrong code" about it.
+        (That is not hypothetical — the count has been six, then nine, then eight, and is nine
+        again.)
+
+        The count is of DIGITS.  The other device shows the code grouped — "123 456 789" — so what
+        gets typed in here usually has two spaces in it, and `ok` takes every space back out before
+        it counts or returns anything.  Nothing downstream of this window ever sees the grouping:
+        clipsync_pair.join refuses a code that is not exactly nine ASCII digits, on purpose.
         """
         digits = _code_digits()
         win = tk.Toplevel(self.root)
@@ -1174,16 +1192,26 @@ class App:
                   text="Enter the %d-digit code shown on %s." % (digits, name)).grid(
             row=0, column=0, columnspan=2, sticky="w", padx=PAD, pady=(PAD, 0))
         var = tk.StringVar()
-        entry = ttk.Entry(win, textvariable=var, width=digits + 4, font=("Consolas", 16))
+        # Wide enough for the grouped form the user is looking at (digits + 2 spaces) and then some,
+        # not for the bare digits: a field that visibly runs out halfway through reads as a field
+        # that is refusing the thing being typed into it.
+        entry = ttk.Entry(win, textvariable=var, width=digits + 6, font=("Consolas", 16))
         entry.grid(row=1, column=0, columnspan=2, sticky="w", padx=PAD, pady=PAD)
         entry.focus_set()
         note = ttk.Label(win, foreground="#b3261e", text="")
         note.grid(row=2, column=0, columnspan=2, sticky="w", padx=PAD)
 
         def ok():
-            # Spaces dropped rather than refused: eight digits is long enough that people group them
-            # when they read them out, and "1234 5678" is not a typo.
-            code = var.get().replace(" ", "").strip()
+            # Every space dropped rather than refused, and this is no longer only a kindness: the
+            # other device SHOWS the code as "123 456 789", so the grouped form is the form the user
+            # is copying, and refusing it would be refusing what we told them to type.  All
+            # whitespace, not just U+0020 — a code pasted out of a chat message can arrive with a
+            # newline or a non-breaking space on it.
+            #
+            # What leaves this function is the nine digits.  The grouping never goes any further:
+            # clipsync_pair.channel_key would derive a different key from the spaced string and the
+            # only symptom would be "wrong code" for a code that was right.
+            code = re.sub(r"\s+", "", var.get())
             if not re.fullmatch(r"\d{%d}" % digits, code):
                 note.config(text="%d digits." % digits)
                 return
@@ -1247,6 +1275,13 @@ class App:
             return int(str(value).strip())
         except (ValueError, TypeError, OSError, AttributeError):
             return None
+
+
+# The greyed digits shown where a pairing code will appear, sliced to CODE_DIGITS at the point of
+# use. Kept in step with pair_code_placeholder in the Android strings.xml — it is the same screen in
+# the same state, and two different placeholders would read as two different states. Digits and not
+# dashes for the reason given at the label itself: a dash and a digit do not draw to the same height.
+PLACEHOLDER_CODE = "1145141919810"
 
 
 def _code_digits() -> int:

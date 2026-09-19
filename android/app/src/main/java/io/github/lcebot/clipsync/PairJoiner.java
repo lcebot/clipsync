@@ -77,7 +77,7 @@ final class PairJoiner {
     static Result join(Context ctx, Mdns.Instance provider, String code, Runnable derived)
             throws Exception {
         // Version first, because the cost of getting this wrong is paid by a person. On an ordinary
-        // link a mismatch wastes one connection nobody is watching; here it wastes copying eight
+        // link a mismatch wastes one connection nobody is watching; here it wastes copying nine
         // digits across the room, typing them, and waiting a second for the key to derive — to be
         // told "wrong code, or the window has closed" when the code was right. A missing `v` is not
         // a mismatch (an older provider may not send one) and is allowed through; the handshake

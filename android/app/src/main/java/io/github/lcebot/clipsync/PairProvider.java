@@ -14,7 +14,8 @@ import java.util.Map;
 /**
  * The device that holds the key, offering it for a while.
  *
- * <p>Opens a window: an eight-digit code, an ephemeral port, and an advertisement on
+ * <p>Opens a window: a nine-digit code (shown grouped, derived from ungrouped — see
+ * {@link Pairing#grouped}), an ephemeral port, and an advertisement on
  * {@code _clipsync-pair._tcp} carrying the salt. Anything that can complete the handshake knows the
  * code — and then <b>the user is asked, by name, whether that device may have the key</b>. The
  * handshake proves possession of the code; the prompt is what makes a guessed code still not enough,
@@ -90,7 +91,12 @@ final class PairProvider implements Closeable {
     private final Listener listener;
     private final ServerSocket socket;
     private final byte[] key;
-    /** Shown to the user, typed on the other device. */
+    /**
+     * The {@link Pairing#CODE_DIGITS} digits, <b>ungrouped</b>: what {@link Pairing#channelKey}
+     * stretched, and what the other device has to end up with. {@link Pairing#grouped} is what
+     * turns it into the "123 456 789" a person is shown, and that happens in the sheet, once,
+     * on its way into a TextView.
+     */
     final String code;
     /**
      * When the window will close, by the same clock a countdown would read.

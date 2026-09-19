@@ -308,7 +308,7 @@ class SecureChannel:
     handshake, which exchanges plaintext nonces; it fails at the first frame, as a decrypt error.
 
     `psk` is whatever secret this channel is keyed on, and it is not always the PSK: a pairing
-    channel passes a key derived from the eight-digit code instead, and everything below — the nonces,
+    channel passes a key derived from the nine-digit code instead, and everything below — the nonces,
     the per-direction keys, the AEAD, the replay resistance — comes along unchanged.  That is the
     whole of what makes pairing possible without new machinery, and a caller without the code fails
     here in exactly the way a wrong PSK does.

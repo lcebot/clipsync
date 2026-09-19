@@ -25,7 +25,8 @@ import java.util.concurrent.Executors;
  * The two ends of pairing, on one surface: a device that already has the pre-shared key hands it to
  * one that does not, over mDNS, authorised by a short code the user carries across by eye.
  *
- * <p><b>Offering</b> — the device that has the key shows an eight-digit code and waits.
+ * <p><b>Offering</b> — the device that has the key shows a nine-digit code, in groups of three, and
+ * waits.
  * <b>Joining</b> — the device that wants it browses, picks, and types the code it is being shown.
  * They are the same conversation from opposite sides, which is why they are one sheet and one file;
  * what differs is which pieces are visible and what the button does.
@@ -262,7 +263,7 @@ final class PairSheet {
     // ------------------------------------------------------------------ offering
     private void startOffering(String pskHex, int port) {
         // Everything that will ever be on this sheet is on it from the first frame, at its final
-        // size: the code as a greyed placeholder of the same eight digits, and the instruction in its
+        // size: the code as a greyed placeholder in the same grouped nine digits, and the instruction in its
         // final wording rather than a short "Opening…" that is replaced by three lines a moment
         // later. That swap was most of the height jump — the code line was only ever one of two.
         state(SHOW, SHOW, HIDE, HIDE, HIDE);
@@ -399,9 +400,14 @@ final class PairSheet {
 
     private void offering(PairProvider p) {
         provider = p;
-        // Only the eight characters and their colour change: same view, same font, same length as the
-        // placeholder, so nothing reflows.
-        code.setText(p.code);
+        // Grouped for the eye and only here: Pairing.grouped inserts two spaces into a string that
+        // is nine digits everywhere else in this app. p.code — the ungrouped digits — is what
+        // PairProvider derived its channel key from, and nothing on this side ever feeds the
+        // display string back into anything.
+        //
+        // Only the eleven characters and their colour change: same view, same font, same length as
+        // the placeholder (which is grouped too, for exactly this reason), so nothing reflows.
+        code.setText(Pairing.grouped(p.code));
         code.setTextColor(MaterialColors.getColor(code, androidx.appcompat.R.attr.colorPrimary));
         countdown = new Runnable() {
             @Override public void run() {
@@ -473,7 +479,7 @@ final class PairSheet {
     /**
      * Put the cursor in the code field and raise the keyboard.
      *
-     * <p>There is exactly one thing to do at this point and it needs eight keystrokes, so making the
+     * <p>There is exactly one thing to do at this point and it needs nine keystrokes, so making the
      * user tap the field first is a tap that carries no decision. Posted rather than called inline:
      * the field has only just been made visible, and a view that has not been laid out cannot take
      * focus — the request would be dropped and the keyboard would never come.
@@ -492,7 +498,18 @@ final class PairSheet {
     }
 
     private void connect(Mdns.Instance device) {
-        String typed = codeLayout.getEditText() == null ? "" : codeLayout.getEditText().getText().toString();
+        // Stripped first, and this is the one place it may be: the code is SHOWN in groups of three
+        // on the other device, so it is copied down and typed with the spaces in it, and a user who
+        // types what they were shown has made no mistake. The field's inputType="number" already
+        // drops them for most IMEs, which is exactly why this cannot be left to the field — "most"
+        // is not a thing to derive a key from, and a paste or an IME that lets one through would
+        // otherwise be measured as ten characters and stretched as ten.
+        //
+        // What is below this line is nine digits. Pairing.channelKey takes the digits, never the
+        // display form; Pairing.grouped is the only place a space is ever added, and it is the last
+        // thing that happens before a TextView.
+        String raw = codeLayout.getEditText() == null ? "" : codeLayout.getEditText().getText().toString();
+        String typed = Pairing.digitsOnly(raw);
         if (typed.length() != Pairing.CODE_DIGITS) {
             // No state change and no transition: the error line is reserved in the layout
             // (errorEnabled), so this writes a message into a row that is already there.
@@ -506,7 +523,7 @@ final class PairSheet {
         // snapped. It should do nothing to it, the line being reserved, but the order is the rule.
         codeLayout.setError(null);
         // Two labels for what used to be one, because the wait has two halves and no socket exists
-        // during the first: stretching the eight digits into a channel key (Pairing.SCRYPT_N), and
+        // during the first: stretching the nine digits into a channel key (Pairing.SCRYPT_N), and
         // only afterwards the network. Showing "Connecting" across all of it described something
         // that had not started yet, over the exact stretch of time in which a silent sheet looks
         // like a hung one — right after the user has finished typing and is watching for a reaction.

@@ -52,27 +52,49 @@
         android:textAppearance="?attr/textAppearanceBodyMedium"
         android:textColor="?attr/colorOnSurfaceVariant" />
 
-    <!-- The code, on the device that holds the key. Display type and tracking because it is read
-         aloud across a room and typed on a phone in the other hand — eight digits that run together
-         are eight digits typed wrong. Monospace so every digit takes the same width and the eye can
-         group them without the text reflowing as they change.
+    <!-- The code, on the device that holds the key: nine digits, shown as "123 456 789". The spaces
+         are decoration and nothing else — Pairing.grouped puts them in for this view alone, and what
+         is generated, compared and fed to the key derivation is the nine digits. Read aloud across a
+         room and typed on a phone in the other hand, and a nine-digit run with nothing to hold onto
+         is a nine-digit run said out loud wrong. Monospace so every character takes the same width
+         and the eye can group them without the text reflowing as they change.
 
-         0.25, up from the 0.15 nine digits needed and still below the 0.3 this carried at six.
-         Monospace tracking adds to every glyph including the last, so the line's advance is
-         n × (1 + spacing) em: nine digits at 0.15 was 10.35 em and that was the width that just fit
-         a narrow phone inside the 24dp gutters. Eight at 0.25 is 10.0 em — under the width already
-         proven to fit — while 0.3 would be 10.4 em, i.e. very slightly over it. So 0.25 is the last
-         value that buys separation without going back to guessing. The gutters are not negotiable.
+         THE WIDTH BUDGET, which the grouping spent all of. Monospace advance is one em per
+         character, tracking adds to every glyph including the last, so the line is
+         n × (1 + spacing) em at the text size in use. The one number here that was ever measured
+         rather than derived is 10.35 em at textAppearanceDisplaySmall (36sp): nine digits at 0.15
+         tracking, the width that just fit a narrow phone inside the 24dp gutters. Everything below
+         is held under 10.35 × 36sp ≈ 373sp. The gutters are not negotiable.
 
-         This is a single-line TextView, so tracking changes its width and never its height: the
-         three-state equal-height layout the rest of this sheet is built around (see pair_progress
-         and PairSheet.KEEP) is untouched by the number above.
+           * grouped, n = 11 (nine digits + two spaces), tracking 0.25 — 13.75 em, far over. The
+             tracking is what has to go: two spaces separate the groups better than tracking ever
+             separated the digits, so it buys nothing now and costs 11 × 0.25 = 2.75 em.
+           * grouped, n = 11, tracking 0, at displaySmall (36sp) — 11.0 em × 36 = 396sp. STILL 6%
+             over the proven width. Tracking alone does not pay for the spaces.
+           * grouped, n = 11, tracking 0, at headlineLarge (32sp) — 11.0 em × 32 = 352sp, i.e. 5.5%
+             INSIDE the 373sp already proven to fit. This is what is set below.
 
-         It starts as eight greyed digits rather than empty, and that is what stops the sheet jumping
-         open. The code cannot exist yet when this is laid out — deriving it is a deliberately slow
-         scrypt on a worker — so an empty view meant the sheet measured itself without a line of display
-         type and then grew by exactly that much a moment later. Digits and not dashes because the
-         two do not draw to the same height: a row of dashes reserved the width but not the line. -->
+         One step down the type scale and no further, and no dp anywhere: a hardcoded size would be a
+         guess that survives the next font-scale setting only by luck, whereas headlineLarge is still
+         display type and still scales with the user's own text size, which 373sp was measured under.
+         A narrower blank — U+2009 thin space instead of U+0020 — was the other way to buy the 6%,
+         and it is not taken: in a monospace font a space has the same one-em advance as a digit if
+         the font has the glyph at all, and if it does not the line falls back to another font and
+         the arithmetic above stops being arithmetic.
+
+         This is a single-line TextView, so tracking changes its width and never its height. The size
+         change does change the line's height — but pair_code is HIDE in all three of the joiner
+         states that have to measure equal (see pair_progress and PairSheet.KEEP), so the
+         three-state equal-height layout is untouched either way. On the offering side the height is
+         steady for the other reason below: the placeholder is the same eleven characters at the same
+         size as the real code.
+
+         It starts as nine greyed digits, grouped the same way, rather than empty, and that is what
+         stops the sheet jumping open. The code cannot exist yet when this is laid out — deriving it
+         is a deliberately slow scrypt on a worker — so an empty view meant the sheet measured itself
+         without a line of display type and then grew by exactly that much a moment later. Digits and
+         not dashes because the two do not draw to the same height: a row of dashes reserved the
+         width but not the line. -->
     <TextView
         android:id="@+id/pair_code"
         android:layout_width="match_parent"
@@ -81,9 +103,9 @@
         android:paddingHorizontal="24dp"
         android:gravity="center"
         android:fontFamily="monospace"
-        android:letterSpacing="0.25"
+        android:letterSpacing="0"
         android:text="@string/pair_code_placeholder"
-        android:textAppearance="?attr/textAppearanceDisplaySmall"
+        android:textAppearance="?attr/textAppearanceHeadlineLarge"
         android:textColor="?attr/colorPrimary"
         android:visibility="gone" />
 
@@ -139,7 +161,7 @@
     <!-- errorEnabled up front, which is the opposite of what Ui.showError does elsewhere in this app
          and is the point: there the error line is collapsed when the complaint goes, because a
          settings form has a dozen fields and a dozen permanent gaps. Here there is one field, and
-         everything it can be told — "Eight digits", or what the connection failed with — arrives
+         everything it can be told — "Nine digits", or what the connection failed with — arrives
          while the user is staring at the sheet waiting for a verdict. Enabling the line from the
          start reserves it once, so a wrong code adds a message instead of adding a message AND a row
          of height. The reserved line is empty text in a view with no content, so it is not announced
@@ -159,9 +181,20 @@
         android:visibility="gone">
 
         <!-- number, not numberPassword or text: the code is not a secret from the person holding the
-             phone, and a digits-only keyboard is the whole point. maxLength must track
-             Pairing.CODE_DIGITS — PairSheet refuses anything shorter, and a field that accepted nine
-             digits would let the user type one the provider can never match.
+             phone, and a digits-only keyboard is the whole point. It is also what makes a typed
+             space harmless — inputType="number" installs a digits-only filter, which drops spaces
+             from typing and from a paste alike — but that is a convenience and NOT the guarantee.
+             PairSheet.connect strips every non-digit before it measures or derives anything, because
+             "most IMEs filter it" is not a thing to derive a key from.
+
+             maxLength is 11 and not Pairing.CODE_DIGITS, and the difference is the grouping: the
+             other device SHOWS "123 456 789", so that is what gets copied down and typed, and nine
+             digits plus two spaces is eleven characters. A cap of nine would silently swallow the
+             last two digits of a code the user typed exactly as they were shown — the worst of the
+             possible failures, because what is left looks complete. Eleven is a bound on the field,
+             not a definition of the code: PairSheet strips the spaces and then requires exactly
+             Pairing.CODE_DIGITS digits, so eleven digits is refused like anything else that is not
+             nine.
 
              (This comment used to sit between the attributes of the tag below, where XML does not
              allow one.) -->
@@ -170,7 +203,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:inputType="number"
-            android:maxLength="8"
+            android:maxLength="11"
             android:imeOptions="actionDone"
             android:fontFamily="monospace"
             android:letterSpacing="0.2" />
