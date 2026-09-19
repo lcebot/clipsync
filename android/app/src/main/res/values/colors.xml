@@ -1,6 +1,68 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- ClipSync's own palette: the colours used when the system does not hand us one.
+
+     On Android 12+ the wallpaper-derived (Monet) palette replaces every role below, applied as a
+     theme overlay by ClipSyncApp. These are the fallback, and the fallback has to be a COMPLETE
+     scheme rather than a few brand accents: M3 components pick their own roles, and a half-override
+     produces blue buttons on purple cards — the baseline scheme showing through wherever this file
+     stopped. Anything genuinely unused is still defined, because "unused" is a fact about today's
+     layouts.
+
+     Generated from the same blue seed as the launcher icon (ic_launcher_background is primary-40),
+     so an unthemed launcher and an unthemed app agree. Tones follow the standard M3 assignments —
+     primary 40/100/90/10 in light, 80/20/30/90 in dark — which is what makes the on-pairs legible by
+     construction rather than by luck.
+
+     values-night/colors.xml carries the dark scheme under the same names. -->
 <resources>
-    <!-- Launcher icon background for launchers without themed icons: a Material tonal blue
-         (primary-40 of the baseline M3 palette) behind the white glyph. -->
+    <!-- Launcher icon background for launchers without themed icons: the white glyph sits on
+         primary-40. With themed icons the launcher ignores this and tints <monochrome> itself. -->
     <color name="ic_launcher_background">#FF4A5C92</color>
+
+    <!-- primary -->
+    <color name="brand_primary">#FF4A5C92</color>
+    <color name="brand_on_primary">#FFFFFFFF</color>
+    <color name="brand_primary_container">#FFDBE1FF</color>
+    <color name="brand_on_primary_container">#FF01174B</color>
+    <color name="brand_inverse_primary">#FFB3C5FF</color>
+
+    <!-- secondary -->
+    <color name="brand_secondary">#FF595E72</color>
+    <color name="brand_on_secondary">#FFFFFFFF</color>
+    <color name="brand_secondary_container">#FFDEE2F9</color>
+    <color name="brand_on_secondary_container">#FF161B2C</color>
+
+    <!-- tertiary: the accent the peer sheet uses for "asleep" and the chip for "connecting" -->
+    <color name="brand_tertiary">#FF75546F</color>
+    <color name="brand_on_tertiary">#FFFFFFFF</color>
+    <color name="brand_tertiary_container">#FFFFD7F5</color>
+    <color name="brand_on_tertiary_container">#FF2C1229</color>
+
+    <!-- error -->
+    <color name="brand_error">#FFBA1A1A</color>
+    <color name="brand_on_error">#FFFFFFFF</color>
+    <color name="brand_error_container">#FFFFDAD6</color>
+    <color name="brand_on_error_container">#FF410002</color>
+
+    <!-- surface and its containers. The container ramp is not optional: a filled card takes
+         colorSurfaceContainerHighest, and leaving it at baseline is exactly the half-override above. -->
+    <color name="brand_surface">#FFFAF8FF</color>
+    <color name="brand_on_surface">#FF1A1B21</color>
+    <color name="brand_surface_variant">#FFE2E1EC</color>
+    <color name="brand_on_surface_variant">#FF45464F</color>
+    <color name="brand_surface_dim">#FFDAD9E0</color>
+    <color name="brand_surface_bright">#FFFAF8FF</color>
+    <color name="brand_surface_container_lowest">#FFFFFFFF</color>
+    <color name="brand_surface_container_low">#FFF4F3FA</color>
+    <color name="brand_surface_container">#FFEEEDF4</color>
+    <color name="brand_surface_container_high">#FFE8E7EF</color>
+    <color name="brand_surface_container_highest">#FFE3E2E9</color>
+
+    <!-- inverse: the Snackbar's surface, which is the one component that flips -->
+    <color name="brand_inverse_surface">#FF2F3036</color>
+    <color name="brand_inverse_on_surface">#FFF1F0F7</color>
+
+    <!-- outline -->
+    <color name="brand_outline">#FF767680</color>
+    <color name="brand_outline_variant">#FFC6C5D0</color>
 </resources>

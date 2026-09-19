@@ -19,6 +19,8 @@ import android.os.IBinder;
 import android.os.PowerManager;
 import android.os.SystemClock;
 
+import com.google.android.material.color.MaterialColors;
+
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -409,6 +411,12 @@ public class SyncService extends Service {
                 .setSmallIcon(R.drawable.ic_notification)
                 .setContentTitle("ClipSync")
                 .setContentText("Syncing clipboard with the PC")
+                // The shade tints the small icon with this. Read through the dynamic overlay rather
+                // than from this Service's own theme: a Service never passes through the Activity
+                // overlay that applies the system palette, so the theme alone would give the app's
+                // fallback blue on a device showing a green palette everywhere else.
+                .setColor(MaterialColors.getColor(ClipSyncApp.themed(this),
+                        androidx.appcompat.R.attr.colorPrimary, 0))
                 .setContentIntent(android.app.PendingIntent.getActivity(this, 0, open, android.app.PendingIntent.FLAG_IMMUTABLE))
                 .setOngoing(true)
                 .build();

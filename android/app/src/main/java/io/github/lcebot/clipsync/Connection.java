@@ -60,6 +60,17 @@ public final class Connection implements AutoCloseable {
      */
     public static final String BYE_IDLE = "idle";
     /**
+     * Pairing (docs/p2p-plan.md §12): {@code PAIR_ASK} joiner → provider, "give me the key", and
+     * {@code PAIR_KEY} back with it.
+     *
+     * <p>Ordinary frames on an ordinary channel, reached after an ordinary handshake and an ordinary
+     * {@code HELLO} — only the key differs. The first sketch had the joiner send a special frame
+     * <em>instead of</em> HELLO, which would have created a parsing path that runs before any key
+     * has been proven; that one rule is what makes an open port safe to expose, and varying the key
+     * and adding a role costs nothing by comparison.
+     */
+    public static final int T_PAIR_ASK = 16, T_PAIR_KEY = 17;
+    /**
      * 2: HELLO is exchanged in both directions and carries the node id, type, persistence and
      * battery bucket (docs/p2p-plan.md §2). A clean break, by §9 — a version 1 peer is refused
      * rather than tolerated, because a peer that cannot name itself cannot be deduplicated or
@@ -215,7 +226,8 @@ public final class Connection implements AutoCloseable {
      * is exactly wrong now: the losers it closed are the other peers.
      */
     public static Connection toPeer(Context ctx, Config cfg, String peer, Network net) throws Exception {
-        return new Connection(cfg, new Object[]{connectDirect(peer, cfg.port, net), "direct", peer}, ctx, net, false);
+        return new Connection(cfg.psk, cfg.maxFrame(), cfg.port,
+                new Object[]{connectDirect(peer, cfg.port, net), "direct", peer}, ctx, net, false);
     }
 
     /**
@@ -229,8 +241,9 @@ public final class Connection implements AutoCloseable {
      * before we answer, so there is no window in which the peer is anonymous for long.
      */
     public static Connection accept(Context ctx, Config cfg, Socket s, Network net) throws Exception {
-        return new Connection(cfg, new Object[]{s, "inbound", String.valueOf(s.getRemoteSocketAddress())
-                .replaceFirst("^[^/]*/", "")}, ctx, net, true);
+        return new Connection(cfg.psk, cfg.maxFrame(), cfg.port,
+                new Object[]{s, "inbound", String.valueOf(s.getRemoteSocketAddress())
+                        .replaceFirst("^[^/]*/", "")}, ctx, net, true);
     }
 
     /**
@@ -254,7 +267,8 @@ public final class Connection implements AutoCloseable {
         if (cands.isEmpty()) throw new IOException("mdns: " + inst.name + " advertised no usable address");
         cands = OnLink.sort(ctx, net, cands);
         Won w = race(cands, MDNS_CONNECT_TIMEOUT_MS, net);
-        return new Connection(cfg, new Object[]{w.s, "mdns", inst.name}, ctx, net, false);
+        return new Connection(cfg.psk, cfg.maxFrame(), cfg.port,
+                new Object[]{w.s, "mdns", inst.name}, ctx, net, false);
     }
 
     /**
@@ -268,7 +282,7 @@ public final class Connection implements AutoCloseable {
         // they are the same number; on one we accepted, the control socket's is the ephemeral source
         // port of the peer's dial and connecting to it reaches nothing at all.
         InetSocketAddress to = new InetSocketAddress(control.remote.getAddress(), control.peerPort);
-        Connection c = new Connection(cfg, new Object[]{
+        Connection c = new Connection(cfg.psk, cfg.maxFrame(), cfg.port, new Object[]{
                 connectTo(to, control.lanPeer ? MDNS_CONNECT_TIMEOUT_MS : CONNECT_TIMEOUT_MS, control.network),
                 control.via, "data"}, null, control.network, false);
         JSONObject hello = new JSONObject();
@@ -279,6 +293,50 @@ public final class Connection implements AutoCloseable {
         hello.put("sha256", sha256);
         c.sendJson(T_HELLO, hello);
         return c;
+    }
+
+    /**
+     * The two ends of a pairing channel: the same machinery with a code-derived key.
+     *
+     * <p>Neither takes a {@link Config}, and that is not tidiness — a device being paired has no
+     * usable configuration yet, which is the whole reason it is being paired. The three things a
+     * channel actually needs are a secret, a frame cap and, for HELLO, a port; a Config is merely
+     * where an ordinary link finds them.
+     *
+     * <p>{@code maxFrame} is small on purpose: a pairing channel carries two short JSON frames and
+     * nothing else, so the cap is a bound on what an unauthenticated caller can make this end
+     * allocate before the handshake proves anything.
+     */
+    public static Connection pairTo(InetSocketAddress addr, byte[] key) throws Exception {
+        return new Connection(key, PAIR_MAX_FRAME, 0,
+                new Object[]{connectTo(addr, MDNS_CONNECT_TIMEOUT_MS, null), "pair", String.valueOf(addr)},
+                null, null, false);
+    }
+
+    public static Connection pairAccept(Socket s, byte[] key) throws Exception {
+        return new Connection(key, PAIR_MAX_FRAME, 0,
+                new Object[]{s, "pair", String.valueOf(s.getRemoteSocketAddress()).replaceFirst("^[^/]*/", "")},
+                null, null, true);
+    }
+
+    /** Two short JSON frames is all a pairing channel ever carries. */
+    private static final int PAIR_MAX_FRAME = 4096;
+
+    /**
+     * Our half of a pairing declaration: who is asking, and nothing that only a configured node has.
+     *
+     * <p>Deliberately not {@link #sendHello}: that one carries a node id, a sequence cursor and the
+     * capability flags of a peer, none of which a device without a key has any business claiming —
+     * and the id is what the self-check and the dedup map key on, so an unpaired device offering one
+     * would be enrolling itself into machinery it is not part of yet.
+     */
+    public void sendPairHello(Context ctx) throws Exception {
+        JSONObject mine = new JSONObject();
+        mine.put("v", PROTOCOL_VERSION);
+        mine.put("role", "pair");
+        mine.put("device", Node.name());
+        mine.put("type", Node.type(ctx));
+        sendJson(T_HELLO, mine);
     }
 
     /**
@@ -348,7 +406,11 @@ public final class Connection implements AutoCloseable {
         String name = theirs.optString("device", "");
         if (!name.isEmpty()) peerLabel = name;
         socket.setSoTimeout(READ_TIMEOUT_MS);      // it has spoken; the short leash was for silence
-        if ("data".equals(theirs.optString("role"))) return theirs;   // a stream, not a peer
+        // A stream or a pairing exchange, not a peer: neither enrols anything, so neither needs the
+        // node checks below. Both still filled the name and type above, which is what the provider
+        // shows when it asks the user whether to hand over the key.
+        String role = theirs.optString("role");
+        if ("data".equals(role) || "pair".equals(role)) return theirs;
         // Protocol 2's premise is that a peer can name itself, and everything downstream assumes it:
         // a link with no id cannot be deduplicated, cannot be recognised as this device, and would
         // sit outside the map that the heartbeat, the broadcast and the status all iterate — running
@@ -375,9 +437,18 @@ public final class Connection implements AutoCloseable {
         }
     }
 
-    private Connection(Config cfg, Object[] r, Context ctx, Network net, boolean inbound) throws Exception {
-        this.maxFrame = cfg.maxFrame();
-        this.listenPort = cfg.port;
+    /**
+     * @param secret the shared key this channel's per-direction keys are derived from. The PSK for
+     *               an ordinary link and a code-derived key for a pairing one — which is the whole
+     *               of what makes pairing possible without new machinery: confidentiality,
+     *               authentication and replay resistance all come along unchanged, and a caller
+     *               without the code fails at the handshake exactly as a wrong PSK does today.
+     *               (docs/p2p-plan.md §12)
+     */
+    private Connection(byte[] secret, int maxFrame, int listenPort,
+                       Object[] r, Context ctx, Network net, boolean inbound) throws Exception {
+        this.maxFrame = maxFrame;
+        this.listenPort = listenPort;
         this.inbound = inbound;
         this.network = net;
         socket = (Socket) r[0];
@@ -416,8 +487,8 @@ public final class Connection implements AutoCloseable {
         }
         byte[] nc = inbound ? theirs : mine, ns = inbound ? mine : theirs;
         byte[] salt = ByteBuffer.allocate(64).put(nc).put(ns).array();
-        byte[] c2s = Crypto.hkdfSha256(cfg.psk, salt, "clipsync c2s".getBytes(StandardCharsets.US_ASCII), 32);
-        byte[] s2c = Crypto.hkdfSha256(cfg.psk, salt, "clipsync s2c".getBytes(StandardCharsets.US_ASCII), 32);
+        byte[] c2s = Crypto.hkdfSha256(secret, salt, "clipsync c2s".getBytes(StandardCharsets.US_ASCII), 32);
+        byte[] s2c = Crypto.hkdfSha256(secret, salt, "clipsync s2c".getBytes(StandardCharsets.US_ASCII), 32);
         txKey = inbound ? s2c : c2s;
         rxKey = inbound ? c2s : s2c;
     }

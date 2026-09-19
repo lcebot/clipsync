@@ -1,10 +1,63 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- Material 3 Expressive (material 1.14+): expressive shapes / motion / type for every
-         component that takes its style from the theme; dynamic colour on Android 12+, day/night. -->
-    <style name="Theme.ClipSync" parent="Theme.Material3Expressive.DynamicColors.DayNight">
+         component that takes its style from the theme, day/night.
+
+         NOT the .DynamicColors. parent any more, and the difference is the whole point. That parent
+         hard-wires every role to @android:color/system_*, so there is nowhere for an app's own
+         colours to live: where the system has no palette to give, it falls back to Material's
+         baseline purple, which is the library's identity rather than this app's. The roles below are
+         ClipSync's own, and ClipSyncApp overlays the wallpaper-derived palette on top *when the
+         system provides one* — the same result on a device with Monet, and ours rather than
+         Material's on a device without.
+
+         Every role is bound, not a chosen few: components pick their own, so a partial scheme shows
+         the baseline through wherever this list stops. See values/colors.xml. -->
+    <style name="Theme.ClipSync" parent="Theme.Material3Expressive.DayNight">
         <item name="windowActionBar">false</item>
         <item name="windowNoTitle">true</item>
+
+        <item name="colorPrimary">@color/brand_primary</item>
+        <item name="colorOnPrimary">@color/brand_on_primary</item>
+        <item name="colorPrimaryContainer">@color/brand_primary_container</item>
+        <item name="colorOnPrimaryContainer">@color/brand_on_primary_container</item>
+        <item name="colorPrimaryInverse">@color/brand_inverse_primary</item>
+
+        <item name="colorSecondary">@color/brand_secondary</item>
+        <item name="colorOnSecondary">@color/brand_on_secondary</item>
+        <item name="colorSecondaryContainer">@color/brand_secondary_container</item>
+        <item name="colorOnSecondaryContainer">@color/brand_on_secondary_container</item>
+
+        <item name="colorTertiary">@color/brand_tertiary</item>
+        <item name="colorOnTertiary">@color/brand_on_tertiary</item>
+        <item name="colorTertiaryContainer">@color/brand_tertiary_container</item>
+        <item name="colorOnTertiaryContainer">@color/brand_on_tertiary_container</item>
+
+        <item name="colorError">@color/brand_error</item>
+        <item name="colorOnError">@color/brand_on_error</item>
+        <item name="colorErrorContainer">@color/brand_error_container</item>
+        <item name="colorOnErrorContainer">@color/brand_on_error_container</item>
+
+        <item name="android:colorBackground">@color/brand_surface</item>
+        <item name="colorOnBackground">@color/brand_on_surface</item>
+        <item name="colorSurface">@color/brand_surface</item>
+        <item name="colorOnSurface">@color/brand_on_surface</item>
+        <item name="colorSurfaceVariant">@color/brand_surface_variant</item>
+        <item name="colorOnSurfaceVariant">@color/brand_on_surface_variant</item>
+        <item name="colorSurfaceInverse">@color/brand_inverse_surface</item>
+        <item name="colorOnSurfaceInverse">@color/brand_inverse_on_surface</item>
+        <item name="colorSurfaceTint">@color/brand_primary</item>
+
+        <item name="colorSurfaceDim">@color/brand_surface_dim</item>
+        <item name="colorSurfaceBright">@color/brand_surface_bright</item>
+        <item name="colorSurfaceContainerLowest">@color/brand_surface_container_lowest</item>
+        <item name="colorSurfaceContainerLow">@color/brand_surface_container_low</item>
+        <item name="colorSurfaceContainer">@color/brand_surface_container</item>
+        <item name="colorSurfaceContainerHigh">@color/brand_surface_container_high</item>
+        <item name="colorSurfaceContainerHighest">@color/brand_surface_container_highest</item>
+
+        <item name="colorOutline">@color/brand_outline</item>
+        <item name="colorOutlineVariant">@color/brand_outline_variant</item>
     </style>
 
     <!-- Segmented-button segment: normal button type (labelLarge); three labels fit a phone width
