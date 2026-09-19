@@ -16,8 +16,9 @@ import io.github.libxposed.api.XposedModuleInterface;
 
 /**
  * libxposed API 102 entry (META-INF/xposed/java_init.list; scope.list names system_server as
- * "system"). See {@link Common} for what the hooks do. {@link LegacyEntry} is the same set for
- * the classic API and is kept as reference / fallback, without an entry declaration.
+ * "system"). The only entry: a classic-API twin lived here as a never-declared fallback and is
+ * gone, along with the compile-time dependency it alone needed. See {@link Common} for what the
+ * hooks do — that is where the logic lives, and always did.
  *
  * <p>Hooks are kept to the minimum: only the overloads whose signature we actually rely on are
  * intercepted (package name at the expected argument index), every interceptor is a couple of

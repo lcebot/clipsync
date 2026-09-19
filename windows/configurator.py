@@ -24,10 +24,17 @@ import re
 import socket
 import subprocess
 import sys
+import time
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-import clipsync_config as cfgmod
+# The service and everything it imports live in app/, out of the way: this window is the supported
+# way to change any of it, and a folder full of .py files beside a shortcut invites editing the one
+# thing that must not be hand-edited.  Nothing else needs a path fix, because clipsync_config derives
+# config.json and clipsync.log from its OWN location -- so they moved with it.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "app"))
+
+import clipsync_config as cfgmod   # noqa: E402
 
 TASK_NAME = "ClipSync"          # the scheduled task install.ps1 registers
 PAD = 6
@@ -308,6 +315,7 @@ class App:
         # them is the one the user is making at this field: make one here and hand it out, or take
         # the one a device already has.  (docs/p2p-plan.md §12 -- the PC only ever joins.)
         ttk.Button(psk_bar, text="Pair with a device…", command=self.pair).pack(side="left", padx=(PAD, 0))
+        ttk.Button(psk_bar, text="Share this key…", command=self.share).pack(side="left", padx=(PAD, 0))
         self.psk_shown = tk.BooleanVar(value=False)
         ttk.Checkbutton(psk_bar, text="Show", variable=self.psk_shown,
                         command=self._toggle_psk).pack(side="left", padx=(PAD, 0))
@@ -597,12 +605,119 @@ class App:
                 answer.get("device", name)),
             parent=self.root)
 
+    def share(self):
+        """
+        Offer this PC's key to a device that does not have one (docs/p2p-plan.md §12).
+
+        The other half of `pair`, and the reason §12's "Windows only ever joins" did not survive
+        contact: the PC is perfectly capable of being the device that was set up first, and the only
+        thing standing in the way was a firewall rule, which install.ps1 now makes.
+        """
+        psk = self.psk.get().strip()
+        if cfgmod.check_psk(psk) is not None:
+            messagebox.showinfo(
+                "No key yet",
+                "Generate a key first, or pair with a device that already has one — there is "
+                "nothing to share until then.", parent=self.root)
+            return
+        try:
+            import clipsync_pair
+        except ImportError as e:                    # pragma: no cover - a broken install
+            messagebox.showerror("Cannot share", str(e), parent=self.root)
+            return
+
+        win = tk.Toplevel(self.root)
+        win.title("Share this key")
+        win.transient(self.root)
+        state = {"provider": None, "tick": None, "over": False}
+
+        ttk.Label(win, wraplength=380, text="On the other device choose “I have another ClipSync "
+                                           "device”, pick this PC, and enter this code.").grid(
+            row=0, column=0, sticky="w", padx=PAD, pady=(PAD, 0))
+        # Big and monospaced: it is read across a room and typed on a phone in the other hand, and
+        # six digits that run together are six digits typed wrong.
+        code_label = ttk.Label(win, text="……", font=("Consolas", 28))
+        code_label.grid(row=1, column=0, padx=PAD, pady=(PAD, 0))
+        status = ttk.Label(win, text="Starting…", foreground="#49454f")
+        status.grid(row=2, column=0, sticky="w", padx=PAD, pady=(0, PAD))
+
+        def finish(message, over=True):
+            state["over"] = over
+            if state["tick"] is not None:
+                win.after_cancel(state["tick"])
+                state["tick"] = None
+            status.config(text=message)
+            code_label.config(text="")
+
+        def close():
+            if state["provider"] is not None:
+                state["provider"].close()
+            if state["tick"] is not None:
+                win.after_cancel(state["tick"])
+            win.destroy()
+
+        bar = ttk.Frame(win)
+        bar.grid(row=3, column=0, sticky="e", padx=PAD, pady=(0, PAD))
+        ttk.Button(bar, text="Close", command=close).pack(side="left")
+        win.protocol("WM_DELETE_WINDOW", close)
+        self._centre(win)
+        win.update()
+
+        # Callbacks arrive on the provider's own thread; `after(0, ...)` is what hands them to tk,
+        # which has exactly one and does not forgive being touched from another.
+        def paired(device, _type):
+            win.after(0, lambda: finish("Paired with %s. It should connect in a moment." % device))
+
+        def closed(burned):
+            win.after(0, lambda: finish("Too many wrong codes — closed." if burned
+                                        else "Nobody joined before the code expired."))
+
+        # The field, if it holds a valid port, rather than the saved file: the user may be mid-edit,
+        # and the range install.ps1 opened is keyed to whatever port they are about to apply.
+        typed = self.port.get()
+        base = int(typed) if cfgmod.check_port(typed) is None else 47521
+        try:
+            p = clipsync_pair.Provider(psk, base, socket.gethostname().split(".")[0], paired, closed)
+        except Exception as e:                      # noqa: BLE001 - the message is the user's to read
+            finish("Could not open a pairing window: %s" % e)
+            return
+        state["provider"] = p
+        code_label.config(text=p.code)
+
+        def tick():
+            left = max(0.0, p.closes_at - time.monotonic())
+            # Rounded UP and scheduled to the boundary, for the reasons written out in §12: a
+            # truncating countdown skips a second on its first tick, and a flat interval drifts.
+            secs = int(left) + (1 if left % 1 else 0)
+            status.config(text="Waiting — %d s left" % secs)
+            if secs <= 0 or state["over"]:
+                return
+            state["tick"] = win.after(int((left - (secs - 1)) * 1000), tick)
+
+        tick()
+
+    def _centre(self, win):
+        """
+        Put a child window over the middle of this one.
+
+        `transient` alone does not place it -- it only ties the two together for stacking and the
+        taskbar -- so a Toplevel lands wherever the window manager feels like, which on Windows is
+        the top-left of the desktop.  Which is nowhere near the window the user is looking at.
+
+        update_idletasks first, because a window that has not been laid out reports 1x1 and would be
+        centred as though it were a point.
+        """
+        win.update_idletasks()
+        w, h = win.winfo_width(), win.winfo_height()
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - w) // 2
+        y = self.root.winfo_rooty() + (self.root.winfo_height() - h) // 3   # a third: above centre reads better
+        win.geometry("+%d+%d" % (max(0, x), max(0, y)))
+
     def _choose(self, found):
         """Which device, when more than one is offering. Returns (None, None, None) if cancelled."""
         win = tk.Toplevel(self.root)
         win.title("Pair with which device?")
         win.transient(self.root)
-        win.grab_set()
         picked = {"i": None}
         ttk.Label(win, text="Pick the one showing a code.").grid(
             row=0, column=0, sticky="w", padx=PAD, pady=(PAD, 0))
@@ -622,6 +737,12 @@ class App:
         ttk.Button(bar, text="Cancel", command=win.destroy).pack(side="left")
         ttk.Button(bar, text="Continue", command=ok).pack(side="left", padx=(PAD, 0))
         win.columnconfigure(0, weight=1)
+        # Placed, then made modal, then waited on -- in that order.  grab_set() before the window has
+        # been laid out takes the pointer to wherever it currently is, which with no placement is the
+        # corner of the desktop.
+        self._centre(win)
+        win.grab_set()
+        box.focus_set()
         self.root.wait_window(win)
         return found[picked["i"]] if picked["i"] is not None else (None, None, None)
 
@@ -636,7 +757,6 @@ class App:
         win = tk.Toplevel(self.root)
         win.title("Enter the code")
         win.transient(self.root)
-        win.grab_set()
         out = {"code": None}
         ttk.Label(win, wraplength=360, text="Enter the six-digit code shown on %s." % name).grid(
             row=0, column=0, columnspan=2, sticky="w", padx=PAD, pady=(PAD, 0))
@@ -660,6 +780,9 @@ class App:
         ttk.Button(bar, text="Cancel", command=win.destroy).pack(side="left")
         ttk.Button(bar, text="Pair", command=ok).pack(side="left", padx=(PAD, 0))
         win.bind("<Return>", lambda _e: ok())
+        self._centre(win)
+        win.grab_set()
+        entry.focus_set()
         self.root.wait_window(win)
         return out["code"]
 

@@ -127,6 +127,10 @@
          PAIR_ASK: a separate user-facing word would only mean the log, the sheet and the settings
          page each naming the same act differently. -->
     <string name="pair_button">Pair a new device</string>
+    <string name="setup_button">Set up ClipSync</string>
+    <!-- Pairing cannot run with local discovery off, at either end. Said rather than done silently:
+         a control that quietly changes another one is worse than either refusing or asking. -->
+    <string name="pair_turned_discovery_on">Local network discovery turned on — pairing needs it</string>
     <string name="pair_no_key">Set a PSK key first — there is nothing to share yet</string>
 
     <!-- offering: this device has the key -->
@@ -136,7 +140,8 @@
          not obvious the first time. -->
     <string name="pair_offer_body">On the new device, choose “I have another ClipSync device” and enter this code</string>
     <string name="pair_opening">Starting</string>
-    <string name="pair_waiting">Waiting</string>
+    <!-- The countdown is the only "waiting" wording: a plain one would be replaced within a frame
+         by this, and two strings for one moment is one too many. -->
     <string name="pair_waiting_for">Waiting — %1$d s left</string>
     <string name="pair_offer_done">%1$s has the key. It should connect in a moment.</string>
     <!-- The two ways a window can end on its own, told apart on purpose: a timer running out invites
@@ -160,9 +165,12 @@
     <string name="pair_join_done">Paired with %1$s. The key is set and the service is restarting.</string>
     <string name="pair_close">Close</string>
 
-    <!-- first run: the only screen a device with no key ever sees first -->
-    <string name="first_run_title">Set up ClipSync</string>
-    <string name="first_run_body">Every device shares one key. Take it from a device that already has it, or make one here and hand it out.</string>
+    <!-- the welcome screen: the only thing a device with no key can usefully do -->
+    <string name="welcome_title">One clipboard, every device</string>
+    <string name="welcome_body">Copy on your phone, paste on your PC. ClipSync keeps the clipboard the same on all of your devices, over your own network — nothing passes through anyone else\'s server.</string>
+    <string name="welcome_next">Get started</string>
+    <string name="welcome_choose_title">Set up this device</string>
+    <string name="welcome_choose_body">Every device shares one key. Take it from a device that already has it, or make one here and hand it out.</string>
     <string name="first_run_join">I have another ClipSync device</string>
     <string name="first_run_generate">This is my first device</string>
     <!-- The escape hatch, and a neutral button rather than a peer of the other two: typing 64 hex

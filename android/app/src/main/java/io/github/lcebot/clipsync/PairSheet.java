@@ -6,6 +6,8 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.TextView;
 
+import androidx.transition.TransitionManager;
+
 import com.google.android.material.bottomsheet.BottomSheetDialog;
 import com.google.android.material.button.MaterialButton;
 import com.google.android.material.textfield.TextInputLayout;
@@ -33,7 +35,7 @@ final class PairSheet {
     private final BottomSheetDialog sheet;
     private final TextView title, text, code, progressText;
     private final View progress;
-    private final ViewGroup list;
+    private final ViewGroup list, root;
     private final TextInputLayout codeLayout;
     private final MaterialButton action;
 
@@ -51,6 +53,8 @@ final class PairSheet {
     private PairProvider provider;
     private Runnable countdown;
     private volatile boolean closed;
+    /** False until the first state has been applied; see {@link #state}. */
+    private boolean settled;
 
     /** How long a browse runs before reporting what it has. */
     private static final long BROWSE_MS = 4_000;
@@ -78,6 +82,12 @@ final class PairSheet {
         this.a = a;
         sheet = new BottomSheetDialog(a);
         sheet.setContentView(R.layout.sheet_pair);
+        // The dialog's CoordinatorLayout, one level above the sheet frame — the same scene root the
+        // peer sheet uses, and for the same reason: a bottom sheet is anchored to the bottom edge,
+        // so it changes height by moving its TOP edge, and inside the frame nothing moves at all.
+        // Rooting the transition at the frame's parent is what lets that edge be animated instead of
+        // snapping between states.
+        root = sheet.findViewById(com.google.android.material.R.id.coordinator);
         title = sheet.findViewById(R.id.pair_title);
         text = sheet.findViewById(R.id.pair_text);
         code = sheet.findViewById(R.id.pair_code);
@@ -114,9 +124,9 @@ final class PairSheet {
 
     // ------------------------------------------------------------------ offering
     private void startOffering(String pskHex) {
+        state(false, true, false, false, false);
         title.setText(R.string.pair_offer_title);
         text.setText(R.string.pair_offer_opening);
-        show(progress, true);
         progressText.setText(R.string.pair_opening);
         worker.execute(() -> {
             try {
@@ -139,16 +149,25 @@ final class PairSheet {
 
     private void offering(PairProvider p) {
         provider = p;
+        state(true, true, false, false, false);
         text.setText(R.string.pair_offer_body);
         code.setText(p.code);
-        show(code, true);
-        progressText.setText(R.string.pair_waiting);
-        long until = System.currentTimeMillis() + Pairing.WINDOW_MS;
         countdown = new Runnable() {
             @Override public void run() {
-                long left = Math.max(0, until - System.currentTimeMillis());
-                progressText.setText(a.getString(R.string.pair_waiting_for, left / 1000));
-                if (left > 0) ui.postDelayed(this, 1000);
+                long left = Math.max(0, p.closesAt - System.currentTimeMillis());
+                // Rounded UP, and this is the whole of the reported bug. Truncating showed 120 at
+                // t=0 and then 118 one tick later, because postDelayed(1000) is a minimum: the
+                // second tick lands at 1000+ε, leaving 118999 ms, which divides to 118. Ceiling
+                // makes the number mean "seconds remaining, at most", so the same instant reads 119
+                // and no value is ever skipped.
+                long secs = (left + 999) / 1000;
+                progressText.setText(a.getString(R.string.pair_waiting_for, secs));
+                if (secs <= 0) return;
+                // Scheduled to the moment the displayed number changes, not a flat second later.
+                // A fixed interval drifts by the scheduling delay every tick and the error
+                // accumulates; landing on the boundary keeps every tick honest and makes the last
+                // one arrive exactly as the window closes.
+                ui.postDelayed(this, left - (secs - 1) * 1000);
             }
         };
         countdown.run();
@@ -162,24 +181,23 @@ final class PairSheet {
     }
 
     private void browse() {
+        state(false, true, false, false, false);
         list.removeAllViews();
-        show(list, false);
-        show(codeLayout, false);
-        show(action, false);
-        show(progress, true);
         progressText.setText(R.string.pair_searching);
         worker.execute(() -> {
             List<Mdns.Instance> found = PairJoiner.find(a, BROWSE_MS);
             post(() -> {
-                show(progress, false);
                 if (found.isEmpty()) {
+                    state(false, false, false, false, true);
                     text.setText(R.string.pair_none_found);
                     button(R.string.pair_search_again, v -> browse());
                     return;
                 }
-                text.setText(R.string.pair_pick);
+                // Filled before the list is shown, so the transition measures the height it is
+                // actually going to be rather than animating to an empty box and jumping after.
                 for (Mdns.Instance i : found) addDevice(i);
-                show(list, true);
+                state(false, false, true, false, false);
+                text.setText(R.string.pair_pick);
             });
         });
     }
@@ -192,9 +210,8 @@ final class PairSheet {
     }
 
     private void askCode(Mdns.Instance device) {
-        show(list, false);
+        state(false, false, false, true, true);
         text.setText(a.getString(R.string.pair_enter_code, device.name));
-        show(codeLayout, true);
         codeLayout.setError(null);
         button(R.string.pair_connect, v -> connect(device));
     }
@@ -206,15 +223,13 @@ final class PairSheet {
             return;
         }
         codeLayout.setError(null);
-        show(action, false);
-        show(progress, true);
+        state(false, true, false, true, false);
         progressText.setText(R.string.pair_connecting);
         worker.execute(() -> {
             try {
                 PairJoiner.Result r = PairJoiner.join(a, device, typed);
                 PairJoiner.apply(a, r.pskHex);
                 post(() -> {
-                    show(codeLayout, false);
                     // The form is showing the key that was there a moment ago, which is now wrong.
                     a.reloadAfterPairing();
                     done(a.getString(R.string.pair_join_done, r.device));
@@ -222,12 +237,11 @@ final class PairSheet {
             } catch (Exception e) {
                 Logger.i("pairing: " + e);
                 post(() -> {
-                    show(progress, false);
                     // Back to the code field rather than to the start: the overwhelmingly likely
                     // cause is a mistyped digit, and making the user find the device again would
                     // spend another of the provider's five attempts on the way.
+                    state(false, false, false, true, true);
                     codeLayout.setError(String.valueOf(e.getMessage()));
-                    show(codeLayout, true);
                     button(R.string.pair_connect, v -> connect(device));
                 });
             }
@@ -249,53 +263,60 @@ final class PairSheet {
     private void finish(String message) {
         if (countdown != null) ui.removeCallbacks(countdown);
         provider = null;
-        show(progress, false);
-        show(code, false);
-        show(list, false);
-        show(codeLayout, false);
+        state(false, false, false, false, true);
         text.setText(message);
         button(R.string.pair_close, v -> sheet.dismiss());
     }
 
     // ------------------------------------------------------------------ small helpers
+    /** Label and action for the one button. Whether it is <em>shown</em> is {@link #state}'s job. */
     private void button(int labelRes, View.OnClickListener onClick) {
         action.setText(labelRes);
         Haptics.onClick(action, () -> onClick.onClick(action));
-        show(action, true);
     }
 
-    private static void show(View v, boolean visible) {
-        v.setVisibility(visible ? View.VISIBLE : View.GONE);
+    /**
+     * The five pieces that come and go, set in one call so the sheet can animate between states.
+     *
+     * <p>One call rather than five {@code setVisibility}s, because a transition has to be started
+     * <b>before</b> anything changes and exactly once: toggling views one at a time either starts
+     * five overlapping transitions or, worse, starts one and then changes things it has already
+     * captured. Collecting the differences first also means a state that changes nothing animates
+     * nothing, which is what keeps the once-a-second countdown from re-running the motion.
+     *
+     * <p>Call this first in a state, then set the text. {@code beginDelayedTransition} captures the
+     * start values as it is called, so text set beforehand is text the transition thinks was always
+     * there — and the height change it causes would snap while everything around it slid.
+     */
+    private void state(boolean codeShown, boolean progressShown, boolean listShown,
+                       boolean fieldShown, boolean actionShown) {
+        View[] views = {code, progress, list, codeLayout, action};
+        boolean[] want = {codeShown, progressShown, listShown, fieldShown, actionShown};
+        java.util.List<View> changing = new java.util.ArrayList<>();
+        for (int i = 0; i < views.length; i++) {
+            if ((views[i].getVisibility() == View.VISIBLE) != want[i]) changing.add(views[i]);
+        }
+        // Not on the first state, which is applied as the sheet is still sliding up: the entrance is
+        // the animation at that moment, and a second one running inside it reads as a stutter rather
+        // than as a change.
+        if (!changing.isEmpty() && root != null && settled) {
+            TransitionManager.beginDelayedTransition(root, a.visibilityMotion(changing.toArray(new View[0])));
+        }
+        settled = true;
+        for (int i = 0; i < views.length; i++) {
+            views[i].setVisibility(want[i] ? View.VISIBLE : View.GONE);
+        }
     }
 
     // ------------------------------------------------------------------ first run
     /**
-     * The three ways in, offered once, to a device that has no key at all.
-     *
-     * <p>Two real choices and an escape hatch, and the escape hatch is a text button rather than a
-     * third peer of the other two: typing 64 hex characters is what pairing exists to avoid, so
-     * offering it as an equal would be advertising the worst path.
-     *
-     * <p>Not dismissible by tapping outside. A device with no key does nothing at all, so a dialog
-     * that can be waved away leaves the user in front of a settings page with no indication that
-     * anything is required — which is the state this exists to get them out of.
-     */
-    static void firstRun(MainActivity a) {
-        new com.google.android.material.dialog.MaterialAlertDialogBuilder(a)
-                .setTitle(R.string.first_run_title)
-                .setMessage(R.string.first_run_body)
-                .setCancelable(false)
-                .setPositiveButton(R.string.first_run_join, (d, w) -> join(a))
-                .setNegativeButton(R.string.first_run_generate, (d, w) -> generateThenOffer(a))
-                .setNeutralButton(R.string.first_run_manual, (d, w) -> { })
-                .show();
-    }
-
-    /**
      * Make a key, then hand it out — which is what "this is my first device" means: there is nothing
      * to pair with yet, so this device becomes the one the others join.
+     *
+     * <p>Called by {@link MainActivity} with the welcome screen's answer. The choice is presented
+     * there and acted on here, because the sheets belong to the page whose fields they rewrite.
      */
-    private static void generateThenOffer(MainActivity a) {
+    static void generateAndOffer(MainActivity a) {
         try {
             Properties v = new Properties();
             v.setProperty("psk", Crypto.randomPskHex());

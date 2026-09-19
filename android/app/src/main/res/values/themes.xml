@@ -87,22 +87,6 @@
         <item name="colorOnErrorContainer">@color/brand_on_error_container</item>
     </style>
 
-    <!-- Segmented-button segment: normal button type (labelLarge); three labels fit a phone width
-         once minWidth is dropped and the default button padding is trimmed a little.
-         Currently unused — the connection mode it served became two switches — and kept for the
-         device-type selector of docs/p2p-plan.md §2. -->
-    <style name="ClipSync.Segment" parent="Widget.Material3.Button.OutlinedButton">
-        <item name="android:layout_width">wrap_content</item>
-        <item name="android:layout_height">wrap_content</item>
-        <item name="android:layout_weight">1</item>
-        <item name="android:minWidth">0dp</item>
-        <item name="android:paddingStart">10dp</item>
-        <item name="android:paddingEnd">10dp</item>
-        <item name="android:textAppearance">?attr/textAppearanceLabelLarge</item>
-        <item name="android:maxLines">1</item>
-        <item name="android:ellipsize">none</item>
-    </style>
-
     <!-- Inside of every settings card. The switches that govern the groups are rows above their
          cards, not inside them, so every card body holds the same kind of thing and one padding fits. -->
     <style name="ClipSync.CardBody" parent="">

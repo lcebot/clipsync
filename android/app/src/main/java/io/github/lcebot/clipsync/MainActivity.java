@@ -295,8 +295,9 @@ public class MainActivity extends AppCompatActivity {
         browse = findViewById(R.id.browse);
         browseLabel = findViewById(R.id.browse_label);
         // Offers this device's key, rather than going looking for one: a device with the key is the
-        // provider, and a device without it arrives through first run instead.
-        Haptics.onClick(findViewById(R.id.pair), () -> PairSheet.offer(this));
+        // provider, and a device without it goes through the welcome screen instead.
+        Haptics.onClick(findViewById(R.id.pair), () -> { if (needsDiscovery()) PairSheet.offer(this); });
+        Haptics.onClick(findViewById(R.id.setup), () -> welcome.launch(new Intent(this, WelcomeActivity.class)));
         threads = findViewById(R.id.threads);
         threadsLabel = findViewById(R.id.threads_label);
         settingsRoot = findViewById(R.id.settings_root);
@@ -456,20 +457,15 @@ public class MainActivity extends AppCompatActivity {
      */
     private void newPsk() {
         if (Config.checkPsk(text(psk)) != null) {          // nothing usable there to lose
-            psk.setText(randomPskHex());
+            psk.setText(Crypto.randomPskHex());
             return;
         }
         new MaterialAlertDialogBuilder(this)
                 .setTitle(R.string.psk_replace_title)
                 .setMessage(R.string.psk_replace_body)
                 .setNegativeButton(android.R.string.cancel, null)
-                .setPositiveButton(R.string.psk_replace_ok, (d, w) -> psk.setText(randomPskHex()))
+                .setPositiveButton(R.string.psk_replace_ok, (d, w) -> psk.setText(Crypto.randomPskHex()))
                 .show();
-    }
-
-    /** Moved to {@link Crypto}: first run generates one too, and two of these would drift. */
-    private static String randomPskHex() {
-        return Crypto.randomPskHex();
     }
 
     private static boolean bool(String s) {
@@ -504,7 +500,7 @@ public class MainActivity extends AppCompatActivity {
      * SpringAnimation directly and are not wired into androidx.transition — so MaterialFade under its
      * own themed durations is the M3 Expressive answer here.
      */
-    private TransitionSet visibilityMotion(View... fading) {
+    TransitionSet visibilityMotion(View... fading) {
         MaterialFade fade = new MaterialFade();
         ChangeBounds bounds = new ChangeBounds();
         bounds.setDuration(REFLOW_MS);
@@ -789,6 +785,47 @@ public class MainActivity extends AppCompatActivity {
 
     // ------------------------------------------------------------------ pairing (docs/p2p-plan.md §12)
     /**
+     * The welcome screen's answer, brought back to the page whose fields the answer rewrites.
+     *
+     * <p>Registered as a field, which is not decoration: {@code registerForActivityResult} has to be
+     * called before the activity is STARTED, so it cannot live inside a click listener however much
+     * it belongs there.
+     */
+    private final androidx.activity.result.ActivityResultLauncher<Intent> welcome =
+            registerForActivityResult(new androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult(), r -> {
+                if (r.getData() == null) return;             // backed out; nothing was chosen
+                String choice = r.getData().getStringExtra(WelcomeActivity.EXTRA_CHOICE);
+                if (WelcomeActivity.JOIN.equals(choice)) {
+                    if (needsDiscovery()) PairSheet.join(this);
+                } else if (WelcomeActivity.GENERATE.equals(choice)) {
+                    if (needsDiscovery()) PairSheet.generateAndOffer(this);
+                }
+                // MANUAL wants nothing done: the page behind this is the manual setup.
+            });
+
+    /**
+     * Pairing is mDNS at both ends, so it cannot run with local discovery off — turn it on.
+     *
+     * <p>Rather than refusing. The switch is a preference about finding peers; pairing is a thing
+     * the user has just asked for explicitly, and the only reading of "Pair" with discovery off is
+     * that they want both. Said out loud, because a control quietly changing another one is worse
+     * than either refusing or asking.
+     *
+     * <p>Applied to the form, not the file: Apply is what writes, everywhere on this page, and
+     * pairing itself does not need the setting saved to work — {@link PairProvider} advertises on
+     * its own. What this buys is the state after pairing being the one the user can see.
+     *
+     * @return true always, so callers read as "if we may, go" — the false case would be a refusal,
+     *         and there is no case in which this refuses
+     */
+    private boolean needsDiscovery() {
+        if (!discovery.isChecked()) {
+            discovery.setChecked(true);              // its listener reflows the page and validates
+            snack(R.string.pair_turned_discovery_on);
+        }
+        return true;
+    }
+    /**
      * A new key has been written to the file, so the form is showing the old one.
      *
      * <p>{@link #loadFields} rather than setting the PSK field directly: pairing turns discovery on
@@ -833,7 +870,7 @@ public class MainActivity extends AppCompatActivity {
      */
     private void offerFirstRunIfUnconfigured() {
         if (Config.checkPsk(Config.raw(this).getProperty("psk", "")) == null) return;
-        PairSheet.firstRun(this);
+        welcome.launch(new Intent(this, WelcomeActivity.class));
     }
 
     /** Above whichever FAB pair is on screen, above the navigation bar otherwise. */

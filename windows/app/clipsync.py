@@ -83,7 +83,6 @@ from clipsync_node import declaration, node_id, node_name, short_id   # noqa: E4
 # the protocol's vocabulary and the whole file refers to them unqualified — `__all__` over there is
 # what keeps that honest.
 from clipsync_proto import *   # noqa: E402,F403
-from clipsync_proto import SecureChannel, hkdf_sha256   # noqa: E402,F401  (named, for the reader)
 
 MAP_SAVE_EVERY = 8         # persist the received-chunk bitmap every N chunks
 WANT_RETRIES = 3           # how often the receiver re-asks for missing chunks in one session
@@ -159,13 +158,6 @@ if sys.stdout is not None:          # absent under pythonw.exe
     _handlers.append(logging.StreamHandler(sys.stdout))
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", handlers=_handlers)
 log = logging.getLogger("clipsync")
-
-
-# ----------------------------------------------------------------------------- crypto
-# hkdf_sha256 and SecureChannel now live in clipsync_proto, imported above.  They moved because the
-# pairing joiner needs them and cannot import this module: the rule that keeps these three files
-# apart is that importing clipsync.py configures logging and registers a clipboard format, so
-# everything reusable has to live somewhere that does neither.
 
 
 def nchunks(size: int) -> int:

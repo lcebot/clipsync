@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Setting up ClipSync, as a screen rather than a dialog.
+
+     It was a dialog, and the giveaway that it should not have been is the thing that was wrong with
+     it: its text sat at different distances from the two edges, because a dialog's own padding is
+     not symmetric and anything laid out inside it inherits that. A screen has no such inheritance —
+     ONE gutter value here, @dimen/welcome_gutter, used by every child of both pages, and nothing
+     else sets a horizontal margin at all.
+
+     Both pages exist in the tree at once and are swapped by visibility, so MaterialSharedAxis can
+     animate between them: it is a Visibility transition, and a page that is not in the start scene
+     is a page that enters. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/welcome_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="?attr/colorSurface"
+    android:fitsSystemWindows="true">
+
+    <!-- ===== page 1: what this is ===== -->
+    <LinearLayout
+        android:id="@+id/page_intro"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:paddingHorizontal="@dimen/welcome_gutter"
+        android:paddingVertical="32dp">
+
+        <!-- The hero, in a tonal circle. A bare glyph on a surface reads as an icon that lost its
+             button; the container is what makes it a picture. -->
+        <FrameLayout
+            android:id="@+id/intro_hero"
+            android:layout_width="120dp"
+            android:layout_height="120dp"
+            android:layout_gravity="center_horizontal"
+            android:layout_marginTop="24dp"
+            android:background="@drawable/welcome_hero"
+            android:elevation="0dp">
+
+            <ImageView
+                android:layout_width="56dp"
+                android:layout_height="56dp"
+                android:layout_gravity="center"
+                android:src="@drawable/ic_pair"
+                android:importantForAccessibility="no"
+                android:tint="?attr/colorOnPrimaryContainer" />
+        </FrameLayout>
+
+        <TextView
+            android:id="@+id/intro_title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="40dp"
+            android:textAppearance="?attr/textAppearanceDisplaySmall"
+            android:textColor="?attr/colorOnSurface"
+            android:text="@string/welcome_title" />
+
+        <TextView
+            android:id="@+id/intro_body"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:lineSpacingExtra="4dp"
+            android:textAppearance="?attr/textAppearanceBodyLarge"
+            android:textColor="?attr/colorOnSurfaceVariant"
+            android:text="@string/welcome_body" />
+
+        <Space
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/intro_next"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/welcome_next" />
+    </LinearLayout>
+
+    <!-- ===== page 2: the choice ===== -->
+    <LinearLayout
+        android:id="@+id/page_choose"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:paddingHorizontal="@dimen/welcome_gutter"
+        android:paddingVertical="32dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/choose_title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:textAppearance="?attr/textAppearanceHeadlineMedium"
+            android:textColor="?attr/colorOnSurface"
+            android:text="@string/welcome_choose_title" />
+
+        <TextView
+            android:id="@+id/choose_body"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:lineSpacingExtra="4dp"
+            android:textAppearance="?attr/textAppearanceBodyLarge"
+            android:textColor="?attr/colorOnSurfaceVariant"
+            android:text="@string/welcome_choose_body" />
+
+        <Space
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1" />
+
+        <!-- Filled, then tonal, then text: the emphasis ladder IS the recommendation. Taking the key
+             from a device that has it is what almost everyone should do, making one is what the
+             first device does once, and typing 64 hex characters is what pairing exists to avoid —
+             so it is a text button, present but never suggested. -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/choose_join"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/first_run_join" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/choose_generate"
+            style="?attr/materialButtonTonalStyle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="@string/first_run_generate" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/choose_manual"
+            style="?attr/borderlessButtonStyle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/first_run_manual" />
+    </LinearLayout>
+</FrameLayout>

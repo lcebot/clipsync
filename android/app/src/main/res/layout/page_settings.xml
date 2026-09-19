@@ -129,6 +129,31 @@
                     android:layout_marginTop="4dp"
                     android:text="@string/psk_generate"
                     app:icon="@drawable/ic_dice" />
+
+                <!-- The three ways to end up with a key, one per line, in the order of how much
+                     work they are: make one, take one from a device that has it, or be walked
+                     through the choice. They belong together because that is the decision the user
+                     is making at this field, which is also why pairing moved here out of the
+                     discovery card (docs/p2p-plan.md §12 put it there because pairing *is* mDNS —
+                     true, and the weaker pull: a control belongs next to the thing it changes, and
+                     what pairing changes is the key). The switch it no longer sits under is handled
+                     in MainActivity instead: tapping Pair turns discovery on rather than failing.
+
+                     0dp between them, not 4dp: each carries its own 4dp container inset top and
+                     bottom, so consecutive buttons already stand 8dp apart — the same gap the text
+                     fields leave. Adding margin here would make the group looser than the fields
+                     above it and break the rhythm of the card. -->
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/pair"
+                    style="@style/ClipSync.SettingsButton"
+                    android:text="@string/pair_button"
+                    app:icon="@drawable/ic_pair" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/setup"
+                    style="@style/ClipSync.SettingsButton"
+                    android:text="@string/setup_button"
+                    app:icon="@drawable/ic_setup" />
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
@@ -310,18 +335,6 @@
                     app:labelBehavior="floating"
                     app:tickVisible="true" />
 
-                <!-- In this card, not beside it: pairing *is* mDNS — a browse on one side and an
-                     advertisement on the other — so it belongs to local discovery rather than next
-                     to it, and with the switch off the button would promise something that cannot
-                     run. The label says "pair", matching what the mechanism is called everywhere
-                     else (_clipsync-pair._tcp, PAIR_ASK, "the pairing window"); a separate
-                     user-facing word would only mean the log, the sheet and this page each naming
-                     the same act differently. (docs/p2p-plan.md §12) -->
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/pair"
-                    style="@style/ClipSync.SettingsButton"
-                    android:layout_marginTop="8dp"
-                    android:text="@string/pair_button" />
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 

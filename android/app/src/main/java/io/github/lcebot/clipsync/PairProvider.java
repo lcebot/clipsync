@@ -53,6 +53,15 @@ final class PairProvider implements Closeable {
     private final byte[] key;
     /** Shown to the user, typed on the other device. */
     final String code;
+    /**
+     * When the window will close, by the same clock a countdown would read.
+     *
+     * <p>Published rather than recomputed by the UI, because the two would not agree: the key
+     * derivation is deliberately slow, so by the time a sheet hears about this object the window has
+     * already been open for a fraction of a second. A countdown started from "now" would run late
+     * and still be showing seconds after the socket had timed out.
+     */
+    final long closesAt;
     private Mdns.Advert advert;
     private volatile boolean closed;
     private int failures;
@@ -85,6 +94,9 @@ final class PairProvider implements Closeable {
                 Map.of(Pairing.TXT_VERSION, String.valueOf(Connection.PROTOCOL_VERSION),
                         Pairing.TXT_SALT, Pairing.hex(salt)));
 
+        // Stamped here, immediately before the accept loop starts counting: everything above this
+        // line has already spent some of the window.
+        closesAt = System.currentTimeMillis() + Pairing.WINDOW_MS;
         Thread t = new Thread(this::run, "clipsync-pair-provider");
         t.setDaemon(true);
         t.start();

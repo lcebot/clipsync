@@ -7,9 +7,9 @@ import java.lang.reflect.Method;
 
 /**
  * Everything the system_server module does, independent of the Xposed API that loaded it.
- * {@link Entry} (libxposed API 102, the active entry) installs the hooks and calls into here;
- * {@link LegacyEntry} is the same set for the classic API, kept as reference without an entry
- * declaration. Must not reference any Xposed API.
+ * {@link Entry} installs the hooks and calls into here. Must not reference any Xposed API — that
+ * separation is what let a second entry point exist for the classic API, and is worth keeping now
+ * that it does not: the logic is testable and readable without an Xposed type in sight.
  *
  * <ul>
  *   <li>Clipboard: writes are allowed without focus on every release, so "writing works in the

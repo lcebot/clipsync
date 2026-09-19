@@ -130,8 +130,26 @@ public class SyncService extends Service {
         for (Dialer d : snapshotDialers()) {
             Link l = d.live;
             if (l != null && l.isOpen()) continue;
-            targets.add(Status.target(isMdns(d.target) ? instanceOf(d.target) : d.target,
-                    d.lastError, d.lastWhy));
+            String name = isMdns(d.target) ? instanceOf(d.target) : d.target;
+            // Asked of the live map, not of what this dialler last wrote down.
+            //
+            // A dialler knows only about its own link, and since this device started accepting there
+            // is a second way for its peer to be connected: the peer dials *us*. A phone that went
+            // idle and then woke does exactly that — so it appears under "on this network" while the
+            // dialler that used to reach it is still holding the words "Idle — screen off", and goes
+            // on holding them until it next wakes, dials, loses the dedup and rewrites itself. Up to
+            // a minute of the sheet saying a device is both connected and not.
+            //
+            // This is the same rule the state string already follows and this list did not: derive
+            // it, never remember it. The peer map is the truth about who is connected; a dialler's
+            // memory is only the truth about its own last attempt.
+            Link byOther = d.lastPeerId == null ? null : byPeer.get(d.lastPeerId);
+            if (byOther != null && byOther.isOpen()) {
+                targets.add(Status.target(name, getString(R.string.peer_same_as, byOther.target),
+                        Status.Why.NOTED));
+                continue;
+            }
+            targets.add(Status.target(name, d.lastError, d.lastWhy));
         }
         // Discovery itself, when it is on and has nothing to show for it. Without this the sheet is
         // simply empty in exactly the case someone opens it to understand: the switch is on, no peer
@@ -1527,6 +1545,15 @@ public class SyncService extends Service {
                 // BYE once per back-off is the most expensive way possible to learn something we
                 // already know. It lapses the moment the winning link closes, so this is a deferral
                 // and not a surrender — if the other route dies, this one takes over.
+                // Already connected by another route — most often because the peer dialled us while
+                // this dialler was waiting out its back-off. Adopting that link as the one to defer
+                // to costs nothing and saves the round trip this would otherwise make to be told the
+                // same thing: connect, handshake, lose the dedup, BYE. The deferral lapses when that
+                // link closes, exactly as it does when this dialler loses a tiebreak itself.
+                if (deferredTo == null && lastPeerId != null) {
+                    Link other = byPeer.get(lastPeerId);
+                    if (other != null && other.isOpen()) deferredTo = other;
+                }
                 Link held = deferredTo;
                 if (held != null && held.isOpen()) {
                     // Quietly: this is not a retry, and logging "retry in 60s" once a minute for a

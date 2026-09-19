@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The welcome screen's one horizontal measurement.
+         Named and shared rather than repeated per view, because the fault it replaces was exactly
+         that: the dialog it grew out of had text at different distances from its two edges, and no
+         single place said what the distance was supposed to be. -->
+    <dimen name="welcome_gutter">24dp</dimen>
+</resources>

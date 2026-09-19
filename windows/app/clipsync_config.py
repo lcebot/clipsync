@@ -1,16 +1,13 @@
 """
 ClipSync - Windows configuration: defaults, parsing, validation, and writing config.json.
 
-**JSON, not an ini.** The ini existed to carry a paragraph of explanation above every key, because a
-text editor was the only way to change anything. configurator.py is that explanation now, so the file
-underneath it should be the one that is cheapest to read and write correctly — which means native
-types instead of strings-that-mean-numbers, a real list instead of a comma-joined one, and a parser
-from the standard library instead of the hand-rolled splitter that was here. A key written twice, a
-BOM, a value containing a comma, an in-place rewrite that had to preserve comments: all of it stops
-being a problem the moment the file stops pretending to be prose.
+**JSON, and configurator.py is the documentation.** The file underneath a settings window should be
+the one that is cheapest to read and write correctly — native types instead of strings-that-mean-
+numbers, a real list instead of a comma-joined one, a parser from the standard library. A key written
+twice, a BOM, a value containing a comma, an in-place rewrite that has to preserve comments: none of
+it is a problem for a file that is not pretending to be prose.
 
-**Nothing here migrates anything**, from the old ini or from what `peers` used to mean — see the note
-above the field checks, and docs/p2p-plan.md §10.
+**Nothing here migrates anything** — see the note above the field checks, and docs/p2p-plan.md §10.
 
 Split out of clipsync.py so that `configurator.py` can import the rules rather than restate them.
 Importing clipsync.py is not an option for a settings window: it configures logging into the
@@ -70,8 +67,8 @@ TRUE_WORDS = ("1", "true", "yes", "on")
 
 
 def as_bool(v) -> bool:
-    """Tolerant on purpose: the value is a real bool in config.json, but a hand-edit or an import
-    from the old ini can hand this a string, and "0" is not falsey."""
+    """Tolerant on purpose: the value is a real bool in config.json, but a hand-edit can hand this a
+    string, and "0" is not falsey."""
     if isinstance(v, bool):
         return v
     return str(v).strip().lower() in TRUE_WORDS
@@ -110,17 +107,14 @@ def read_config(path: str = CONFIG_PATH) -> dict:
     return raw
 
 
-# No migration is written, from the old clipsync.ini or from what `peers` used to mean before §4a.
-# That is docs/p2p-plan.md §10's rule and there is no exception to it here: the release notes say to
-# set the devices up again, and this file reads what it finds and nothing else.
+# No migration is written, for anything, ever. That is docs/p2p-plan.md §10's rule and there is no
+# exception to it here: this file reads what it finds and nothing else.
 #
-# Two attempts at being helpful were removed rather than kept, and both are worth remembering. The
-# ini import looked free until config.json existed, at which point it was unreachable code claiming
-# to protect people it could no longer reach. The peers-to-own_addresses move was worse: it turned
-# `direct` off, which can leave both paths off, which check_all refuses — so a configuration that
-# worked became a service that exits at start-up. Migration code is a second, rarely exercised way
-# to be wrong about a file, and the cost of carrying it is permanent while the reconfiguration it
-# saves takes a minute once.
+# Worth keeping because it is what stops the idea coming back. One attempt at being helpful, moving
+# names out of `peers` into `own_addresses`, also turned `direct` off -- which can leave both paths
+# off, which check_all refuses -- so a configuration that worked became a service that exits at
+# start-up. Migration code is a second, rarely exercised way to be wrong about a file, and the cost
+# of carrying it is permanent while the reconfiguration it saves takes a minute once.
 
 
 def write_config(values: dict, path: str = CONFIG_PATH) -> None:

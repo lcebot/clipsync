@@ -221,9 +221,9 @@ public final class Connection implements AutoCloseable {
     /**
      * One listed address. Resolves and connects to that name and nothing else.
      *
-     * <p>This replaces the constructor that raced every target and kept the first — see
-     * {@link #connectAny}, which is gone. Racing was right while the device held one connection and
-     * is exactly wrong now: the losers it closed are the other peers.
+     * <p>Deliberately not a race across every target: the losers such a race closes are the other
+     * peers. {@link #connectDirect} still tries every address <em>that one name</em> resolves to,
+     * which is the only sense in which alternatives exist here.
      */
     public static Connection toPeer(Context ctx, Config cfg, String peer, Network net) throws Exception {
         return new Connection(cfg.psk, cfg.maxFrame(), cfg.port,
@@ -425,18 +425,16 @@ public final class Connection implements AutoCloseable {
         return theirs;
     }
 
-    /** The peer reached by this connection turned out to be this device. */
+    /**
+     * The peer reached by this connection turned out to be this device.
+     *
+     * <p>Carries no address of its own: the dialler marks the target it was <em>dialling</em>, which
+     * is the string its own map is keyed by, and not the name this connection happened to reach.
+     * The two differ for a discovery target, and the one that stops the redial is the dialler's.
+     */
     public static final class SelfConnection extends IOException {
-        private final String target;
-
         SelfConnection(String target) {
             super("that is this device: " + target);
-            this.target = target;
-        }
-
-        /** The address or service name that led here, so the caller can stop dialling it. */
-        public String target() {
-            return target;
         }
     }
 
@@ -495,19 +493,6 @@ public final class Connection implements AutoCloseable {
         txKey = inbound ? s2c : c2s;
         rxKey = inbound ? c2s : s2c;
     }
-
-    // connectAny() and firstToConnect() are gone with the single connection they served. They raced
-    // every listed address and the LAN together and kept whichever answered first, closing the rest
-    // — which was the right shape for a device that held one link and is precisely the wrong one for
-    // a device that holds several: the sockets it threw away are the other peers. What it did well
-    // survives, in two pieces that each race only the things that really are alternatives to each
-    // other: toPeer() resolves one name (getAllByName already tries every address that name has),
-    // and toInstance() races the addresses of one advertised peer.
-    //
-    // The failover it gave for free — a listed address that is down costing nothing but its own
-    // timeout, in parallel with the others — survives too, and is now structural: every target has
-    // its own dialer and its own back-off, so a dead one cannot delay a live one at all rather than
-    // merely not delaying it much.
 
     /**
      * Resolve fresh every time — the address behind a name can move, which is the whole point of a

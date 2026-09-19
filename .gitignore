@@ -8,11 +8,18 @@ android/build/
 android/app/build/
 android/local.properties
 android/.idea/
-# windows/clipsync.ini is deliberately NOT ignored: the repository carries a blank one, and the
-# release zip is built from it. Being tracked, it is also the one file .gitignore cannot protect
-# from your own edits — keep local values out of commits with
-#     git update-index --skip-worktree windows/clipsync.ini
-windows/clipsync.log
+# windows/app/config.json holds the PSK and is never committed. No template is carried either: the
+# settings window opens on the defaults when the file is absent and writes a complete one on Apply,
+# so there was nothing for a committed copy to do except be the one tracked file that could leak a
+# key. The release workflow fails if it ever reappears there.
+#
+# The paths follow clipsync_config.py, which resolves both config.json and clipsync.log from its own
+# folder — so they moved into app/ when it did. install-state.json stays at the top because it
+# belongs to install.ps1, which stayed too.
+windows/app/config.json
+windows/app/config.json.tmp
+windows/app/clipsync.log
+windows/app/clipsync.log.old
 windows/install-state.json
-windows/received/
+windows/app/received/
 __pycache__/

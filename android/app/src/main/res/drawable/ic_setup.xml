@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A four-pointed sparkle: "walk me through it".
+
+     Filled and concave-sided, which is the shape M3 Expressive uses wherever something is done
+     *for* you rather than by you. A checklist would be the literal reading of a setup wizard and
+     the wrong one — the wizard exists so that there is no list to work through.
+
+     The large star is drawn with quadratic curves pulling each edge towards the centre, so the
+     points stay sharp at 24dp; a straight-edged star of the same proportions reads as a plus sign
+     at small sizes. The small one off the shoulder is what stops it looking like a compass rose. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+
+    <!-- Centred at (10.5, 13.5), points 9.5 out, control points 2.4 off the centre so every edge
+         pulls inwards by the same amount. Down and left of true centre to leave the small one its
+         corner; the pair is the shape, not the big star alone. -->
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M10.5,4 Q12.9,11.1 20,13.5 Q12.9,15.9 10.5,23 Q8.1,15.9 1,13.5 Q8.1,11.1 10.5,4 z" />
+
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M18.75,2 Q19.35,4.4 21.75,5 Q19.35,5.6 18.75,8 Q18.15,5.6 15.75,5 Q18.15,4.4 18.75,2 z" />
+</vector>

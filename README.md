@@ -61,58 +61,56 @@ The release contains two files:
 | File | What it is |
 |---|---|
 | `app-release.apk` | The Android app and Xposed module |
-| `windows.zip` | The PC side: `clipsync.py`, `install.ps1`, `uninstall.ps1`, `requirements.txt`, `clipsync.ini` |
+| `windows.zip` | The PC side: `configurator.py`, `install.ps1`, `uninstall.ps1`, and `app\` — the service and everything it imports |
 
 ---
 
 ## Setup
 
-### 1. Make a shared key
+You do **not** need to make a key by hand. One device makes it and the rest take it over the network;
+the six-digit code shown on the first device is what authorises the handover.
 
-Run this once, anywhere Python is installed, and keep the output.
-
-```
-python -c "import os;print(os.urandom(32).hex())"
-```
-
-### 2. Windows
+### 1. Windows
 
 Unzip `windows.zip` somewhere permanent (it runs from where you put it), then:
 
 ```powershell
-pip install -r requirements.txt
-```
-
-> `pillow` is optional. Without it, received images arrive as files instead of pasting as pictures.
-
-Next, open `clipsync.ini`, paste the key into `psk`, and put the address your devices will use to
-reach this PC into `peers` — a DDNS name, a static address, whatever applies. Leave it empty for a
-LAN-only setup: `discovery = 1` is enough to be found on the local network.
-
-Then, in an **elevated** PowerShell:
-
-```powershell
-Set-ExecutionPolicy -Scope Process Bypass
 .\install.ps1
 ```
 
-`install.ps1` opens the firewall ports and registers a task that starts ClipSync when you log in.
-It changes nothing else, and `.\uninstall.ps1` reverts exactly those changes. Your config, logs and
-received files are left alone.
+It asks for administrator rights itself — double-clicking is fine. It installs the Python packages it
+needs, opens the firewall ports, registers a task that starts ClipSync when you log in, and opens the
+settings window. It changes nothing else, and `.\uninstall.ps1` reverts exactly those changes: your
+config, logs, received files and Python packages are left alone (the packages are listed so you can
+remove them yourself if nothing else wants them).
 
-### 3. Android (on each device)
+In the settings window, either:
+
+- **Generate random PSK key**, if this is your first device — then **Share this key…** when you set
+  up the next one; or
+- **Pair with a device…**, if a phone is already set up: tap **Pair a new device** there, and type the
+  six digits it shows.
+
+If your devices will reach this PC at an address, turn on **Direct connections** and add it — a DDNS
+name, a static address, whatever applies. For a LAN-only setup there is nothing to add: **Local
+network discovery** is enough to be found. Press **Apply**.
+
+### 2. Android (on each device)
 
 1. Install `app-release.apk`.
 2. *(rooted devices)* In **LSPosed**, enable **ClipSync** with scope **System Framework**, then
    **reboot**. On a device without root, everything except background clipboard *reading* works anyway.
-3. Open the app. Fill in the **PSK** — **Generate random PSK key** makes one on the first device —
-   and, to reach a PC that is not on this network, turn on **Direct connections** and add its address.
+3. Open the app. It walks you through setup the first time — choose **I have another ClipSync
+   device** and enter the code the other one is showing, or **This is my first device** to make a key
+   and hand it out. **Set up ClipSync** in Settings opens the same thing again later.
+4. To reach a PC that is not on this network, turn on **Direct connections** and add its address.
    **Local network discovery** needs nothing configured. Then press **Apply** or **Start**.
-4. If the app shows a battery card, tap **Allow**. It keeps Android from suspending the connection.
+5. If the app shows a battery card, tap **Allow**. It keeps Android from suspending the connection.
 
-The status chip in the top-right corner tells you where you stand: `Stopped`, or the kind of
-connection that is live (`mDNS`, `Direct (LAN)`, `Direct (Internet)`). Tap it for the PC's name and
-address. The **Log** tab shows everything as it happens.
+The status chip in the top-right corner tells you where you stand: `Stopped`, `No network`,
+`Connecting…`, `Idle` while the screen is off, or `Connected (n)`. Tap it for a card per device —
+its name, id, type and address — and, below those, every configured target that is *not* connected
+with the reason why. The **Log** tab shows everything as it happens.
 
 ---
 
@@ -133,8 +131,9 @@ address. The **Log** tab shows everything as it happens.
 
 ## Settings
 
-Everything below is in the app's **Settings** tab, and most of it also exists in `clipsync.ini` on
-the PC. Fields are validated as you type, and the **Apply** button stays disabled until they are all valid.
+Everything below is in the app's **Settings** tab, and most of it also exists on the PC — in
+`python configurator.py`, which writes `config.json`. Fields are validated as you type on both, and
+**Apply** stays disabled until they are all valid.
 
 | Setting | Default | Notes |
 |---|---|---|
@@ -142,6 +141,7 @@ the PC. Fields are validated as you type, and the **Apply** button stays disable
 | PSK | — | 64 hex characters, identical on every device. **Generate random PSK key** under the field makes one |
 | Local network discovery | on | Find peers on this network by mDNS. Needs no configuration |
 | Direct connections | off | Connect to addresses you list. A host name or a literal IPv4/IPv6 address — dynamic DNS is one option, not a requirement |
+| This device's addresses | empty | Names that point at *this* device, if any. ClipSync uses them to recognise itself, so it never dials itself and refuses one of them typed into the list above |
 | mDNS browse timeout | 4 s | How long to look for the PC on the LAN before giving up |
 | Max text | 1 MB | Larger clips are not sent |
 | Max file (Internet) | 10 MB | |
@@ -166,7 +166,9 @@ Settings are saved on the device and survive reboots and updates.
 | The app logs `process was suspended for ~N s` | Android froze the sync process. Tap **Allow** on the battery card, and grant autostart / remove background restrictions in your ROM's settings. On a rooted device, also check that LSPosed still has the module enabled as the freezer exemption is part of the module. |
 
 If something still looks wrong, the **Log** tab has a **Copy** button; that log is what to attach to
-an issue.
+an issue. On the PC the same record is `clipsync.log` next to `clipsync.py`. It is capped at 128 KB:
+when it fills, it becomes `clipsync.log.old` and a fresh one starts, so there is always roughly the
+last two files' worth and never a log that grows without end.
 
 ## Privacy and security
 
@@ -184,7 +186,7 @@ an issue.
 Everything here is built from this repository by GitHub Actions; see
 [`.github/workflows/build-apk.yml`](.github/workflows/build-apk.yml) for the exact steps, and
 [`android/`](android/) for the Gradle project. The PC side is a single Python file with no build
-step at all. Read [`windows/clipsync.py`](windows/clipsync.py) before you run it.
+step at all. Read [`windows/app/clipsync.py`](windows/app/clipsync.py) before you run it.
 
 ## License
 

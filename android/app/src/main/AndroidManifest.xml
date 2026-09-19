@@ -20,7 +20,7 @@
         android:roundIcon="@mipmap/ic_launcher_round">
 
         <!-- libxposed API 102 module: declared by META-INF/xposed/* (java_init.list, scope.list,
-             module.prop). No classic-API meta-data here, so LegacyEntry stays dormant. -->
+             module.prop). Nothing to declare here — the classic API is not supported. -->
 
 
         <activity
@@ -32,6 +32,14 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Not exported: it is reached from Settings and from the first run, never from outside.
+             parentActivityName so the system knows where up goes, even though the only way out is
+             a choice or Back. -->
+        <activity
+            android:name=".WelcomeActivity"
+            android:exported="false"
+            android:parentActivityName=".MainActivity" />
 
         <!-- specialUse: no 6h/24h cap (unlike dataSync on Android 15).
              Own process (":sync"): swiping the UI task away or a ROM killing the main process

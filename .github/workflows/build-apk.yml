@@ -160,8 +160,9 @@ jobs:
         # unquoted on purpose: empty on a branch build, two -P flags on a release
         run: gradle assembleRelease --no-daemon $VERSION_ARGS
 
-      # The PC side ships as a zip built from a named list — never by zipping the folder, which
-      # would sweep up clipsync.log, install-state.json, config.json and received/ as well.
+      # The PC side ships as a zip of the source tree with the generated files stripped, rather than
+      # a zip of the folder as it stands: the folder also holds clipsync.log, install-state.json and
+      # config.json, none of which belong in a download.
       #
       # NO config.json SHIPS, and none is committed. configurator.py opens on the defaults when the
       # file is absent and writes a complete one on Apply, so a template bought nothing — while being
@@ -174,14 +175,20 @@ jobs:
       - name: package the PC side
         working-directory: windows
         run: |
-          if [ -e config.json ]; then
-            echo "windows/config.json is committed. It must not be: it is the only file here that"
-            echo "can hold a PSK, and the settings window creates it locally on first Apply."
+          if [ -e app/config.json ]; then
+            echo "windows/app/config.json is committed. It must not be: it is the only file here"
+            echo "that can hold a PSK, and the settings window creates it locally on first Apply."
             exit 1
           fi
+          # Copied as a tree, not as a list of names: the list was a second place to remember a new
+          # module in, and it had already been forgotten once (clipsync_proto and clipsync_pair were
+          # added without it). --include-from would be the same trap. What ships is what the folder
+          # holds, minus the things that are generated.
           mkdir -p "$RUNNER_TEMP/pc"
-          cp clipsync.py clipsync_config.py clipsync_node.py configurator.py \
-             install.ps1 uninstall.ps1 requirements.txt "$RUNNER_TEMP/pc/"
+          cp configurator.py install.ps1 uninstall.ps1 "$RUNNER_TEMP/pc/"
+          cp -r app "$RUNNER_TEMP/pc/app"
+          rm -f "$RUNNER_TEMP/pc/app"/clipsync.log* "$RUNNER_TEMP/pc/app/config.json"
+          rm -rf "$RUNNER_TEMP/pc/app/__pycache__"
           (cd "$RUNNER_TEMP/pc" && zip -q -r "$RUNNER_TEMP/windows.zip" .)
 
       # Everything that ships is staged in one flat folder first. upload-artifact keeps the common

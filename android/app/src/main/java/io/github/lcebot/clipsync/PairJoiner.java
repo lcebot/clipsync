@@ -73,9 +73,20 @@ final class PairJoiner {
         // device, not several devices. Tried in turn rather than raced, because a pairing attempt is
         // not free — each failure that reaches the far end spends one of its five.
         for (InetSocketAddress addr : provider.addrs) {
-            Connection c = null;
+            // The connect is separated from everything after it, and the split is exactly where the
+            // meaning changes. Only reaching the address can fail in a way another address might
+            // fix; once the socket is open we are talking to the device, and the nonce exchange
+            // inside pairTo is plaintext — so a failure past this point is the code being wrong,
+            // which every address would report identically while spending one of the provider's
+            // five attempts each time.
+            Connection c;
             try {
                 c = Connection.pairTo(addr, key, net);
+            } catch (Exception e) {
+                last = e instanceof IOException ? (IOException) e : new IOException(e);
+                continue;
+            }
+            try {
                 c.sendPairHello(ctx);
                 c.send(Connection.T_PAIR_ASK);
                 Connection.Frame f = c.recv();
@@ -86,19 +97,18 @@ final class PairJoiner {
                 if (bad != null) throw new IOException("the key it sent is not usable: " + bad);
                 Logger.i("pairing: got the key from " + m.optString("device", "?"));
                 return new Result(psk, m.optString("device", "?"), m.optString("type", "?"));
-            } catch (IOException e) {
-                last = e;                       // could not reach this one; another address may work
             } catch (Exception e) {
-                // Reached it, and the channel would not open — a decrypt failure, which is what a
-                // wrong code looks like and the only thing it can look like. Every address of this
-                // provider fails identically, and each attempt spends one of its five, so stopping
-                // here is the difference between one wasted try and all of them.
+                // Not split by exception type any more, and that was the bug: a provider that cannot
+                // decrypt closes the socket, so a wrong code surfaces here as an EOFException —
+                // an IOException, which the old catch read as "unreachable" and retried at the next
+                // address before reporting that nothing answered. A right code and a wrong one were
+                // indistinguishable in the message, and both spent every attempt.
                 throw new IOException("wrong code, or the pairing window has already closed", e);
             } finally {
-                if (c != null) c.close();
+                c.close();
             }
         }
-        throw last != null ? last : new IOException("no address answered");
+        throw last != null ? last : new IOException("could not reach it");
     }
 
     /**
