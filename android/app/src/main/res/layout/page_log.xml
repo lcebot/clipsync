@@ -9,17 +9,24 @@
     android:layout_height="match_parent"
     android:background="?attr/colorSurfaceContainerLow"
     android:clipToPadding="false"
-    android:paddingBottom="80dp"
+    android:paddingBottom="@dimen/fab_clearance"
     android:scrollbars="vertical"
     android:visibility="gone">
 
+    <!-- textSize is 12sp, not 11, and it is a number rather than a type-scale token on purpose.
+         The log wants density — a wrapped timestamp costs the reader more than a small font does —
+         but 11sp was below the size at which text is legible to anyone who needs it to be, and it
+         bought one sp of width. 12sp is that floor. A ?attr/textAppearance* token would bring a font
+         family and a letter spacing with it, and a log has to stay monospace for its columns to line
+         up, which is why this one control states its size itself. It still scales with the system
+         font setting; sp is what guarantees that. -->
     <TextView
         android:id="@+id/log"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:padding="12dp"
+        android:padding="@dimen/log_gutter"
         android:fontFamily="monospace"
         android:textIsSelectable="true"
-        android:textSize="11sp"
+        android:textSize="12sp"
         android:textColor="?attr/colorOnSurface" />
 </androidx.core.widget.NestedScrollView>

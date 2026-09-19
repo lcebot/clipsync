@@ -4,7 +4,6 @@ import android.content.Context;
 
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -27,6 +26,28 @@ import java.util.Set;
  * discovery} asks the local network (mDNS), {@code direct} works through the {@code peers} list.
  * They are named for how a peer is found, not for the route taken to it — a listed address is very
  * often a LAN address too. At least one of them has to be on.
+ *
+ * <h2>Why the PSK is still in a plain text file</h2>
+ *
+ * <p>{@code psk}, {@code psk_next} and {@code psk_old} are the keys to the user's clipboard, and
+ * they sit in this file as hex. The obvious hardening — {@code EncryptedSharedPreferences}, or
+ * wrapping the value with a Keystore key — was evaluated and <b>rejected on a constraint, not on
+ * effort</b>: {@code SyncService} runs in its own {@code :sync} process and the UI runs in the main
+ * one, and <em>both</em> read and write this file. {@code EncryptedSharedPreferences} is explicitly
+ * not multi-process safe (neither is plain {@code SharedPreferences}); two processes with it open
+ * lose writes and can corrupt the store, which for the file that carries the PSK means a device
+ * that has to be paired again. Key rotation makes that worse, not better, because the service
+ * rewrites the schedule whenever a peer reports one. A Keystore-wrapped blob inside this same file
+ * would keep the atomic-rename write and survive the two processes, but it buys very little: what
+ * it defends against is an attacker who can already read {@code /data/data/<pkg>/files}, which on a
+ * non-rooted device is nobody, and on a rooted one is somebody who can also ask Keystore to
+ * unwrap it as this app.
+ *
+ * <p>So the protection is the three things that actually apply here: the file lives in the app's
+ * private directory, {@code android:allowBackup="false"} keeps it out of cloud and adb backups,
+ * and it is written through {@link Files#atomicWrite} so it is never observed half-written. The key
+ * material in {@code String} form is deliberately confined to this class, {@link Keys.Schedule} and
+ * the pairing exchange — everywhere else it is a {@code byte[]} that can be, and is, zeroed.
  */
 public final class Config {
     public static final String FILE = "clipsync.conf";
@@ -40,7 +61,7 @@ public final class Config {
     public final boolean discovery;     // look for peers on the local network (mDNS)
     /**
      * The names and literals that point at THIS device — typically a domain a dynamic DNS client
-     * here keeps pointed at it. See docs/p2p-plan.md §4a. Read whether or not {@link #direct} is on:
+     * here keeps pointed at it. Read whether or not {@link #direct} is on:
      * it is what the node knows itself by, which stays true when it is dialling nobody.
      */
     public final List<String> ownAddresses;
@@ -58,10 +79,10 @@ public final class Config {
     public final int threads;           // parallel data connections per file transfer (1,2,4,8,16)
     public final String filesDir;       // absolute path on internal storage where received files go
     public final String relativePath;   // the same as a MediaStore RELATIVE_PATH ("Download/ClipSync")
-    /** Whether this device replaces its key on a schedule at all (docs/p2p-plan.md §17). */
+    /** Whether this device replaces its key on a schedule at all; {@link Keys} holds the schedule. */
     public final boolean rotate;
     /**
-     * Opt out of relaying files for other devices on the LAN (docs/p2p-plan.md §8). When true,
+     * Opt out of relaying files for other devices on the LAN. When true,
      * this node reports {@code persistent=false} in HELLO regardless of its actual state, making
      * it unlikely to be elected, and directly declines any RELAY_ASK with "refused".
      */
@@ -83,7 +104,11 @@ public final class Config {
         own = Set.copyOf(ownAddresses);          // peerList already normalised and deduped them
         port = Integer.parseInt(p.getProperty("port").trim());
         pskHex = p.getProperty("psk").trim().toLowerCase();
-        psk = hex(pskHex);
+        psk = Crypto.fromHex(pskHex);
+        // Unreachable through the ordinary path — from() has already run checkPsk — but this
+        // constructor takes a Properties and a future caller could skip that. A null key would not
+        // fail here; it would fail later, inside a handshake, as an obscure NPE on a worker thread.
+        if (psk == null) throw new IllegalArgumentException("psk: must be 64 hex characters");
         rotate = bool(p.getProperty("psk_rotate", "false"));
         relayOptOut = bool(p.getProperty("relay_opt_out", "false"));
         keys = schedule(p);
@@ -193,8 +218,55 @@ public final class Config {
     }
 
     // ------------------------------------------------------------------ load / save
+    /**
+     * The last parse of the file, and the stamp it was parsed at.
+     *
+     * <p>{@link #raw} is called from several places on the UI thread — every keystroke validation
+     * path, the PSK comparison, the pairing sheet — and each call was a file open, a parse and a
+     * close. The cache is keyed on the file's modification time <em>and</em> its length, because
+     * either alone is guessable: mtime has one-second granularity on some filesystems, and a
+     * rewrite that changes only a key's hex digits keeps the length. Together they are enough for a
+     * file that is rewritten by a person, not by a loop.
+     *
+     * <p>It has to be invalidated across processes, not just within one: the UI is in the main
+     * process and {@code SyncService} is in {@code :sync}, and both write this file. That is why the
+     * stamp is taken from the file rather than from a flag — a write by the other process moves the
+     * mtime, which is all this needs to see. {@link #save} additionally clears it outright, because
+     * a write and the read that follows it can land inside the same mtime tick.
+     */
+    private static Properties cached;
+    private static long cachedStamp = -1, cachedLength = -1;
+
     /** Raw merged properties (defaults + file), without validation. */
-    public static Properties raw(Context ctx) {
+    public static synchronized Properties raw(Context ctx) {
+        File f = new File(ctx.getFilesDir(), FILE);
+        long stamp = f.lastModified(), length = f.length();
+        // A copy every time, never the cached object: callers mutate what they get back (save()
+        // merges into it, the UI overwrites fields before validating), and handing out the cache
+        // itself would let one caller's edits become the next caller's file contents.
+        if (cached != null && stamp == cachedStamp && length == cachedLength) {
+            Properties copy = new Properties();
+            copy.putAll(cached);
+            return copy;
+        }
+        Properties p = parse(f);
+        cached = p;
+        cachedStamp = stamp;
+        cachedLength = length;
+        Properties copy = new Properties();
+        copy.putAll(p);
+        return copy;
+    }
+
+    /** Forget the cached parse. Called after every write, from whichever process performed it. */
+    private static synchronized void invalidate() {
+        cached = null;
+        cachedStamp = -1;
+        cachedLength = -1;
+    }
+
+    /** The defaults, then the file laid over them. The part {@link #raw} caches. */
+    private static Properties parse(File f) {
         Properties p = new Properties();
         p.setProperty("peers", "");
         p.setProperty("own_addresses", "");     // most devices have no name of their own
@@ -202,8 +274,8 @@ public final class Config {
         p.setProperty("discovery", "true");    // works with no configuration at all
         p.setProperty("port", "47521");
         p.setProperty("psk", "");
-        // Key rotation (docs/p2p-plan.md §17). Off by default: it silently changes the one setting
-        // every device has to agree on, and a user who has not asked for that should not get it.
+        // Key rotation. Off by default: it silently changes the one setting every device has to
+        // agree on, and a user who has not asked for that should not get it.
         p.setProperty("psk_rotate", "false");
         p.setProperty("relay_opt_out", "false");
         // When the current key became active. Absent means "unknown", and unknown is read as NOW
@@ -225,11 +297,14 @@ public final class Config {
         p.setProperty("files_dir", DEFAULT_FILES_DIR);
         p.setProperty("keep_hours", "2");
         p.setProperty("keep_max_mb", "256");
-        File f = new File(ctx.getFilesDir(), FILE);
         if (f.exists()) {
             try (FileInputStream in = new FileInputStream(f)) {
                 p.load(in);
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                // Never silently: falling back to the defaults means falling back to psk="", which
+                // fails validation, which the user sees as "invalid config" with nothing in the log
+                // to say the file could not be read at all. The two have opposite fixes.
+                Logger.w("config: cannot read " + FILE + ", falling back to defaults: " + e);
             }
         }
         return p;
@@ -254,6 +329,16 @@ public final class Config {
                 Set.copyOf(peerList(p.getProperty("own_addresses", "")))));
         fail("port", checkPort(p.getProperty("port", "")));
         fail("psk", checkPsk(p.getProperty("psk", "")));
+        // The successor and the ring, checked here for the same reason `psk` is: they are parsed on
+        // every inbound connection. An unchecked one that is not hex used to make every accept()
+        // throw before it read a byte, so a single malformed value — which an authenticated peer
+        // could write through T_KEYS — left the device unable to be reached at all, permanently and
+        // across restarts. Connection now skips a bad ring entry rather than failing on it, so this
+        // is no longer the only thing standing between a typo and a bricked listener; it is still
+        // the check that keeps a bad value from being written in the first place, which is where a
+        // user can actually be told about it.
+        fail("psk_next", checkPskOrEmpty(p.getProperty("psk_next", "")));
+        for (String k : peerList(p.getProperty("psk_old", ""))) fail("psk_old", checkPsk(k));
         fail("mdns_timeout_ms", checkRange(p.getProperty("mdns_timeout_ms", ""), 500, 60000, "ms"));
         fail("threads", checkRange(p.getProperty("threads", ""), 1, 32, ""));
         fail("max_bytes", checkRange(p.getProperty("max_bytes", ""), 1024, 65536L * 1024, "bytes"));
@@ -269,14 +354,21 @@ public final class Config {
         if (problem != null) throw new IllegalArgumentException(key + ": " + problem);
     }
 
-    /** Validates, then writes files/clipsync.conf. Returns the parsed config. */
+    /**
+     * Validates, then writes files/clipsync.conf. Returns the parsed config.
+     *
+     * <p>Atomically, through {@link Files#atomicWrite}: this file carries the PSK, it is rewritten
+     * every time a peer reports a key schedule, and a process killed halfway through an in-place
+     * rewrite leaves a key file that no longer parses — which the service reports as "invalid
+     * config" and which survives every restart, so the only way out is to pair every device again.
+     */
     public static Config save(Context ctx, Properties values) throws IOException {
         Properties p = raw(ctx);
         for (String k : values.stringPropertyNames()) p.setProperty(k, values.getProperty(k).trim());
         Config c = from(p);                       // throws before anything is written
-        try (FileOutputStream out = new FileOutputStream(new File(ctx.getFilesDir(), FILE))) {
-            p.store(out, "written by ClipSync MainActivity");
-        }
+        Files.atomicWrite(new File(ctx.getFilesDir(), FILE),
+                out -> p.store(out, "written by ClipSync MainActivity"));
+        invalidate();       // the next raw() must see what was just written, mtime tick or not
         return c;
     }
 
@@ -364,6 +456,11 @@ public final class Config {
         return checkRange(s, 1, 65535, "");
     }
 
+    /** {@link #checkPsk}, but "no key" is a legal answer — which it is for a successor, not for a PSK. */
+    public static String checkPskOrEmpty(String s) {
+        return s.trim().isEmpty() ? null : checkPsk(s);
+    }
+
     public static String checkPsk(String s) {
         s = s.trim();
         if (s.isEmpty()) return "required";
@@ -433,12 +530,5 @@ public final class Config {
 
     private static boolean bool(String s) {
         return Arrays.asList("true", "1", "yes", "on").contains(s.trim().toLowerCase());
-    }
-
-    private static byte[] hex(String s) {
-        byte[] out = new byte[s.length() / 2];
-        for (int i = 0; i < out.length; i++)
-            out[i] = (byte) Integer.parseInt(s.substring(2 * i, 2 * i + 2), 16);
-        return out;
     }
 }

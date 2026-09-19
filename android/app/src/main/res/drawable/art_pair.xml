@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Two devices and the link between them, drawn to be BIG.
+
+     The welcome screen used ic_pair for this, and that is the mistake this file exists to correct:
+     ic_pair is a 24dp icon whose 1.6-unit stroke is 6.7% of its own canvas, so stretching it to the
+     ~300dp the illustration slot gives it drew lines about 20dp thick. A vector scales, but the
+     RATIO of stroke to canvas does not — an icon blown up is not an illustration, it is an icon with
+     the weight of a marker pen.
+
+     So: a 248x164 canvas with a 3-unit stroke, a ratio of about 1.2%, which lands at two or three dp
+     wherever the weighted box happens to put it. The extra room also buys the detail an icon cannot
+     afford — rounded shells, a speaker slot, a stand — which is what makes it read as a picture of
+     two devices rather than as a symbol for them.
+
+     Stroked rather than filled, like ic_pair and for the same reason: an outline reads as "two
+     separate things joined", which is what pairing is, where a solid pair of blocks reads as one
+     object.
+
+     Black, tinted at use (android:tint on the ImageView), so it follows the palette. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="248dp"
+    android:height="164dp"
+    android:viewportWidth="248"
+    android:viewportHeight="164">
+
+    <!-- the phone, left: tall, narrow, rounded -->
+    <path
+        android:pathData="M44,26 h32 a10,10 0 0 1 10,10 v92 a10,10 0 0 1 -10,10 h-32 a10,10 0 0 1 -10,-10 v-92 a10,10 0 0 1 10,-10 z"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="3"
+        android:strokeLineJoin="round"
+        android:strokeLineCap="round" />
+    <!-- the earpiece slot. One small asymmetric detail is what tells the eye which way up it is -->
+    <path
+        android:pathData="M52,37 h16"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="3"
+        android:strokeLineCap="round" />
+
+    <!-- the other device, right: wider and shorter on a stand, so the two read as different kinds
+         of thing rather than as one shape repeated -->
+    <path
+        android:pathData="M142,44 h64 a8,8 0 0 1 8,8 v42 a8,8 0 0 1 -8,8 h-64 a8,8 0 0 1 -8,-8 v-42 a8,8 0 0 1 8,-8 z"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="3"
+        android:strokeLineJoin="round"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M174,102 v14 M158,116 h32"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="3"
+        android:strokeLineJoin="round"
+        android:strokeLineCap="round" />
+
+    <!-- the link, dashed by being two strokes rather than by a dash pattern: a solid rule would read
+         as an object of its own, and a real dash array would change density as the drawable scales -->
+    <path
+        android:pathData="M94,82 h14 M113,82 h14"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="3"
+        android:strokeLineCap="round" />
+</vector>

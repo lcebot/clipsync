@@ -15,15 +15,18 @@ looks is a minute not spent on the thing it configures.
 service imports too. A settings window that disagreed with the service about what is valid would be
 worse than no settings window: it would write files the service then refuses to start on.
 
-Apply writes the file and restarts the service. There is no hot reload — see docs/p2p-plan.md §11 for
-why watching the file was not worth a thread that runs forever for an event that happens twice a
-year.
+Apply writes the file and restarts the service. There is no hot reload: watching the file would be a
+thread running forever for an event that happens twice a year, and a restart is both simpler and
+honest about what it does — the service re-reads everything, so there is no half-applied state to
+reason about.
 """
+import json
 import os
 import re
 import socket
 import subprocess
 import sys
+import threading
 import time
 import tkinter as tk
 from tkinter import messagebox, ttk
@@ -44,10 +47,29 @@ _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _DETACHED = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
 
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+STATE_PATH = os.path.join(HERE, "install-state.json")   # written by install.ps1, read by uninstall.ps1
+
+
 # ----------------------------------------------------------------------------- restarting the service
 def _run(args):
     """A short-lived console command, with no window and no exception on a non-zero exit."""
     return subprocess.run(args, capture_output=True, text=True, creationflags=_NO_WINDOW)
+
+
+def _powershell(script: str, variables=None):
+    """
+    Run a PowerShell snippet, passing values into it through the environment.
+
+    Nothing here interpolates a path or a number into the script text, and that is the whole reason
+    this function exists. ClipSync lives wherever the user unpacked it, and a folder called `it's
+    here`, or one holding a `$`, a backtick or a `"`, is pasted straight into a shell that reads all
+    four of those. `$env:NAME` is the one form PowerShell does not re-parse.
+    """
+    env = dict(os.environ)
+    env.update(variables or {})
+    return subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+                          capture_output=True, text=True, creationflags=_NO_WINDOW, env=env)
 
 
 def _task_exists() -> bool:
@@ -82,12 +104,206 @@ def restart_service() -> str:
         return "Scheduled task restarted."
 
     script = os.path.join(cfgmod.HERE, "clipsync.py")
-    _run(["powershell", "-NoProfile", "-Command",
-          "Get-CimInstance Win32_Process -Filter \"Name='pythonw.exe' or Name='python.exe'\" | "
-          "Where-Object { $_.CommandLine -like '*clipsync.py*' } | "
-          "ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"])
+    # THIS copy, by its full path, the way uninstall.ps1 does it. `-like '*clipsync.py*'` matched the
+    # bare file name, so restarting this installation also killed a second ClipSync unpacked anywhere
+    # else on the PC — and any command line that merely mentioned the file. Literal Contains rather
+    # than -like, because a folder name may hold [ ] ? or * which -like reads as a pattern;
+    # lowercased on both sides because a command line keeps whatever casing it was launched with,
+    # which is not necessarily this window's.
+    _powershell(
+        "$s = $env:CLIPSYNC_SCRIPT.ToLower(); "
+        "Get-CimInstance Win32_Process -Filter \"Name = 'python.exe' OR Name = 'pythonw.exe'\" | "
+        "Where-Object { $_.CommandLine -and $_.CommandLine.ToLower().Contains($s) } | "
+        "ForEach-Object { Stop-Process -Id $_.ProcessId -Force }",
+        {"CLIPSYNC_SCRIPT": script})
     subprocess.Popen([_pythonw(), script], cwd=cfgmod.HERE, creationflags=_DETACHED, close_fds=True)
     return "ClipSync restarted (no scheduled task installed — run install.ps1 to start it at logon)."
+
+
+# ----------------------------------------------------------------------------- config.json's ACL
+# config.json holds the PSK in clear, and a file created under %LOCALAPPDATA% or Program Files
+# inherits an ACL that lets every account on the PC read it. Three principals are kept: SYSTEM
+# because services and backup software expect it, Administrators because an administrator can take
+# ownership anyway and pretending otherwise only makes the file hard to repair, and the current user
+# because the service runs as them and cannot start without reading this.
+#
+# It runs after every write and not only at install time, and that is a documented consequence of
+# how `write_config` saves: it writes config.json.tmp *in the same directory* and calls os.replace.
+# The tmp file is a NEW file, so at creation it picks up that directory's inheritable ACEs; the
+# rename then carries them over untouched, because on NTFS "when you move a file or folder, the ACL
+# is also moved and is not changed in any way"
+# (https://learn.microsoft.com/en-us/troubleshoot/windows-client/windows-security/permissions-on-copying-moving-files).
+# So the hardened descriptor does not survive an Apply — it was never on the file that ends up in
+# place — and hardening once at install time would last exactly until the first save. Necessary,
+# and sufficient: the window between the rename and this call is the only moment config.json is
+# readable, and it is the same window install.ps1 leaves open too.
+# (This is also why it cannot live in clipsync_config.write_config: that module is imported by the
+# service and is required to be free of side effects beyond the write itself.)
+#
+# icacls rather than Get-Acl/Set-Acl, run directly rather than through PowerShell. Three reasons,
+# and the first is the one that matters here:
+#
+#   * This window does NOT run elevated, and Set-Acl "changes the values in the item's security
+#     descriptor to match the values in the AclObject parameter" -- the whole descriptor Get-Acl
+#     returned, owner included. Writing an owner is a privileged operation that this process has no
+#     business attempting and no need for. icacls "displays or modifies discretionary access control
+#     lists (DACLs)" and nothing else, and changing a DACL needs only WRITE_DAC, which the file's
+#     owner -- this user, who created it -- always has.
+#     (https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.security/set-acl ,
+#      https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/icacls)
+#   * No PowerShell means no `-Command` string to build, which is the hazard _powershell() exists to
+#     work around. subprocess passes argv, so a path holding a quote, a `$` or a backtick is a path.
+#   * SIDs, not 'NT AUTHORITY\SYSTEM' and 'BUILTIN\Administrators'. Those are English names that have
+#     to be looked up; S-1-5-18 (SYSTEM) and S-1-5-32-544 (Administrators) are the same on every
+#     installation in every language. icacls documents the form: "SIDs may be in either numerical or
+#     friendly name form. If you use a numerical form, affix the wildcard character * to the
+#     beginning of the SID."
+#
+# /inheritancelevel:r is "disables inheritance and removes only inherited ACEs"; /grant:r replaces
+# any explicit ACE for that principal instead of adding to it. Together they are the whole of what
+# the old four-line Get-Acl / SetAccessRuleProtection / RemoveAccessRule / AddAccessRule dance did.
+_SID_SYSTEM = "*S-1-5-18"
+_SID_ADMINISTRATORS = "*S-1-5-32-544"
+
+
+def _current_account() -> str:
+    """This user as DOMAIN\\user, which is what icacls wants and what the SID lookup will resolve.
+
+    %USERDOMAIN% is the computer name on a workgroup PC and the domain on a joined one — the same
+    two cases WindowsIdentity.Name covers, which is the form install.ps1 passes as -ForUser. The
+    fallback to a bare %USERNAME% is for the case where the variable is missing: icacls resolves an
+    unqualified name against the local machine, which is right far more often than it is wrong.
+    """
+    user = os.environ.get("USERNAME", "")
+    domain = os.environ.get("USERDOMAIN") or os.environ.get("COMPUTERNAME")
+    return "{}\\{}".format(domain, user) if domain and user else user
+
+
+def protect_config() -> str:
+    """
+    Lock config.json down to SYSTEM, Administrators and this user.
+
+    :return: "" when it worked, otherwise the reason. Never raises and never fails an Apply: a
+             readable config.json is a working config.json, and refusing to save settings because
+             an ACL could not be tightened would trade a real problem for a theoretical one. The
+             caller says so in the status line instead.
+    """
+    if not os.path.exists(cfgmod.CONFIG_PATH):
+        return "config.json is not there"
+    me = _current_account()
+    if not me:
+        return "cannot tell which account this is"
+    result = _run(["icacls", cfgmod.CONFIG_PATH, "/inheritancelevel:r",
+                   "/grant:r", _SID_SYSTEM + ":(F)",
+                   "/grant:r", _SID_ADMINISTRATORS + ":(F)",
+                   "/grant:r", me + ":(F)"])
+    if result.returncode != 0:
+        # icacls writes its failures to stderr and still prints a summary on stdout, so both are
+        # worth looking at before giving up on a message.
+        return (result.stderr or result.stdout).strip() or "icacls failed"
+    return ""
+
+
+# ----------------------------------------------------------------------------- firewall, when the port moves
+# The rule names carry the port, exactly as install.ps1 writes them, so this renames as well as
+# re-ports: a rule called "ClipSync TCP 47521" that allows 47600 is a lie the next person to read the
+# firewall list has no way to catch. Exit code 2 means the rules are not there at all — the usual
+# reason being that install.ps1 was never run.
+#
+# One call does both. -NewDisplayName and -LocalPort sit in the same parameter set (ByDisplayName) in
+# Set-NetFirewallRule's published syntax, so renaming and re-porting need neither two passes nor the
+# `Get-NetFirewallRule | Set-NetFirewallPortFilter` detour
+# (https://learn.microsoft.com/en-us/powershell/module/netsecurity/set-netfirewallrule). The port
+# filter is a separate object only for *querying*: that cmdlet's own text says a port "can be queried
+# for this condition, modified by using the [filter] object, or both" — modification through
+# Set-NetFirewallRule is the documented path, and the one taken here.
+#
+# The Get-NetFirewallRule guard above each Set is not belt-and-braces. Asking Set-NetFirewallRule for
+# a DisplayName that does not exist is an error, and with $ErrorActionPreference = 'Stop' it would
+# abort the loop on the first missing rule instead of reporting "none of them are there" as exit 2 —
+# which is the answer the caller actually turns into a sentence.
+_FIREWALL_SCRIPT = (
+    # 'Stop' first, because the interesting failure here -- access denied, this window not being
+    # elevated -- is a NON-terminating PowerShell error: without this the cmdlet prints it, the
+    # script carries on and exits 0, and the caller, reading the exit code, reports a firewall rule
+    # moved that was not. (The ACL path has no equivalent line because it no longer goes through
+    # PowerShell at all; see protect_config.)
+    "$ErrorActionPreference = 'Stop'; "
+    "$old = [int]$env:CLIPSYNC_OLD_PORT;$new = [int]$env:CLIPSYNC_NEW_PORT; "
+    "$span = [int]$env:CLIPSYNC_PAIR_SPAN; $done = 0; "
+    "foreach ($r in @("
+    "@{ From = \"ClipSync TCP $old\"; To = \"ClipSync TCP $new\"; Port = \"$new\" }, "
+    "@{ From = \"ClipSync pairing $($old + 1)-$($old + $span)\"; "
+    "To = \"ClipSync pairing $($new + 1)-$($new + $span)\"; "
+    "Port = \"$($new + 1)-$($new + $span)\" })) { "
+    "if (-not (Get-NetFirewallRule -DisplayName $r.From -ErrorAction SilentlyContinue)) { continue } "
+    "Set-NetFirewallRule -DisplayName $r.From -NewDisplayName $r.To -LocalPort $r.Port; "
+    "$done++ } "
+    "if ($done -eq 0) { exit 2 }"
+)
+
+
+def move_firewall(old_port: int, new_port: int) -> str:
+    """
+    Follow a port change in the inbound rules install.ps1 created.
+
+    Without this the service listens on the new port and the firewall still allows the old one, which
+    is the worst shape a networking bug takes: everything starts, nothing logs, and the PC is simply
+    unreachable from every device that is not on the LAN already.
+
+    :return: "" when the rules were moved, otherwise a line for the user. Changing firewall rules
+             needs administrator rights and this window does not have them (the scheduled task runs
+             Limited), so "access denied" is an expected answer, not a bug — and the answer to it is
+             install.ps1, which elevates and rebuilds the rules from config.json.
+    """
+    # The span the provider searches and the span install.ps1 opened are one number, so it is taken
+    # from the module that owns it rather than written down a third time. Imported here and not at
+    # the top: clipsync_pair pulls in cryptography, and a PC missing it must still be able to open
+    # this window and fix its settings.
+    try:
+        from clipsync_pair import PAIR_PORT_SPAN
+    except ImportError:
+        return "the pairing module could not be loaded, so the rules were left alone"
+    result = _powershell(_FIREWALL_SCRIPT, {
+        "CLIPSYNC_OLD_PORT": str(old_port), "CLIPSYNC_NEW_PORT": str(new_port),
+        "CLIPSYNC_PAIR_SPAN": str(PAIR_PORT_SPAN)})
+    if result.returncode == 2:
+        return "no ClipSync firewall rules were found for port %d" % old_port
+    if result.returncode != 0:
+        return (result.stderr or result.stdout).strip() or "Set-NetFirewallRule failed"
+    _rename_recorded_rules(old_port, new_port, PAIR_PORT_SPAN)
+    return ""
+
+
+def _rename_recorded_rules(old_port: int, new_port: int, span: int):
+    """
+    Keep install-state.json naming the rules that now exist.
+
+    uninstall.ps1 removes rules by the names recorded here and nothing else — that precision is the
+    point of the state file — so a rename it does not hear about leaves a rule behind forever.
+    Best-effort: a state file that is missing or unreadable belongs to install.ps1, and this window
+    is not the place to start repairing it.
+    """
+    renames = {"ClipSync TCP %d" % old_port: "ClipSync TCP %d" % new_port,
+               "ClipSync pairing %d-%d" % (old_port + 1, old_port + span):
+                   "ClipSync pairing %d-%d" % (new_port + 1, new_port + span)}
+    try:
+        # utf-8-sig, not utf-8, and this was a silent bug rather than a precaution. install.ps1
+        # writes this file with `Set-Content -Encoding UTF8`, and in Windows PowerShell 5.1 — the
+        # PowerShell that ships with Windows, and the one a double-clicked .ps1 gets — "any Unicode
+        # encoding, except UTF7, always creates a BOM"; `utf8NoBOM` does not exist before PowerShell
+        # 6 (https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_character_encoding).
+        # So the first character is U+FEFF, json.load raises ValueError, the except below swallows
+        # it, and the recorded rule names quietly stayed at the old port for ever. utf-8-sig reads
+        # the file with or without the mark; the write below stays plain utf-8, which both
+        # PowerShell scripts read back happily.
+        with open(STATE_PATH, "r", encoding="utf-8-sig") as f:
+            state = json.load(f)
+        state["rules"] = [renames.get(name, name) for name in state.get("rules") or []]
+        with open(STATE_PATH, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2)
+    except (OSError, ValueError, AttributeError, TypeError):
+        pass
 
 
 # ----------------------------------------------------------------------------- small widgets
@@ -313,21 +529,27 @@ class App:
         ttk.Button(psk_bar, text="Generate random PSK key", command=self.new_psk).pack(side="left")
         # Beside Generate, because they are the two ways to end up with a key and the choice between
         # them is the one the user is making at this field: make one here and hand it out, or take
-        # the one a device already has.  (docs/p2p-plan.md §12 -- the PC only ever joins.)
+        # the one a device already has.  Both directions are here now: the plan originally had the
+        # PC only ever *joining*, on the grounds that a provider has to listen and a listening port
+        # on Windows is a firewall rule somebody has to create.  That is still the cost; it is just
+        # not a reason to leave out the case where the PC is the device that was set up first.
         ttk.Button(psk_bar, text="Pair with a device…", command=self.pair).pack(side="left", padx=(PAD, 0))
         ttk.Button(psk_bar, text="Share this key…", command=self.share).pack(side="left", padx=(PAD, 0))
         self.psk_shown = tk.BooleanVar(value=False)
         ttk.Checkbutton(psk_bar, text="Show", variable=self.psk_shown,
                         command=self._toggle_psk).pack(side="left", padx=(PAD, 0))
 
-        # Key rotation (§17)
+        # A single checkbox is the whole of the rotation UI on both platforms, and it controls less
+        # than it looks like: rotation runs regardless once a successor exists, because a key set on
+        # one device can rotate while the other has this unticked. The flag only decides whether
+        # this device *initiates* a new cycle, never whether it finishes one a peer started.
         self.psk_rotate = tk.BooleanVar(value=False)
         ttk.Checkbutton(conn, text="Rotate key automatically",
                         variable=self.psk_rotate, command=self._rotate_toggled
                         ).grid(row=5, column=1, sticky="w", padx=PAD, pady=(0, 0))
         section_row += 1
 
-        # --- This PC's own addresses (§4a)
+        # --- This PC's own addresses
         # Above the two switches, not below: the peer list validates against this one, so it has to
         # be the thing already on screen when the user starts typing addresses into the list below.
         # No switch — an empty list already means "this PC has no name of its own", and turning such
@@ -347,10 +569,12 @@ class App:
         lan.grid(row=section_row, column=0, sticky="ew", padx=PAD, pady=(PAD, 0))
         lan.columnconfigure(1, weight=1)
         self.discovery = tk.BooleanVar(value=True)
-        # One direction, and said so: today the PC advertises and never browses, because it is the
-        # only node that listens. Phase 3 makes it dial too and this becomes the symmetric thing the
-        # Android label already describes — at which point this line changes with it. Writing the
-        # symmetric wording early would describe a PC that does not exist yet.
+        # One direction, and said so: this PC advertises and does not browse. It dials now — the
+        # listed addresses, on its own thread each — but it does not look for peers on the LAN, so
+        # a phone on the same network is found by finding *us*. That is enough for the pair to
+        # connect, since only one of two nodes has to do the finding, and it is the last remaining
+        # asymmetry between the two platforms. The label says advertise because that is what the
+        # switch does here; claiming the symmetric wording would describe a PC that does not exist.
         ttk.Checkbutton(lan, text="Advertise this PC on the local network (mDNS)",
                         variable=self.discovery, command=self.revalidate
                         ).grid(row=0, column=0, columnspan=2, sticky="w", padx=PAD, pady=(PAD, 0))
@@ -374,10 +598,14 @@ class App:
                         variable=self.direct, command=self._direct_toggled
                         ).grid(row=0, column=0, sticky="w", padx=PAD, pady=(PAD, 0))
         ttk.Label(dire, wraplength=460, foreground="#49454f",
-                  text="The addresses your devices use to reach this PC. This PC uses them to "
-                       "recognise itself: when several PCs share one configuration, the ones that "
-                       "own none of these names stop advertising on the LAN, so a device cannot "
-                       "reach the wrong one."
+                  # What this list is FOR, and nothing else. It used to describe an advertising
+                  # probe that decided which of several PCs sharing one configuration was "the"
+                  # one — that probe is gone (clipsync.py, above local_addresses()), because a node
+                  # now declares its own addresses above and because several PCs advertising on one
+                  # LAN is the ordinary case rather than a conflict to arbitrate.
+                  text="The addresses this PC dials to reach your other devices, and the ones they "
+                       "use to reach it. An address that belongs to this PC goes in the list above "
+                       "instead — that is the one that stops it dialling itself."
                   ).grid(row=1, column=0, sticky="w", padx=PAD, pady=(0, PAD))
         self.peer_list = AddressList(dire, allow_empty=False, on_change=self.revalidate)
         self.peer_list.grid(box_row=2, button_row=3)
@@ -385,7 +613,11 @@ class App:
         self.paths_error.grid(row=4, column=0, sticky="w", padx=PAD, pady=(0, PAD))
         section_row += 1
 
-        # --- Relay (§8)
+        # --- Relay opt-out: the power-saving control, restated for a machine that has no battery.
+        # It matters here anyway, because "the LAN's relay" is not a role anyone is given — it is
+        # whichever node the priority order puts first, and a PC on mains wins that every time. This
+        # is how a PC declines it: the service declares `persistent: false`, which takes it out of
+        # everyone else's election, and refuses any request that arrives regardless.
         self.relay_opt_out = tk.BooleanVar(value=False)
         ttk.Checkbutton(dire, text="Decline relay requests from other devices",
                         variable=self.relay_opt_out, command=self.revalidate
@@ -574,14 +806,46 @@ class App:
         self.psk_shown.set(True)
         self._toggle_psk()
 
+    def _busy(self, note):
+        """
+        Say what this window is about to block on, and get that onto the screen before it does.
+
+        The update() is the whole point and is not a formality: tk repaints from its event loop, and
+        the next thing the caller does is stop returning to it for several seconds.  Without a flush
+        the label would be set and drawn afterwards, which is to say drawn once the wait it was
+        describing had finished.
+
+        Restores rather than clears, because the bar is also where apply() leaves its result, and a
+        pairing that ran afterwards should not silently erase "Saved."
+        """
+        if note is None:
+            self.status.configure(text=getattr(self, "_status_was", ""))
+            self.root.config(cursor="")
+            return
+        self._status_was = self.status.cget("text")
+        self.status.configure(text=note)
+        self.root.config(cursor="watch")
+        self.root.update()
+
     def pair(self):
         """
-        Take the key from a device that already has it (docs/p2p-plan.md §12).
+        Take the key from a device that already has it.
 
-        Browsing and the key derivation both block for seconds, and tkinter has one thread, so the
-        window is left disabled with a note in it rather than frozen with nothing.  A progress bar
-        would need a second thread to drive it and would still be indeterminate; saying what is
-        happening and why it takes a moment is worth more than an animation.
+        Three things here block, tkinter has one thread, and they are not the same length -- so each
+        one says what it is before it starts, in the status bar, with an explicit update() to get
+        that repaint out before the thread stops answering.  A progress bar would need a second
+        thread to drive it and would still be indeterminate; naming the step is worth more.
+
+        The browse is a fixed four seconds.  The key derivation is well under a second here -- native
+        scrypt on both ends now, where it used to be a few hundred milliseconds here against several
+        seconds on Android (see clipsync_pair.channel_key).  Half a second is still too long to
+        spend without saying so, which is why this end announces it rather than relying on the wait
+        being short; Android runs it on a worker for the same reason.  The third is the one
+        that is easy to miss: after PAIR_ASK, `join` waits up to ASK_TIMEOUT + CONNECT_TIMEOUT for a
+        person at the *other* device to approve this PC, which is twenty-five seconds of a window
+        that cannot repaint.  Unattended it will run the whole way.  That is why it is announced
+        rather than hidden behind a watch cursor: a frozen window with no explanation is the one
+        outcome where the user's reasonable next move is to kill the process mid-pairing.
         """
         if cfgmod.check_psk(self.psk.get()) is None and not messagebox.askokcancel(
                 "Replace the key?",
@@ -594,21 +858,26 @@ class App:
             messagebox.showerror("Cannot pair", str(e), parent=self.root)
             return
 
-        self.root.config(cursor="watch")
-        self.root.update()
+        self._busy("Looking for devices offering to pair…")
         try:
             found = clipsync_pair.find()
         except RuntimeError as e:
             messagebox.showerror("Cannot pair", str(e), parent=self.root)
             return
         finally:
-            self.root.config(cursor="")
+            self._busy(None)
 
         if not found:
+            # Two causes, both named. `find` hides devices whose advertised protocol version this
+            # build cannot speak, so "nothing is offering" is not the only way to get here, and a
+            # message that only mentions the window would send someone to re-open a window that was
+            # open all along.
             messagebox.showinfo(
                 "Nothing found",
                 "No device is offering to pair on this network.\n\nOn the other device open "
-                "Settings and tap “Pair new devices”, then try again while its code is showing.",
+                "Settings and tap “Pair new devices”, then try again while its code is showing.\n\n"
+                "If it is showing a code already, the two are probably running different versions "
+                "of ClipSync — update both and try again.",
                 parent=self.root)
             return
 
@@ -619,15 +888,18 @@ class App:
         if not code:
             return
 
-        self.root.config(cursor="watch")
-        self.root.update()
+        # Named for the part of this that takes the time, which is not the cryptography: the
+        # derivation is sub-second on a PC, and then this thread sits on a socket for as long as
+        # ASK_TIMEOUT allows while somebody at the other device decides. The user of *this* window
+        # should be looking at that device, not at this one.
+        self._busy("Waiting for %s to allow it…" % name)
         try:
             answer = clipsync_pair.join(addrs, salt, code, socket.gethostname().split(".")[0])
         except Exception as e:                      # noqa: BLE001 - every failure is the user's to read
             messagebox.showerror("Pairing failed", str(e), parent=self.root)
             return
         finally:
-            self.root.config(cursor="")
+            self._busy(None)
 
         bad = cfgmod.check_psk(answer.get("psk", ""))
         if bad is not None:
@@ -636,9 +908,13 @@ class App:
         # Into the fields, not straight to disk: Apply is what writes, everywhere else in this
         # window, and pairing is a configuration change like any other.  It also leaves the user one
         # visible step from undoing it.
+        #
+        # NOT revealed, unlike `new_psk`: a generated key has to be shown because the user is about
+        # to copy it onto another device by hand, and a paired one arrived over the wire with nobody
+        # needing to read it.  Putting a key on screen that nobody asked to see is a shoulder and a
+        # screen recording away from giving it away, in a window that may well be shared while
+        # somebody is being talked through setting this up.
         self.psk.set(answer["psk"])
-        self.psk_shown.set(True)
-        self._toggle_psk()
         self.discovery.set(True)
         # The port comes with the key, and is taken only if it is one: a provider that sends nonsense
         # must not be able to point this PC at a port nothing is listening on, and leaving the
@@ -655,11 +931,11 @@ class App:
 
     def share(self):
         """
-        Offer this PC's key to a device that does not have one (docs/p2p-plan.md §12).
+        Offer this PC's key to a device that does not have one.
 
-        The other half of `pair`, and the reason §12's "Windows only ever joins" did not survive
-        contact: the PC is perfectly capable of being the device that was set up first, and the only
-        thing standing in the way was a firewall rule, which install.ps1 now makes.
+        The other half of `pair`, and the reason the original "Windows only ever joins" did not
+        survive contact: the PC is perfectly capable of being the device that was set up first, and
+        the only thing standing in the way was a firewall rule, which install.ps1 now makes.
         """
         psk = self.psk.get().strip()
         if cfgmod.check_psk(psk) is not None:
@@ -683,11 +959,12 @@ class App:
                                            "device”, pick this PC, and enter this code.").grid(
             row=0, column=0, sticky="w", padx=PAD, pady=(PAD, 0))
         # Big and monospaced: it is read across a room and typed on a phone in the other hand, and
-        # six digits that run together are six digits typed wrong.  Six greyed DIGITS to start, not
+        # eight digits that run together are eight digits typed wrong.  Greyed DIGITS to start, not
         # dashes: the same length in the same font, so the window does not resize when the real code
-        # arrives -- the key derivation is 200 000 PBKDF2 rounds and cannot have finished by now --
+        # arrives -- the key derivation is a deliberately slow scrypt and cannot have finished by now --
         # and digits because a dash and a digit do not draw to the same height.
-        code_label = ttk.Label(win, text="114514", font=("Consolas", 28), foreground="#79747e")
+        code_label = ttk.Label(win, text="1" * _code_digits(), font=("Consolas", 28),
+                               foreground="#79747e")
         code_label.grid(row=1, column=0, padx=PAD, pady=(PAD, 0))
         status = ttk.Label(win, text="Starting…", foreground="#49454f")
         status.grid(row=2, column=0, sticky="w", padx=PAD, pady=(0, PAD))
@@ -695,6 +972,12 @@ class App:
         given = ttk.Label(win, text="", foreground="#1a5e20", justify="left")
         given.grid(row=3, column=0, sticky="w", padx=PAD, pady=(0, PAD))
         state["given"] = []
+        # Why the last caller did not get the key. Its own line, because the one above it is
+        # rewritten every second by the countdown -- and because "a device with a different version
+        # tried" and "somebody is guessing codes" are two different pieces of news and used to be
+        # neither: every failure was silent until the fifth one closed the window.
+        trouble = ttk.Label(win, text="", foreground="#7a5900", wraplength=380, justify="left")
+        trouble.grid(row=4, column=0, sticky="w", padx=PAD, pady=(0, PAD))
 
         def finish(message, over=True):
             state["over"] = over
@@ -712,7 +995,7 @@ class App:
             win.destroy()
 
         bar = ttk.Frame(win)
-        bar.grid(row=4, column=0, sticky="e", padx=PAD, pady=(0, PAD))
+        bar.grid(row=5, column=0, sticky="e", padx=PAD, pady=(0, PAD))
         ttk.Button(bar, text="Close", command=close).pack(side="left")
         win.protocol("WM_DELETE_WINDOW", close)
         self._centre(win)
@@ -729,6 +1012,63 @@ class App:
         def paired(device, _type):
             win.after(0, lambda: gave(device))
 
+        def ask(device, kind):
+            """
+            The confirmation the key is held back for. Runs on the provider's thread; the dialog it
+            needs can only run on tk's, so it is posted there and this waits for the answer.
+
+            Knowing the code is not the same as being invited: a caller that guessed it, or the
+            neighbour's phone that happened to be pointed at this PC, gets as far as a device name
+            on screen. That is the whole change to the threat model — the code stops being an
+            authorisation and goes back to being a channel key.
+            """
+            answer = {"ok": False}
+            done = threading.Event()
+
+            def prompt():
+                try:
+                    answer["ok"] = messagebox.askokcancel(
+                        "Give the key to this device?",
+                        "“{}” ({}) has entered the code and is asking for this PC's key.\n\n"
+                        "If that is not a device you are setting up right now, choose Cancel: "
+                        "the key is everything, and anyone holding it can read what you copy."
+                        .format(device, kind), icon="warning", parent=win)
+                finally:
+                    done.set()
+
+            try:
+                win.after(0, prompt)
+            except tk.TclError:
+                return False            # the window has been closed: there is nobody to approve
+            # A caller must not be able to hold the key hostage while nobody is at the PC, so an
+            # unanswered prompt is a refusal. The dialog itself stays up -- tkinter has no way to
+            # take back a modal box -- and an answer that arrives after this returns simply lands
+            # nowhere, by which time the socket is closed and the line below has said so.
+            if not done.wait(clipsync_pair.ASK_TIMEOUT):
+                return False
+            return answer["ok"]
+
+        # Keyed by clipsync_pair's ATTEMPT_* outcomes. Each one is a different thing to do next,
+        # which is the reason they are told apart at all.
+        trouble_text = {
+            clipsync_pair.ATTEMPT_CODE:
+                "Somebody entered a wrong code. After %d this window closes." % clipsync_pair.MAX_TRIES,
+            clipsync_pair.ATTEMPT_VERSION:
+                "A device with a different ClipSync version tried to pair — its code was right. "
+                "Update both ends to the same release.",
+            clipsync_pair.ATTEMPT_NETWORK:
+                "A device started pairing and its connection dropped. It can simply try again — "
+                "this did not count against the code.",
+            clipsync_pair.ATTEMPT_PROTOCOL:
+                "Something connected that did not speak ClipSync pairing.",
+            clipsync_pair.ATTEMPT_DECLINED:
+                "You refused a device. The key was not sent.",
+        }
+
+        def attempted(outcome, detail):
+            text = trouble_text.get(outcome, detail)
+            win.after(0, lambda: trouble.config(text=text))
+
         def closed(burned):
             win.after(0, lambda: finish(
                 "Too many wrong codes — closed." if burned
@@ -740,7 +1080,8 @@ class App:
         typed = self.port.get()
         base = int(typed) if cfgmod.check_port(typed) is None else 47521
         try:
-            p = clipsync_pair.Provider(psk, base, socket.gethostname().split(".")[0], paired, closed)
+            p = clipsync_pair.Provider(psk, base, socket.gethostname().split(".")[0],
+                                       ask, paired, closed, attempted)
         except Exception as e:                      # noqa: BLE001 - the message is the user's to read
             finish("Could not open a pairing window: %s" % e)
             return
@@ -749,8 +1090,10 @@ class App:
 
         def tick():
             left = max(0.0, p.closes_at - time.monotonic())
-            # Rounded UP and scheduled to the boundary, for the reasons written out in §12: a
-            # truncating countdown skips a second on its first tick, and a flat interval drifts.
+            # Rounded UP and scheduled to the boundary: a truncating countdown skips a second on its
+            # very first tick (0.99 s of the window has gone, so it shows one fewer than the number
+            # the user just read), and a flat one-second interval drifts against the real deadline,
+            # so the last few seconds stop agreeing with the device at the other end of the code.
             secs = int(left) + (1 if left % 1 else 0)
             status.config(text="Waiting — %d s left" % secs)
             if secs <= 0 or state["over"]:
@@ -811,29 +1154,38 @@ class App:
 
     def _ask_code(self, name):
         """
-        The six digits, typed here.
+        The digits, typed here.
 
-        Its own window rather than simpledialog, for one reason: the count has to be exact. Six
-        digits is the whole authentication, and a field that accepts five and fails at the handshake
-        would spend one of the provider's five attempts on a typo this could have caught.
+        Its own window rather than simpledialog, for one reason: the count has to be exact. The code
+        is the whole authentication, and a field that accepts one digit short and fails at the
+        handshake would spend one of the provider's five attempts on a typo this could have caught.
+
+        The length comes from clipsync_pair rather than being written out here, because it is a
+        protocol constant shared with Pairing.java: a window that asks for eight digits while the
+        provider generates eight is a pairing that cannot succeed and says "wrong code" about it.
+        (That is not hypothetical — the count has been six, then nine, then eight.)
         """
+        digits = _code_digits()
         win = tk.Toplevel(self.root)
         win.title("Enter the code")
         win.transient(self.root)
         out = {"code": None}
-        ttk.Label(win, wraplength=360, text="Enter the six-digit code shown on %s." % name).grid(
+        ttk.Label(win, wraplength=360,
+                  text="Enter the %d-digit code shown on %s." % (digits, name)).grid(
             row=0, column=0, columnspan=2, sticky="w", padx=PAD, pady=(PAD, 0))
         var = tk.StringVar()
-        entry = ttk.Entry(win, textvariable=var, width=10, font=("Consolas", 16))
+        entry = ttk.Entry(win, textvariable=var, width=digits + 4, font=("Consolas", 16))
         entry.grid(row=1, column=0, columnspan=2, sticky="w", padx=PAD, pady=PAD)
         entry.focus_set()
         note = ttk.Label(win, foreground="#b3261e", text="")
         note.grid(row=2, column=0, columnspan=2, sticky="w", padx=PAD)
 
         def ok():
-            code = var.get().strip()
-            if not re.fullmatch(r"\d{6}", code):
-                note.config(text="Six digits.")
+            # Spaces dropped rather than refused: eight digits is long enough that people group them
+            # when they read them out, and "1234 5678" is not a typo.
+            code = var.get().replace(" ", "").strip()
+            if not re.fullmatch(r"\d{%d}" % digits, code):
+                note.config(text="%d digits." % digits)
                 return
             out["code"] = code
             win.destroy()
@@ -852,11 +1204,27 @@ class App:
     def apply(self):
         if not self.revalidate():
             return
+        # Read before the write, because after it there is nothing left to compare against: the
+        # firewall rules name the OLD port and that name is the only handle on them.
+        old_port = self._saved_port()
         try:
             cfgmod.write_config(self.collect())
         except OSError as e:
             messagebox.showerror("Could not save", str(e), parent=self.root)
             return
+        acl = protect_config()
+
+        new_port = _int(self.port.get())
+        if old_port is not None and isinstance(new_port, int) and new_port != old_port:
+            problem = move_firewall(old_port, new_port)
+            if problem:
+                messagebox.showwarning(
+                    "The firewall still allows the old port",
+                    "The port was changed from {} to {}, but the inbound rules could not be "
+                    "moved:\n\n{}\n\nDevices on this LAN and on the internet will not reach this PC "
+                    "until they are. Run install.ps1 — it asks for administrator rights and rebuilds "
+                    "the rules from config.json.".format(old_port, new_port, problem),
+                    parent=self.root)
         try:
             note = restart_service()
         except Exception as e:                      # noqa: BLE001 - the save already succeeded
@@ -866,7 +1234,31 @@ class App:
                 "new settings up at the next logon.".format(e), parent=self.root)
             self.status.configure(text="Saved. Restart failed.")
             return
-        self.status.configure(text="Saved. " + note)
+        # The ACL is reported here and not in a dialog: it is the difference between a key only this
+        # account can read and one every account can, which is worth a line and is not worth an OK
+        # button in front of a save that worked.
+        self.status.configure(text="Saved. " + note + ("" if not acl else " Key file not locked down: " + acl))
+
+    def _saved_port(self):
+        """The port in the file on disk, or None if it cannot be read — which is not an error here:
+        a first Apply has no old port, and nothing that follows from one applies."""
+        try:
+            value = cfgmod.read_config().get("port")
+            return int(str(value).strip())
+        except (ValueError, TypeError, OSError, AttributeError):
+            return None
+
+
+def _code_digits() -> int:
+    """
+    How many digits a pairing code has, from the module that also generates and derives from them.
+
+    No fallback value: every caller is inside a pairing flow that already imported clipsync_pair, so
+    the import cannot fail here — and a hardcoded default is exactly the second copy of a protocol
+    constant that this window exists to avoid having.
+    """
+    from clipsync_pair import CODE_DIGITS
+    return CODE_DIGITS
 
 
 def _hostname() -> str:

@@ -67,8 +67,12 @@ public class Entry extends XposedModule {
                     }
                     case "showAccessNotificationLocked" -> {
                         if (!stringAt(m, 0)) continue;                 // (String callingPackage, …)
-                        // void on 12–14, boolean ("shown?") on 15: returning null there NPEs inside
-                        // system_server and every getPrimaryClip() of ours fails with RemoteException
+                        // Verified void on AOSP 14 (android-14.0.0_r18) and 15 (android-15.0.0_r1):
+                        // showAccessNotificationLocked(String callingPackage, int uid, int userId,
+                        // Clipboard clipboard). We still branch on the return type: should any ROM/
+                        // future release make it boolean ("was a toast shown?"), returning null there
+                        // would NPE inside system_server and break every getPrimaryClip() of ours, so
+                        // hand back FALSE in that case and null (skip) otherwise.
                         final Object skip = m.getReturnType() == boolean.class ? Boolean.FALSE : null;
                         hook(m).setId("toast").setExceptionMode(ExceptionMode.PROTECTIVE)
                                 .intercept(chain -> Common.PKG.equals(chain.getArg(0)) ? skip : chain.proceed());
@@ -80,15 +84,20 @@ public class Entry extends XposedModule {
             Method setter = Common.clipSetter(svc);
             if (setter != null) {
                 final int argc = setter.getParameterCount();
+                // Resolved once, here, from the overload we actually hooked — not re-derived per
+                // call and never guessed from the argument VALUES. See Common.sourceArg.
+                final int clipAt = Common.clipArg(setter), sourceAt = Common.sourceArg(setter);
                 hook(setter).setId("push").setExceptionMode(ExceptionMode.PROTECTIVE)
                         .intercept(chain -> {
                             Object r = chain.proceed();
                             Object[] args = new Object[argc];
                             for (int k = 0; k < argc; k++) args[k] = chain.getArg(k);
-                            Common.onClipSet(args);
+                            Common.onClipSet(args, clipAt, sourceAt);
                             return r;
                         });
-                hooked.add(setter.getName() + " -> push");
+                // The indices are in the log on purpose: a ROM with a reshaped setter shows up as
+                // "clip -1" or "src -1" in one line, rather than as a clipboard that quietly echoes.
+                hooked.add(setter.getName() + " -> push (clip " + clipAt + ", src " + sourceAt + ")");
             }
         } catch (Throwable t) {
             both(Log.ERROR, "clipboard hook failed", t);

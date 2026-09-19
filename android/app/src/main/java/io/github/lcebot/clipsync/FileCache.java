@@ -8,11 +8,8 @@ import org.json.JSONObject;
 
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -51,6 +48,19 @@ public final class FileCache {
         load();
     }
 
+    /**
+     * What this cache is holding, for the startup line: {@code {bytes, count}}.
+     *
+     * <p>From the index rather than from the directory, deliberately — the index is what the budget
+     * in {@link #prune} is spent against, so this is the number that explains a prune, and a
+     * disagreement with the folder's real size is itself worth seeing.
+     */
+    public synchronized long[] usage() {
+        long bytes = 0;
+        for (Entry e : entries.values()) bytes += e.size;
+        return new long[]{bytes, entries.size()};
+    }
+
     private synchronized void load() {
         if (!file.exists()) return;
         try (InputStream in = new FileInputStream(file)) {
@@ -75,7 +85,8 @@ public final class FileCache {
     /**
      * Writes the index. Never straight onto the live file: this process can be killed at any
      * moment, and a half-written cache.json is an index lost in full, since load() can only start
-     * over from empty. Write beside it, then move over it.
+     * over from empty. {@link Files#atomicWrite} is that rule, shared with the configuration and the
+     * status file rather than spelled out here a third time.
      */
     private synchronized void store() {
         try {
@@ -85,12 +96,8 @@ public final class FileCache {
                 root.put(me.getKey(), new JSONObject().put("uri", e.uri).put("name", e.name)
                         .put("mime", e.mime).put("size", e.size).put("used", e.used));
             }
-            File tmp = new File(file.getPath() + ".tmp");
-            try (FileOutputStream out = new FileOutputStream(tmp)) {
-                out.write(root.toString().getBytes(StandardCharsets.UTF_8));
-                out.getFD().sync();
-            }
-            Files.move(tmp.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING);
+            Files.atomicWrite(file,
+                    out -> out.write(root.toString().getBytes(StandardCharsets.UTF_8)));
             lastStore = System.currentTimeMillis();
         } catch (Exception e) {
             Logger.w("cache: cannot save index: " + e);
@@ -150,8 +157,15 @@ public final class FileCache {
     /**
      * Delete files unused for keepHours, then the least recently used until the total is under
      * keepMaxBytes. {@code keep} (the URI on the clipboard right now) is never removed.
+     *
+     * @param inFlight hashes currently being received or served, which {@link #prunePartials} must
+     *                 leave alone. Prune runs on the completion of <em>some other</em> file, so
+     *                 "old enough to delete" is a statement about the chunk map's mtime and says
+     *                 nothing about whether a transfer is live — a large file arriving slowly has an
+     *                 old map and an open stream, and deleting its pending row mid-transfer failed
+     *                 the transfer that was going perfectly well.
      */
-    public synchronized void prune(int keepHours, long keepMaxBytes, Uri keep) {
+    public synchronized void prune(int keepHours, long keepMaxBytes, Uri keep, java.util.Set<String> inFlight) {
         if (keepHours <= 0 && keepMaxBytes <= 0) return;
         ContentResolver r = ctx.getContentResolver();
         List<Map.Entry<String, Entry>> rows = new ArrayList<>(entries.entrySet());
@@ -179,11 +193,11 @@ public final class FileCache {
             store();
             Logger.i("prune: removed " + removed + " old file(s) from ClipSync folders");
         }
-        prunePartials(keepHours);
+        prunePartials(keepHours, inFlight);
     }
 
     /** Interrupted transfers (files/partial/*.json + their pending rows) older than keepHours. */
-    private void prunePartials(int keepHours) {
+    private void prunePartials(int keepHours, java.util.Set<String> inFlight) {
         if (keepHours <= 0) return;
         File dir = new File(ctx.getFilesDir(), "partial");
         File[] maps = dir.listFiles();
@@ -191,6 +205,11 @@ public final class FileCache {
         long cutoff = System.currentTimeMillis() - keepHours * 3600_000L;
         for (File m : maps) {
             if (m.lastModified() > cutoff) continue;
+            // The map is named for the hash it belongs to, which is the only handle this class has
+            // on "is somebody still using it".
+            String sha = m.getName().endsWith(".json")
+                    ? m.getName().substring(0, m.getName().length() - 5) : m.getName();
+            if (inFlight != null && inFlight.contains(sha)) continue;
             try (InputStream in = new FileInputStream(m)) {
                 JSONObject o = new JSONObject(new String(in.readAllBytes(), StandardCharsets.UTF_8));
                 ctx.getContentResolver().delete(Uri.parse(o.getString("uri")), null, null);

@@ -40,11 +40,35 @@ final class Common {
     private static final android.os.HandlerThread WORKER =
             new android.os.HandlerThread("clipsync-hook", android.os.Process.THREAD_PRIORITY_BACKGROUND);
 
+    /**
+     * ONE Handler, shared by everything here. It has to be one object, not one per call.
+     *
+     * <p>{@code MessageQueue.removeMessages} matches on {@code msg.target == handler}, and the
+     * target is whichever Handler <em>posted</em> the message. A fresh Handler per call still shares
+     * the looper, so posting worked — but {@link #scheduleCheck}'s {@code removeCallbacks} was
+     * asking a brand new Handler to cancel a message posted by a different one, which never matched.
+     * Every install and every process death therefore left another never-ending 60-second self-
+     * rescheduling chain inside system_server, each one calling getRunningServices(MAX_VALUE) — a
+     * full sweep of every running service — once a minute, for the life of the boot.
+     *
+     * <p>Double-checked on a volatile field because this is reached from binder threads and from the
+     * worker itself; the inner lock on WORKER is the one that keeps the thread from being started
+     * twice.
+     */
+    private static volatile android.os.Handler HANDLER;
+
     static android.os.Handler handler() {
-        synchronized (WORKER) {
-            if (!WORKER.isAlive()) WORKER.start();
+        android.os.Handler h = HANDLER;
+        if (h != null) return h;
+        synchronized (Common.class) {
+            if (HANDLER == null) {
+                synchronized (WORKER) {
+                    if (!WORKER.isAlive()) WORKER.start();
+                }
+                HANDLER = new android.os.Handler(WORKER.getLooper());
+            }
+            return HANDLER;
         }
-        return new android.os.Handler(WORKER.getLooper());
     }
 
     static android.content.Context systemContext() {
@@ -225,7 +249,22 @@ final class Common {
         h.postDelayed(CHECK, delayMs);
     }
 
-    /** ClipboardService's outermost clip setter (13+: …InternalLocked → …InternalNoClassifyLocked). */
+    /**
+     * ClipboardService's clip setter. On the releases this app installs on (minSdk 35 = Android 15
+     * and up) there are TWO methods named exactly {@code setPrimaryClipInternalLocked}, verified
+     * against AOSP {@code services/core/java/com/android/server/clipboard/ClipboardService.java}
+     * (tags android-14.0.0_r18 / android-15.0.0_r1 — 14 is no longer a supported target, but the
+     * shape is the same on both, so the older tag is kept as corroboration):
+     * <ul>
+     *   <li>{@code setPrimaryClipInternalLocked(ClipData clip, int uid, int deviceId, String sourcePackage)}
+     *   <li>{@code setPrimaryClipInternalLocked(Clipboard clipboard, ClipData clip, int uid, String sourcePackage)}
+     *       (the first calls the second for the current user; related profiles go via
+     *       {@code setPrimaryClipInternalNoClassifyLocked}, so exactly ONE of these fires per set)
+     * </ul>
+     * We return whichever exact-name match {@code getDeclaredMethods()} yields first; both carry the
+     * clip as their only ClipData and sourcePackage as their last String, so {@link #clipArg} and
+     * {@link #sourceArg} resolve correctly either way and a set is pushed exactly once.
+     */
     static Method clipSetter(Class<?> svc) {
         Method setter = null;
         for (Method m : svc.getDeclaredMethods()) {
@@ -235,16 +274,66 @@ final class Common {
         return setter;
     }
 
-    /** Pull the ClipData out of a clip-setter call and push it unless we wrote it ourselves. */
-    static void onClipSet(Object[] args) {
+    /**
+     * Where the ClipData sits in the clip setter's parameter list, or -1.
+     *
+     * <p>First ClipData parameter. Every known overload has exactly one, so "first" and "the one"
+     * are the same thing; taking the first rather than the last is what stops a future overload with
+     * an extra ClipData (a previous value, say) from being read as the new clip.
+     */
+    static int clipArg(Method m) {
+        Class<?>[] p = m.getParameterTypes();
+        for (int i = 0; i < p.length; i++) if (p[i] == android.content.ClipData.class) return i;
+        return -1;
+    }
+
+    /**
+     * Where {@code sourcePackage} sits in the clip setter's parameter list, or -1 if it has none.
+     *
+     * <p>Resolved from the signature, once, at hook time — and that is the point of it. This used to
+     * be "scan every argument for a String equal to our package name", which is a different question
+     * with the same answer most of the time: it also says "ours" for a clip whose *label* or whose
+     * calling-package parameter happens to be our package name, and it silently stops working the
+     * day an overload puts our name somewhere else. Reading a known position cannot drift quietly;
+     * if the shape changes, this returns -1 and the effect is visible rather than subtle.
+     *
+     * <p><b>The LAST String</b>, because that is where sourcePackage sits in every internal-setter
+     * shape AOSP ships on the releases we run on (verified against ClipboardService.java at
+     * android-14.0.0_r18 and android-15.0.0_r1):
+     * <ul>
+     *   <li>{@code setPrimaryClipInternalLocked(ClipData, int uid, int deviceId, String sourcePackage)}
+     *   <li>{@code setPrimaryClipInternalLocked(Clipboard, ClipData, int uid, String sourcePackage)}
+     * </ul>
+     * The middle int is {@code deviceId} on 14/15 (a virtual-display id), not a userId — but its
+     * type is irrelevant here; only "last String == sourcePackage" matters, and it holds. NOTE the
+     * trailing String is sourcePackage ONLY on these INTERNAL methods; the public binder entry points
+     * ({@code setPrimaryClip(ClipData, String callingPackage, String attributionTag, int, int)} and
+     * {@code clipboardAccessAllowed(int, String callingPackage, String attributionTag, …)}) end in
+     * attributionTag, not sourcePackage — which is why we hook the internal setter and read
+     * callingPackage by fixed index 0/1 in the access hooks, never "the last String" there.
+     *
+     * <p>If a ROM ever reshapes the internal setter with no String at all this returns -1: nothing is
+     * recognised as our own write, and the echo is caught one layer up by SyncService's sent-hash set
+     * instead — a graceful degradation, not a crash.
+     */
+    static int sourceArg(Method m) {
+        Class<?>[] p = m.getParameterTypes();
+        for (int i = p.length - 1; i >= 0; i--) if (p[i] == String.class) return i;
+        return -1;
+    }
+
+    /**
+     * Pull the ClipData out of a clip-setter call and push it unless we wrote it ourselves.
+     *
+     * @param clipAt   {@link #clipArg}'s answer for the hooked method
+     * @param sourceAt {@link #sourceArg}'s answer, or -1 when the overload carries no source package
+     */
+    static void onClipSet(Object[] args, int clipAt, int sourceAt) {
         try {
-            android.content.ClipData clip = null;
-            boolean ours = false;
-            for (Object a : args) {
-                if (a instanceof android.content.ClipData) clip = (android.content.ClipData) a;
-                else if (PKG.equals(a)) ours = true;           // sourcePackage: our own write
-            }
-            if (clip != null && !ours) pushClip(clip);
+            if (clipAt < 0 || clipAt >= args.length) return;
+            if (!(args[clipAt] instanceof android.content.ClipData clip)) return;
+            boolean ours = sourceAt >= 0 && sourceAt < args.length && PKG.equals(args[sourceAt]);
+            if (!ours) pushClip(clip);
         } catch (Throwable ignored) {
         }
     }

@@ -15,6 +15,7 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Arrays;
@@ -47,7 +48,7 @@ public final class Connection implements AutoCloseable {
      * <p>It exists because <b>a close without one becomes a loop</b>, and that failure needs no
      * network trouble to trigger. When a duplicate link is dropped, the far side sees nothing but a
      * disconnect, its reconnect logic fires, and it rebuilds exactly the link that was discarded — to
-     * be discarded again. A peer that receives BYE does not schedule a redial. (docs/p2p-plan.md §5)
+     * be discarded again. A peer that receives BYE does not schedule a redial.
      */
     public static final int T_BYE = 2;
     public static final int T_PING = 3, T_PONG = 4;
@@ -62,7 +63,8 @@ public final class Connection implements AutoCloseable {
      */
     public static final String BYE_IDLE = "idle";
 
-    // Key rotation (docs/p2p-plan.md §17).
+    // Key rotation: the PSK is replaced on a schedule, and both ends accept the outgoing key for a
+    // while so the changeover is invisible. Keys holds the arithmetic.
     /**
      * Sent after HELLO on a control connection, carrying this device's key schedule: {@code {psk,
      * since, next}}. Both ends send one if rotation is enabled; the receiver reconciles with
@@ -77,7 +79,8 @@ public final class Connection implements AutoCloseable {
     public static final int T_OFFER = 7, T_WANT = 8, T_HAVE = 9, T_SKIP = 10;
     public static final int T_CHUNK = 11, T_PULL = 12, T_END = 13, T_ABORT = 14;
 
-    // Pairing (docs/p2p-plan.md §12).
+    // Pairing: getting the PSK onto a second device without typing 64 hex characters into it. The
+    // channel is an ordinary one keyed by an eight-digit code instead of the PSK; see Pairing.
     /**
      * {@code PAIR_ASK} joiner → provider, "give me the key", and {@code PAIR_KEY} back with it.
      *
@@ -89,7 +92,8 @@ public final class Connection implements AutoCloseable {
      */
     public static final int T_PAIR_ASK = 15, T_PAIR_KEY = 16;
 
-    // Relay coordination (docs/p2p-plan.md §7).
+    // Relay coordination: a node that cannot reach a sender directly asks a peer that can to hold
+    // the file and offer it on.
     /**
      * {@code RELAY_ASK} waiter → relay, "I am waiting for this sha; offer it to me when you have it."
      * {@code RELAY_OK} relay → waiter, "accepted."
@@ -98,14 +102,16 @@ public final class Connection implements AutoCloseable {
      */
     public static final int T_RELAY_ASK = 17, T_RELAY_OK = 18, T_RELAY_NO = 19;
 
-    // Peer roster exchange (docs/p2p-plan.md §18): a node tells each direct peer about its other
-    // direct peers, so every node knows the 2-hop neighbourhood and can build a complete OFFER `to`.
+    // Peer roster exchange: a node tells each direct peer about its other direct peers, so every
+    // node knows the 2-hop neighbourhood and can build a complete OFFER `to`.
     public static final int T_PEERS = 20;
     /**
      * 2: HELLO is exchanged in both directions and carries the node id, type, persistence and
-     * battery bucket (docs/p2p-plan.md §2). A clean break, by §9 — a version 1 peer is refused
-     * rather than tolerated, because a peer that cannot name itself cannot be deduplicated or
-     * recognised as self.
+     * battery bucket (see {@link Hello}). A clean break rather than a tolerated one, which is this
+     * project's standing rule for protocol changes — the two ends ship together, so a version
+     * mismatch is refused with a plain message instead of being worked around. A version 1 peer
+     * cannot name itself, and a peer that cannot name itself cannot be deduplicated or recognised
+     * as self.
      *
      * <p>3: HELLO also carries {@code port} and {@code data_out}, and every device listens.
      *
@@ -114,8 +120,16 @@ public final class Connection implements AutoCloseable {
      * moment as this end opens its, because the rule that stops that is the field it does not send.
      * Every file would move twice. A failure a version check turns into one refused connection with
      * a plain message is worth a version number; both ends are updated together regardless.
+     *
+     * <p>5: the clipboard hash is taken over <b>newline-normalised</b> text (CRLF read as LF), OFFER
+     * headers carry {@code forwarded}, and RELAY_ASK carries {@code size}. The first of those is why
+     * this is a version and not three optional fields: the sha is a value on the wire that both ends
+     * compute independently, so a peer using the other rule does not degrade, it disagrees — every
+     * clip containing a Windows line ending would be dropped as corrupt, silently from the user's
+     * side. The two ends ship together, so a refused handshake with a plain message is the cheapest
+     * way for a mismatched pair to say so.
      */
-    public static final int PROTOCOL_VERSION = 4;
+    public static final int PROTOCOL_VERSION = 5;
     /** Chunk size (CHUNK frames carry u32 index ‖ bytes); also the largest frame anyone buffers. */
     public static final int CHUNK = 512 * 1024;
 
@@ -167,23 +181,57 @@ public final class Connection implements AutoCloseable {
     private final Socket socket;
     private final DataInputStream in;
     private final OutputStream out;
-    private byte[] txKey, rxKey;
+    /**
+     * The two halves of the channel, one per direction.
+     *
+     * <p>Stateful on purpose. They own the nonce counters that used to be {@code txCtr}/{@code
+     * rxCtr} here, which turned "a nonce is never reused under one key" from a convention this class
+     * had to keep into something it cannot break: there is no way from outside to set a counter, and
+     * no way to seal a frame without advancing one. {@code tx} is touched only under
+     * {@link #sendLock}; {@code rx} only on the single thread that reads this connection.
+     */
+    private Crypto.Sealer tx;
+    private Crypto.Opener rx;
     private final int maxFrame;
     /** This device's own listening port, declared in HELLO so an accepted peer can reach us back. */
     private final int listenPort;
-    private long txCtr = 0, rxCtr = 0;
 
     /**
-     * Candidate key pairs for an inbound connection that has not yet identified its peer's key.
+     * Candidate channels for an inbound connection that has not yet identified its peer's key.
      *
      * <p>Null once the key is resolved — either immediately for outbound connections (which always
      * use the current PSK) or on the first {@link #recv()} for inbound ones. The candidate list is
      * {@link Keys.Schedule#accepted()}, so every key the device considers valid is tried, in the
      * order worth trying: current first, then successor, then the ring.
+     *
+     * <p>One {@link Crypto.Opener} per candidate rather than one shared counter, which is what makes
+     * trial decryption safe to write: an Opener that fails has not advanced, so every loser is still
+     * at frame 0 and the winner is at frame 1 — exactly the state the connection needs to keep.
      */
-    private byte[][] candidateTxKeys, candidateRxKeys;
+    private Crypto.Sealer[] candidateSealers;
+    private Crypto.Opener[] candidateOpeners;
     private byte[][] candidateSecrets;
     private boolean keyResolved;
+
+    /**
+     * Whether the peer has proved it holds a key we accept, by sending one frame that decrypts.
+     *
+     * <p>Not the same question as {@link #keyResolved}, which is only "do we know <em>which</em> of
+     * several keys to use" and is true from the start whenever there is exactly one candidate — the
+     * ordinary case, which is precisely the case the limits below exist for. True from the start for
+     * a connection we opened: we chose the address, and a data connection's first inbound frame is a
+     * 512 KiB chunk, which no pre-auth cap may refuse.
+     */
+    private boolean peerAuthenticated;
+    /**
+     * When an unauthenticated connection has run out of time, on the monotonic clock.
+     *
+     * <p>Absolute, where {@link #HANDSHAKE_TIMEOUT_MS} as a socket timeout is per read. The two
+     * differ for exactly the caller worth stopping: one byte every fourteen seconds never trips a
+     * per-read timeout, so it can hold an inbound worker for as long as it likes at no cost to
+     * itself. A deadline set at construction is the only thing that bounds it.
+     */
+    private final long handshakeDeadline;
 
     /**
      * The secret that authenticated this channel, or null for outbound connections where it is
@@ -208,7 +256,6 @@ public final class Connection implements AutoCloseable {
      * <p>It is also half of {@link #drivesTransfer()} — the other half being what the peer declares
      * it can do — and it is why {@link #peerPort} exists: an accepted socket's remote port is the
      * peer's ephemeral source port, so the listening port has to be declared rather than observed.
-     * (docs/p2p-plan.md §5, §7)
      */
     public final boolean inbound;
     /** Human-readable peer: listed address or mDNS service name, plus the address actually used. */
@@ -223,8 +270,14 @@ public final class Connection implements AutoCloseable {
      *
      * <p>Not final any more, because an accepted connection learns it from the peer's HELLO and the
      * HELLO arrives after the constructor. Taking the dialler's word rather than re-deciding is
-     * deliberate and is what the PC has always done: both ends must hold the <em>same</em> value or
-     * §5's first dedup rule can reach opposite verdicts at the two ends and close both links.
+     * deliberate and is what the PC has always done: both ends must hold the <em>same</em> value,
+     * because link dedup prefers the LAN link over the internet one and two ends that disagree
+     * about which link is which can pick opposite winners and close both.
+     *
+     * <p>On a data connection it is not decided here at all: {@link #data} copies the control
+     * connection's value over the constructor's guess, because a data connection has no Context to
+     * answer {@link OnLink} with and {@code via} alone would call a LAN peer remote on every link
+     * that did not come up over mDNS.
      */
     public volatile boolean lanPeer;
     /** Where this session connected; data connections for file transfer go to the same place. */
@@ -237,11 +290,11 @@ public final class Connection implements AutoCloseable {
      * cellular does not close a TCP socket, it leaves it half-open, and that delay was the whole of
      * what "the drop is noticed at once" asks for. And with several peers, "which connections died"
      * is a question that cannot be answered at all while sockets ride the default network
-     * anonymously. (docs/p2p-plan.md §5)
+     * anonymously.
      */
     public final Network network;
 
-    // ---- what the peer declared in its HELLO (protocol 2, docs/p2p-plan.md §2). Set by hello().
+    // ---- what the peer declared in its HELLO (protocol 2 onwards; see Hello). Set by readHello().
     /** The peer's node id. The key for link dedup, OFFER recipients and priority tie-breaks. */
     public String peerId;
     /** {@code pc} | {@code tablet} | {@code phone}. */
@@ -265,9 +318,11 @@ public final class Connection implements AutoCloseable {
      * <p>A file's bytes move over separate connections, and <b>exactly one</b> of the two nodes must
      * open them: both opening transfers the file twice, neither opening transfers it not at all.
      * While a phone only ever dialled a PC that only ever accepted, the answer was structural and
-     * needed no field. It stopped being structural the moment the PC gained a client role, and the
-     * PC still has no code to open a data connection — so it declares that, and this end takes the
-     * job whoever dialled. See {@link #drivesTransfer()}.
+     * needed no field. It stopped being structural the moment the PC gained a client role. Both
+     * ends now declare {@code true} — the PC opens its own data connections as of the release that
+     * fixed PC-to-PC transfers — so the rule is simply "whoever dialled drives", which is what
+     * {@link #drivesTransfer()} computes. The field stays because the rule is a negotiation, not a
+     * constant: an end that cannot dial out says so and the other one takes the job.
      */
     public boolean peerDataOut;
 
@@ -288,7 +343,7 @@ public final class Connection implements AutoCloseable {
      *
      * <p>The device listens now, which is what makes phone-to-tablet possible at all: neither of
      * them has a stable address the other can be configured with, and only one of the two needs to
-     * find the other for both to be connected. (docs/p2p-plan.md §13, phase 4)
+     * find the other for both to be connected.
      *
      * <p>The name is the address until the peer says otherwise: on this side the HELLO arrives
      * before we answer, so there is no window in which the peer is anonymous for long.
@@ -298,19 +353,23 @@ public final class Connection implements AutoCloseable {
      * in. Which key matched is exposed via {@link #matchedSecret} once the first frame lands.
      */
     public static Connection accept(Context ctx, Config cfg, Socket s, Network net) throws Exception {
-        List<String> hexKeys = cfg.keys.accepted();
-        byte[][] secrets = new byte[hexKeys.size()][];
-        for (int i = 0; i < hexKeys.size(); i++) secrets[i] = hexToBytes(hexKeys.get(i));
+        // One unusable entry skipped, not the whole ring abandoned. The hex parse used to throw from
+        // here, so a single malformed key anywhere in the ring made every inbound connection fail
+        // before a byte was read, permanently and across restarts. Crypto.fromHex answers null
+        // instead, which is what makes skipping the bad entry the natural thing to write. The
+        // validation in Config should keep one out; this is what stops a value that got in anyway
+        // from taking the listening socket down with it.
+        List<byte[]> usable = new ArrayList<>();
+        for (String h : cfg.keys.accepted()) {
+            byte[] k = Crypto.fromHex(h);
+            if (k == null) Logger.w("keys: skipping a malformed key in the ring");
+            else usable.add(k);
+        }
+        if (usable.isEmpty()) throw new IOException("no usable key to authenticate with");
+        byte[][] secrets = usable.toArray(new byte[0][]);
         return new Connection(secrets, cfg.maxFrame(), cfg.port,
                 new Object[]{s, "inbound", String.valueOf(s.getRemoteSocketAddress())
                         .replaceFirst("^[^/]*/", "")}, ctx, net, true);
-    }
-
-    private static byte[] hexToBytes(String hex) {
-        byte[] out = new byte[hex.length() / 2];
-        for (int i = 0; i < out.length; i++)
-            out[i] = (byte) Integer.parseInt(hex.substring(2 * i, 2 * i + 2), 16);
-        return out;
     }
 
     /**
@@ -352,13 +411,16 @@ public final class Connection implements AutoCloseable {
         Connection c = new Connection(cfg.psk, cfg.maxFrame(), cfg.port, new Object[]{
                 connectTo(to, control.lanPeer ? MDNS_CONNECT_TIMEOUT_MS : CONNECT_TIMEOUT_MS, control.network),
                 control.via, "data"}, null, control.network, false);
-        JSONObject hello = new JSONObject();
-        hello.put("v", PROTOCOL_VERSION);
-        hello.put("id", Node.id());        // so an accepting peer can tell whose transfer this is
-        hello.put("device", device);
-        hello.put("role", "data");
-        hello.put("sha256", sha256);
-        c.sendJson(T_HELLO, hello);
+        // Copied from the control connection rather than left to the constructor's guess. A data
+        // connection is built with ctx == null, so the constructor can only fall back to "did the
+        // link come up over mDNS" — which says true for an mdns link and false for a `direct` or
+        // `inbound` one even when the peer is a hop away on the same LAN. Nothing reads it on a data
+        // connection today, and a wrong answer waiting for its first reader is worse than no answer:
+        // the control connection settled this during its handshake, so take its verdict.
+        c.lanPeer = control.lanPeer;
+        // The id is here so an accepting peer can tell whose transfer this is; the sha names which
+        // file. Everything a peer link declares is deliberately absent — see Hello.data.
+        c.sendJson(T_HELLO, Hello.data(Node.id(), device, sha256).toJson());
         return c;
     }
 
@@ -393,6 +455,18 @@ public final class Connection implements AutoCloseable {
     private static final int PAIR_MAX_FRAME = 4096;
 
     /**
+     * The most an <b>unauthenticated</b> caller may make this end allocate.
+     *
+     * <p>The same rule the pairing channel has always had, applied where it was missing. Until the
+     * first frame decrypts, nothing about the peer is known — the length prefix is plaintext and
+     * anybody who can reach the port can write one, so the ordinary frame cap (a chunk, over half a
+     * megabyte) times the inbound worker limit is what an attacker gets to allocate for the cost of
+     * a TCP handshake. A real HELLO is a dozen short fields; 8 KiB leaves room for a long device
+     * name and still ends that.
+     */
+    private static final int PRE_AUTH_MAX_FRAME = 8192;
+
+    /**
      * Our half of a pairing declaration: who is asking, and nothing that only a configured node has.
      *
      * <p>Deliberately not {@link #sendHello}: that one carries a node id, a sequence cursor and the
@@ -401,12 +475,7 @@ public final class Connection implements AutoCloseable {
      * would be enrolling itself into machinery it is not part of yet.
      */
     public void sendPairHello(Context ctx) throws Exception {
-        JSONObject mine = new JSONObject();
-        mine.put("v", PROTOCOL_VERSION);
-        mine.put("role", "pair");
-        mine.put("device", Node.name());
-        mine.put("type", Node.type(ctx));
-        sendJson(T_HELLO, mine);
+        sendJson(T_HELLO, Hello.pair(Node.name(), Node.type(ctx)).toJson());
     }
 
     /**
@@ -419,14 +488,18 @@ public final class Connection implements AutoCloseable {
      * <p>Which is the last thing this does: **if the peer's id is ours, the connection is dropped.**
      * Both ends hold the same PSK, so the handshake succeeds and the node would otherwise enrol
      * itself as a peer — broadcasting to itself and comparing versions against its own clips. The
-     * declared own-addresses list (§4a) catches the common spellings before a socket is ever opened;
-     * this catches everything else, and is the authority. (docs/p2p-plan.md §5)
+     * user's declared own-addresses list catches the common spellings before a socket is ever
+     * opened; this catches everything else, and is the authority.
      *
+     * @return the peer's HELLO — the dialler's half of catch-up reads {@link Hello#clipTs} and
+     *         {@link Hello#clipSha} from it to decide whether the peer is behind. Discarding it was
+     *         how two phones could reconnect and stay out of step: the fields were sent by both ends
+     *         and consumed by neither.
      * @throws SelfConnection when the peer turns out to be this device
      */
-    public void hello(Context ctx, long clipTs, String clipSha) throws Exception {
+    public Hello hello(Context ctx, long clipTs, String clipSha) throws Exception {
         sendHello(ctx, clipTs, clipSha);
-        readHello();
+        return readHello();
     }
 
     /**
@@ -439,57 +512,65 @@ public final class Connection implements AutoCloseable {
      * actually about that peer rather than a zero.
      */
     public void sendHello(Context ctx, long clipTs, String clipSha) throws Exception {
-        JSONObject mine = new JSONObject();
-        mine.put("v", PROTOCOL_VERSION);
-        mine.put("id", Node.id());
-        mine.put("device", Node.name());
-        mine.put("type", Node.type(ctx));
-        mine.put("persistent", Node.persistent(ctx));
-        mine.put("battery", Node.battery(ctx));
-        mine.put("clip_ts", clipTs);
-        if (clipSha != null) mine.put("clip_sha", clipSha);
-        mine.put("lan", lanPeer);
-        mine.put("port", listenPort);       // an accepted connection cannot see this any other way
-        mine.put("data_out", true);         // this end can open data connections; see peerDataOut
-        sendJson(T_HELLO, mine);
+        // Values, not a Context: Hello is the semantic layer and knows nothing about Android. The
+        // two fields nothing else could supply are listenPort — an accepted connection cannot see
+        // our listening port any other way — and lanPeer, which is this end's verdict on whether the
+        // two are on one LAN and which the accepter takes as final.
+        Hello mine = Hello.control(Node.id(), Node.name(), Node.type(ctx),
+                Node.persistent(ctx), Node.battery(ctx), clipTs, clipSha, lanPeer, listenPort);
+        // Once per process, and here rather than at start-up because this is the only place a real
+        // outgoing declaration exists: the thing being checked is what control() built, not a
+        // reconstruction of it. See Hello.auditSent.
+        mine.auditSent();
+        sendJson(T_HELLO, mine.toJson());
     }
 
     /**
      * Read what the peer declares, and refuse it here if it cannot be talked to.
      *
-     * @return the peer's HELLO, for the fields only the caller cares about ({@code clip_ts},
-     *         {@code clip_sha}, and on an accepted connection {@code role} and {@code sha256})
+     * <p>Parsing is {@link Hello#parse}'s job; what is left here is everything that is about
+     * <em>this connection</em> rather than about the message — the version gate, the fields that
+     * become connection state, the self-check, and raising the read timeout now that the peer has
+     * proved it is one.
+     *
+     * @return the peer's declaration, for the fields only the caller cares about
+     *         ({@link Hello#clipTs}, {@link Hello#clipSha}, and on an accepted connection
+     *         {@link Hello#role} and {@link Hello#sha256})
      * @throws SelfConnection when the peer turns out to be this device
      */
-    public JSONObject readHello() throws Exception {
+    public Hello readHello() throws Exception {
         Frame f = recv();
         if (f.type != T_HELLO) throw new IOException("expected HELLO, got frame type " + f.type);
-        JSONObject theirs = new JSONObject(new String(f.payload, StandardCharsets.UTF_8));
-        int v = theirs.optInt("v", -1);
-        if (v != PROTOCOL_VERSION)
-            throw new IOException("protocol version mismatch (peer speaks " + v + ", we speak " + PROTOCOL_VERSION + ")");
-        peerId = theirs.optString("id", null);
-        peerType = theirs.optString("type", "?");
-        peerPersistent = theirs.optBoolean("persistent", false);
-        peerBattery = theirs.optString("battery", "medium");
-        peerPort = theirs.optInt("port", peerPort);
-        peerDataOut = theirs.optBoolean("data_out", false);
-        String name = theirs.optString("device", "");
-        if (!name.isEmpty()) peerLabel = name;
+        Hello theirs = Hello.parse(new JSONObject(new String(f.payload, StandardCharsets.UTF_8)));
+        if (theirs.v != PROTOCOL_VERSION)
+            throw new IOException("protocol version mismatch (peer speaks " + theirs.v
+                    + ", we speak " + PROTOCOL_VERSION + ")");
+        peerId = theirs.id;
+        peerType = theirs.type;
+        peerPersistent = theirs.persistent;
+        peerBattery = theirs.battery;
+        // Only if it said: a peer that omits the field leaves us with the remote port we already
+        // have, which is the right number on a connection we opened.
+        if (theirs.has(Hello.K_PORT)) peerPort = theirs.port;
+        peerDataOut = theirs.dataOut;
+        if (!theirs.device.isEmpty()) peerLabel = theirs.device;
         socket.setSoTimeout(READ_TIMEOUT_MS);      // it has spoken; the short leash was for silence
         // A stream or a pairing exchange, not a peer: neither enrols anything, so neither needs the
-        // node checks below. Both still filled the name and type above, which is what the provider
-        // shows when it asks the user whether to hand over the key.
-        String role = theirs.optString("role");
-        if ("data".equals(role) || "pair".equals(role)) return theirs;
+        // node checks below. Both still filled peerLabel and peerType above, and on the pairing path
+        // those two are the only description of the caller the provider has to put in front of the
+        // user before it hands the key over — the joiner has no node id to show.
+        if (Hello.ROLE_DATA.equals(theirs.role) || Hello.ROLE_PAIR.equals(theirs.role)) return theirs;
+        theirs.audit(peerLabel);
         // Protocol 2's premise is that a peer can name itself, and everything downstream assumes it:
         // a link with no id cannot be deduplicated, cannot be recognised as this device, and would
         // sit outside the map that the heartbeat, the broadcast and the status all iterate — running
         // but reaching nobody. Refusing here is much easier to diagnose than that.
         if (peerId == null || peerId.isEmpty()) throw new IOException("peer sent no node id");
         if (peerId.equals(Node.id())) throw new SelfConnection(peerName);
-        // On an accepted connection the dialler's verdict is the one that counts (see lanPeer).
-        if (inbound && theirs.has("lan")) lanPeer = theirs.optBoolean("lan", lanPeer);
+        // On an accepted connection the dialler's verdict is the one that counts (see lanPeer). The
+        // `has` test is what distinguishes "the peer says we are not on one LAN" from "the peer said
+        // nothing", which are different answers and must not collapse into false.
+        if (inbound && theirs.has(Hello.K_LAN)) lanPeer = theirs.lan;
         return theirs;
     }
 
@@ -514,7 +595,6 @@ public final class Connection implements AutoCloseable {
      *               of what makes pairing possible without new machinery: confidentiality,
      *               authentication and replay resistance all come along unchanged, and a caller
      *               without the code fails at the handshake exactly as a wrong PSK does today.
-     *               (docs/p2p-plan.md §12)
      */
     private Connection(byte[] secret, int maxFrame, int listenPort,
                        Object[] r, Context ctx, Network net, boolean inbound) throws Exception {
@@ -535,6 +615,8 @@ public final class Connection implements AutoCloseable {
         this.listenPort = listenPort;
         this.inbound = inbound;
         this.network = net;
+        this.handshakeDeadline = android.os.SystemClock.elapsedRealtime() + HANDSHAKE_TIMEOUT_MS;
+        this.peerAuthenticated = !inbound;
         socket = (Socket) r[0];
         via = (String) r[1];
         remote = (InetSocketAddress) socket.getRemoteSocketAddress();
@@ -547,6 +629,10 @@ public final class Connection implements AutoCloseable {
         lanPeer = "mdns".equals(via) || (ctx != null && OnLink.isOnLink(ctx, net, socket.getInetAddress()));
         socket.setSoTimeout(inbound ? HANDSHAKE_TIMEOUT_MS : READ_TIMEOUT_MS);
         socket.setTcpNoDelay(true);
+        // A hint to the kernel and nothing more: Android's default idle time before the first probe
+        // is two hours, which is far past every timeout here, and it is not settable from this API.
+        // The heartbeat is what actually notices a dead peer; this only helps on the ROMs that
+        // shorten the default themselves.
         socket.setKeepAlive(true);
         in = new DataInputStream(socket.getInputStream());
         out = socket.getOutputStream();
@@ -575,20 +661,20 @@ public final class Connection implements AutoCloseable {
         if (secrets.length == 1) {
             byte[] c2s = Crypto.hkdfSha256(secrets[0], salt, "clipsync c2s".getBytes(StandardCharsets.US_ASCII), 32);
             byte[] s2c = Crypto.hkdfSha256(secrets[0], salt, "clipsync s2c".getBytes(StandardCharsets.US_ASCII), 32);
-            txKey = inbound ? s2c : c2s;
-            rxKey = inbound ? c2s : s2c;
+            tx = new Crypto.Sealer(inbound ? s2c : c2s);
+            rx = new Crypto.Opener(inbound ? c2s : s2c);
             matchedSecret = secrets[0];
             keyResolved = true;
         } else {
-            // Derive key pairs for every candidate; the first recv() picks the winner.
+            // Derive a channel for every candidate; the first recv() picks the winner.
             candidateSecrets = secrets;
-            candidateTxKeys = new byte[secrets.length][];
-            candidateRxKeys = new byte[secrets.length][];
+            candidateSealers = new Crypto.Sealer[secrets.length];
+            candidateOpeners = new Crypto.Opener[secrets.length];
             for (int i = 0; i < secrets.length; i++) {
                 byte[] c2s = Crypto.hkdfSha256(secrets[i], salt, "clipsync c2s".getBytes(StandardCharsets.US_ASCII), 32);
                 byte[] s2c = Crypto.hkdfSha256(secrets[i], salt, "clipsync s2c".getBytes(StandardCharsets.US_ASCII), 32);
-                candidateTxKeys[i] = inbound ? s2c : c2s;
-                candidateRxKeys[i] = inbound ? c2s : s2c;
+                candidateSealers[i] = new Crypto.Sealer(inbound ? s2c : c2s);
+                candidateOpeners[i] = new Crypto.Opener(inbound ? c2s : s2c);
             }
             keyResolved = false;
         }
@@ -657,8 +743,17 @@ public final class Connection implements AutoCloseable {
                     return new Won(s, c);
                 }));
             }
+            // One deadline for the whole race, not one per candidate. The poll used to take the
+            // full bound each time round the loop, so the "≈ stagger·n + timeout" above was the
+            // bound on a *single* wait and the real worst case was that figure times the number of
+            // addresses — eight adapters on one PC is forty-eight seconds with the dialler thread
+            // blocked throughout, for a peer that is simply not there.
+            long until = System.currentTimeMillis()
+                    + (long) RACE_STAGGER_MS * cands.size() + timeoutMs + 1000;
             for (int done = 0; done < cands.size() && won == null; done++) {
-                Future<Won> f = cs.poll((long) RACE_STAGGER_MS * cands.size() + timeoutMs + 1000, TimeUnit.MILLISECONDS);
+                long left = until - System.currentTimeMillis();
+                if (left <= 0) break;
+                Future<Won> f = cs.poll(left, TimeUnit.MILLISECONDS);
                 if (f == null) break;
                 try {
                     won = f.get();
@@ -747,7 +842,7 @@ public final class Connection implements AutoCloseable {
         pt[0] = (byte) type;
         System.arraycopy(payload, 0, pt, 1, payload.length);
         synchronized (sendLock) {
-            byte[] ct = Crypto.seal(txKey, txCtr++, pt);
+            byte[] ct = tx.seal(pt);
             byte[] frame = ByteBuffer.allocate(4 + ct.length).putInt(ct.length).put(ct).array();
             out.write(frame);
             out.flush();
@@ -787,52 +882,95 @@ public final class Connection implements AutoCloseable {
         send(type, o.toString().getBytes(StandardCharsets.UTF_8));
     }
 
-    /** CHUNK frame: u32 index ‖ bytes. */
+    /**
+     * CHUNK frame: u32 index ‖ bytes.
+     *
+     * <p>Through two buffers held for the life of the connection, rather than three allocations per
+     * frame. A data connection sends nothing but chunks, so the buffers are as long-lived as it is
+     * and are allocated on first use — an ordinary control connection never sends a chunk and never
+     * pays for them. Both are written only under {@link #sendLock}, which is what makes holding them
+     * on the connection safe.
+     *
+     * <p>{@code chunkFrame} is sized exactly, not generously, and the margin is zero: Conscrypt
+     * refuses a write-through {@code doFinal} whose destination has fewer than
+     * {@code plaintextLen + 16} bytes left, and the largest plaintext this sends is
+     * {@code 1 + 4 + CHUNK}. So {@code 4 + 1 + 4 + CHUNK + 16} is the smallest array that works and
+     * one byte less is a ShortBufferException on every full chunk. See {@code Crypto.Sealer.sealInto}
+     * for why 16 is a constant here and not something to ask the provider for.
+     *
+     * <p>Two separate arrays rather than one, also deliberately: Conscrypt tolerates sealing within
+     * a single array but does it by copying the input range first, which is the copy this whole
+     * arrangement exists to avoid.
+     */
+    private byte[] chunkPlain, chunkFrame;
+
     public void sendChunk(int index, byte[] data, int len) throws Exception {
-        byte[] pt = new byte[1 + 4 + len];
-        pt[0] = (byte) T_CHUNK;
-        pt[1] = (byte) (index >>> 24); pt[2] = (byte) (index >>> 16); pt[3] = (byte) (index >>> 8); pt[4] = (byte) index;
-        System.arraycopy(data, 0, pt, 5, len);
         synchronized (sendLock) {
-            byte[] ct = Crypto.seal(txKey, txCtr++, pt);
-            byte[] frame = ByteBuffer.allocate(4 + ct.length).putInt(ct.length).put(ct).array();
-            out.write(frame);
+            if (chunkPlain == null) {
+                chunkPlain = new byte[1 + 4 + CHUNK];
+                chunkFrame = new byte[4 + 1 + 4 + CHUNK + 16];   // length prefix ‖ ciphertext ‖ tag
+            }
+            chunkPlain[0] = (byte) T_CHUNK;
+            chunkPlain[1] = (byte) (index >>> 24); chunkPlain[2] = (byte) (index >>> 16);
+            chunkPlain[3] = (byte) (index >>> 8);  chunkPlain[4] = (byte) index;
+            System.arraycopy(data, 0, chunkPlain, 5, len);
+            int n = tx.sealInto(chunkPlain, 0, 5 + len, chunkFrame, 4);
+            chunkFrame[0] = (byte) (n >>> 24); chunkFrame[1] = (byte) (n >>> 16);
+            chunkFrame[2] = (byte) (n >>> 8);   chunkFrame[3] = (byte) n;
+            out.write(chunkFrame, 0, 4 + n);
             out.flush();
         }
     }
 
     /** Blocks until a frame arrives. Returns {type, payload}. */
     public Frame recv() throws Exception {
+        if (!peerAuthenticated) {
+            // Three checks and not one, because a read timeout is per read: the socket timeout is
+            // trimmed to what is left of the deadline so a single stalled read cannot outlive it,
+            // and the deadline is tested again after the body because a caller that dribbles bytes
+            // restarts that timeout with every one of them.
+            long left = handshakeDeadline - android.os.SystemClock.elapsedRealtime();
+            if (left <= 0) throw new IOException("handshake did not finish in "
+                    + HANDSHAKE_TIMEOUT_MS / 1000 + "s");
+            socket.setSoTimeout((int) left);
+        }
         int len = in.readInt();
-        if (len < 17 || len > maxFrame) throw new IOException("bad frame length " + len);
+        // min, not the constant: a pairing channel's own cap is smaller still, and this must only
+        // ever tighten a limit, never raise one.
+        int cap = peerAuthenticated ? maxFrame : Math.min(maxFrame, PRE_AUTH_MAX_FRAME);
+        if (len < 17 || len > cap) throw new IOException("bad frame length " + len);
         byte[] ct = new byte[len];
         in.readFully(ct);
+        if (!peerAuthenticated && android.os.SystemClock.elapsedRealtime() > handshakeDeadline)
+            throw new IOException("handshake did not finish in " + HANDSHAKE_TIMEOUT_MS / 1000 + "s");
 
         if (!keyResolved) {
             // Trial-decrypt with each candidate. The first that succeeds is the peer's key.
-            for (int i = 0; i < candidateRxKeys.length; i++) {
+            for (int i = 0; i < candidateOpeners.length; i++) {
                 try {
-                    byte[] pt = Crypto.open(candidateRxKeys[i], rxCtr, ct);
-                    // Commit to this key pair.
-                    rxKey = candidateRxKeys[i];
-                    txKey = candidateTxKeys[i];
+                    byte[] pt = candidateOpeners[i].open(ct);
+                    // Commit to this channel. The winning Opener has already advanced past this
+                    // frame and the losers have not advanced at all, so nothing needs correcting.
+                    rx = candidateOpeners[i];
+                    tx = candidateSealers[i];
                     matchedSecret = candidateSecrets[i];
                     keyResolved = true;
-                    candidateRxKeys = null;
-                    candidateTxKeys = null;
+                    peerAuthenticated = true;
+                    candidateOpeners = null;
+                    candidateSealers = null;
                     candidateSecrets = null;
-                    rxCtr++;
                     byte[] payload = new byte[pt.length - 1];
                     System.arraycopy(pt, 1, payload, 0, payload.length);
                     return new Frame(pt[0] & 0xff, payload);
-                } catch (Exception ignored) {
+                } catch (GeneralSecurityException ignored) {
                     // Wrong key — try the next candidate.
                 }
             }
             throw new IOException("no accepted key could authenticate this peer");
         }
 
-        byte[] pt = Crypto.open(rxKey, rxCtr++, ct);
+        byte[] pt = rx.open(ct);
+        peerAuthenticated = true;       // it decrypted under a key we accept; that is the proof
         byte[] payload = new byte[pt.length - 1];
         System.arraycopy(pt, 1, payload, 0, payload.length);
         return new Frame(pt[0] & 0xff, payload);

@@ -47,6 +47,50 @@ public final class Files {
 
     private static final int CHUNK = Connection.CHUNK;
 
+    /** What {@link #atomicWrite} hands a caller: the stream to fill, nothing else. */
+    public interface Sink {
+        void writeTo(FileOutputStream out) throws Exception;
+    }
+
+    /**
+     * Replace a file's contents, or leave the old contents untouched. Never anything in between.
+     *
+     * <p>Three files needed this and only two of them had it, which is exactly the kind of drift a
+     * rule written in a comment invites: {@code cache.json} and {@code status.json} wrote beside and
+     * renamed, while {@code clipsync.conf} — the one that carries the PSK, and the one rewritten
+     * most often — wrote in place. A process killed mid-write left a truncated key file, and the
+     * service then refused to start until the user re-paired every device.
+     *
+     * <p>The {@code sync()} is not optional. A rename is atomic with respect to the directory, but
+     * it says nothing about whether the new file's <em>blocks</em> have reached the disk; without
+     * the flush a power loss can leave the rename durable and the contents not, which is the
+     * failure the rename was supposed to make impossible.
+     *
+     * @param dst the file to replace; the temporary lives beside it, so both are on one filesystem
+     *            and the rename cannot degrade into a copy
+     */
+    public static void atomicWrite(File dst, Sink body) throws IOException {
+        File tmp = new File(dst.getPath() + ".tmp");
+        try (FileOutputStream out = new FileOutputStream(tmp)) {
+            body.writeTo(out);
+            out.flush();
+            out.getFD().sync();
+        } catch (IOException e) {
+            //noinspection ResultOfMethodCallIgnored
+            tmp.delete();
+            throw e;
+        } catch (Exception e) {
+            //noinspection ResultOfMethodCallIgnored
+            tmp.delete();
+            throw new IOException(e);
+        }
+        if (!tmp.renameTo(dst)) {
+            //noinspection ResultOfMethodCallIgnored
+            tmp.delete();
+            throw new IOException("could not replace " + dst.getName());
+        }
+    }
+
     /** A file we can send: where it is, what it is called, and its size + SHA-256. */
     public static final class Ref {
         public final Uri uri;
@@ -210,6 +254,10 @@ public final class Files {
         private FileChannel ch;
         private int unsaved;
         private boolean finalized;
+        /** @see #claimFirstChunk() */
+        private boolean firstChunkClaimed;
+        /** @see #claimReask(int) */
+        private int reasks;
 
         private static File mapFile(Context ctx, String sha) {
             File dir = new File(ctx.getFilesDir(), "partial");
@@ -294,6 +342,67 @@ public final class Files {
         public synchronized int haveCount() { return have.cardinality(); }
         public synchronized boolean complete() { return have.cardinality() == n; }
 
+        /** Has this file already been verified and published? {@code finalizeFile} is idempotent, but
+         *  the re-ask path has to be able to ask without side effects. */
+        public synchronized boolean isFinalized() { return finalized; }
+
+        /**
+         * "I may send one more WANT for this file" — the re-ask budget, spent one call at a time.
+         *
+         * <p>Named and counted here rather than in {@link FileExchange} because the budget belongs to
+         * the file, not to the connection that happens to be carrying it: a transfer that is picked
+         * up by a second peer offering the same hash must not get a fresh three re-asks for the same
+         * stall. Python keeps it in the same place and for the same reason — {@code Partial.retries},
+         * tested against {@code WANT_RETRIES} inside {@code SyncState._reask}.
+         *
+         * <p>Test and increment are one operation on the Partial's own monitor for the same reason
+         * {@link #claimFirstChunk()} is: several streams of one file end together, and two re-ask
+         * timers that both read "retries == 2" would both send.
+         *
+         * @param limit {@code FileExchange.WANT_RETRIES}, passed in so the constant has one home.
+         * @return true if the caller may send the WANT; false when the budget is spent.
+         */
+        public synchronized boolean claimReask(int limit) {
+            if (reasks >= limit) return false;
+            reasks++;
+            return true;
+        }
+
+        /**
+         * A fresh OFFER for this file arrived and was answered with a WANT: the peer is driving it
+         * again, so the budget starts over. Mirrors {@code pt.retries = 0} in Python's
+         * {@code _want_from_peer} — without it a file that stalls once an hour is unresumable after
+         * the third hour, because the counter is in the Partial and the Partial survives on disk.
+         */
+        public synchronized void resetReasks() { reasks = 0; }
+
+        /**
+         * "Nothing had landed yet, and I am the one who gets to say so" — asked once, by whoever
+         * writes the first chunk of this file, and answered true to exactly one caller.
+         *
+         * <p>It exists because {@code haveCount() == 0} followed by {@link #write} is <em>two</em>
+         * operations: several streams carry one file, they all reach the first write at once, and
+         * every one of them can see an empty BitSet before any of them has filled it. Whoever it is
+         * answered true then sends the relay's early OFFER, so "two threads both saw zero" means one
+         * waiter gets N identical OFFERs for one file. Folding the test and the flag into one
+         * method on the monitor that {@code write} already holds makes that unrepresentable.
+         *
+         * <p>The pull side has always enforced this, as {@code Transfer.firstChunkFired} — which is
+         * now this method, called from {@link Transfer}'s chunk callback. One rule with one
+         * implementation, because the last time it had two only one of them was right: the push
+         * path in {@code FileExchange.serveData} had no guard at all. Python's
+         * {@code Partial.claim_first_chunk} is the same method for the same reason.
+         *
+         * <p>Cleared by {@link #keep()}: a transfer that stopped and is resumed later must be able
+         * to announce its first chunk again, or a file whose first attempt died before a single
+         * chunk landed would never be offered to a waiter at all.
+         */
+        public synchronized boolean claimFirstChunk() {
+            if (firstChunkClaimed || !have.isEmpty()) return false;
+            firstChunkClaimed = true;
+            return true;
+        }
+
         public synchronized void write(int idx, byte[] data, int off, int len) throws IOException {
             if (idx < 0 || idx >= n) throw new IOException("chunk " + idx + " out of range");
             long expect = idx < n - 1 ? CHUNK : size - (long) idx * CHUNK;
@@ -304,7 +413,9 @@ public final class Files {
             long pos = (long) idx * CHUNK;
             while (bb.hasRemaining()) pos += ch.write(bb, pos);
             have.set(idx);
-            notifyAll();              // wake relay serve threads waiting for this chunk (§7)
+            // wake the threads forwarding this file to a LAN peer, which block per chunk until the
+            // chunk they owe it has landed here
+            notifyAll();
             if (++unsaved >= 8) saveMap();
         }
 
@@ -316,7 +427,8 @@ public final class Files {
         /**
          * Read chunk {@code idx} into {@code buf}; returns its length.
          *
-         * <p>For streaming relay (§7): the file is still being written by another set of threads, but
+         * <p>For forwarding a file while it is still arriving: it is being written by another set of
+         * threads, but
          * chunks occupy disjoint ranges, so a chunk that {@link #hasChunk} reports as present is safe
          * to read.  Opens a separate read descriptor each call — not the fastest path, but correct
          * without sharing the write channel's fd ownership, and the overhead is negligible next to
@@ -383,6 +495,7 @@ public final class Files {
         public synchronized void keep() {
             try { if (!finalized) saveMap(); } catch (IOException ignored) {}
             closeChannel();
+            firstChunkClaimed = false;      // a resumed transfer may announce its first chunk again
         }
 
         public synchronized void discard() {

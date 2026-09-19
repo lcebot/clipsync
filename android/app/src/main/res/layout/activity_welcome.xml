@@ -125,17 +125,22 @@
              fills a page that was otherwise mostly gap. fitCenter inside a weighted box is what
              makes it genuinely elastic: it grows on a tall screen and shrinks on a short one, and
              the horizontal padding — not a maxHeight, which a weighted view ignores — is what stops
-             it becoming enormous, since fitCenter honours whichever dimension runs out first. -->
+             it becoming enormous, since fitCenter honours whichever dimension runs out first.
+
+             art_pair and NOT ic_pair, which is what used to be here: ic_pair is a 24dp icon, and an
+             icon stretched to this size keeps its stroke-to-canvas ratio, so its 1.6/24 lines came
+             out around 20dp thick. art_pair is the same subject drawn on a canvas this size. See its
+             own comment. -->
         <ImageView
             android:id="@+id/choose_art"
             android:layout_width="match_parent"
             android:layout_height="0dp"
             android:layout_weight="2"
-            android:paddingHorizontal="64dp"
+            android:paddingHorizontal="32dp"
             android:paddingVertical="24dp"
             android:scaleType="fitCenter"
             android:importantForAccessibility="no"
-            android:src="@drawable/ic_pair"
+            android:src="@drawable/art_pair"
             android:tint="?attr/colorPrimary" />
 
         <!-- Filled, then tonal, then text: the emphasis ladder IS the recommendation. Taking the key

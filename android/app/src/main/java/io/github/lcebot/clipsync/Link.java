@@ -79,26 +79,118 @@ final class Link implements AutoCloseable {
      * NTP-style clock offset to this peer, in milliseconds.
      *
      * <p>{@code peer_clock = my_clock + offset}. Updated on every PONG round trip, so it tracks
-     * drift without extra messages. Used to normalise an incoming version into the local clock
-     * domain before comparing (§6).
+     * drift without extra messages. Used to normalise an incoming clip's version stamp into the
+     * local clock domain before it is compared with ours: two devices whose wall clocks differ by a
+     * minute would otherwise decide "newer" by whose clock was fast.
      */
     volatile long clockOffset;
 
-    private Link(Owner owner, String target, Connection c) {
+    /**
+     * What the peer declared in its HELLO.
+     *
+     * <p>Kept because two of its fields are about the <em>session</em> rather than about the peer:
+     * {@link Hello#clipTs} and {@link Hello#clipSha} say what the peer's clipboard held when it
+     * connected, and they are only useful once, at this moment. Both ends send them; until this
+     * field existed, neither end read them, so a device that reconnected behind stayed behind.
+     */
+    private final Hello peerHello;
+
+    private Link(Owner owner, String target, Connection c, Hello hello) {
         this.owner = owner;
         this.target = target;
         this.conn = c;
+        this.peerHello = hello;
     }
+
+    /** What the peer declared when this session opened. Never null. */
+    Hello peerHello() {
+        return peerHello;
+    }
+
+    // ------------------------------------------------------------------ how this link ends
+
+    /**
+     * Why this link stopped, when it stopped on purpose.
+     *
+     * <p>One state, where there used to be five members — a {@code bye} string, two accessors, a
+     * {@code superseded} flag and its two — scattered through the middle of this file with the
+     * fields declared after their own readers. They were never independent: a link is running, or
+     * the peer said goodbye, or this end retired it in favour of another link to the same device,
+     * and no two of those are ever true at once.
+     *
+     * <p>What the dialler asks is one question — {@link #endedOnPurpose()} — so the two non-RUNNING
+     * members behave alike and the enum is, to the code, a boolean. They are still named apart
+     * because they are two different reasons to answer yes, and the difference is measured in radio
+     * wake-ups:
+     *
+     * <ul>
+     *   <li>{@link #RUNNING} also covers a link that ended by <em>failing</em> — a read that threw,
+     *       a socket closed under us. That is the case where redialling is the right answer, so it
+     *       is the one with no marker;
+     *   <li>{@link #PEER_BYE} means the peer chose to close and said why. It is not coming straight
+     *       back on its own account, so the dialler waits out its longest back-off instead of
+     *       rebuilding the link the peer just discarded — which, with no BYE at all, is an infinite
+     *       loop between two devices that both think the other vanished;
+     *   <li>{@link #SUPERSEDED} means <em>this</em> end closed it as a duplicate. Its owner sees
+     *       nothing but a dead socket otherwise, which is indistinguishable from the peer going
+     *       away, and a dialler that cannot tell those apart redials immediately into the link that
+     *       just replaced this one.
+     * </ul>
+     */
+    enum End {
+        /** Still up, or ended by an error. The ordinary case, and the only one worth retrying soon. */
+        RUNNING,
+        /** The peer sent BYE. What it said is logged where the frame is read, not kept here. */
+        PEER_BYE,
+        /** This end closed it: another link to the same peer won the duplicate tiebreak. */
+        SUPERSEDED
+    }
+
+    /**
+     * How this link ended.
+     *
+     * <p>Only ever asked as {@link #endedOnPurpose()}. There used to be an {@code end()} getter and
+     * an {@code endReason} beside it, on the assumption that someone would want to tell PEER_BYE
+     * from SUPERSEDED or to read back what the peer said; nobody ever did. The reason is logged
+     * where the BYE frame is read, which is where the peer and the frame are both in hand, so
+     * keeping a second copy on the link only made the field look like an answer to a question
+     * nothing asks.
+     */
+    private volatile End end = End.RUNNING;
+
+    /**
+     * True once this link was closed deliberately by either end.
+     *
+     * <p>The one question both of the dialler's back-off branches used to ask as
+     * {@code saidBye() || superseded()}: whichever end decided, redialling at once would undo the
+     * decision.
+     */
+    boolean endedOnPurpose() {
+        return end != End.RUNNING;
+    }
+
+    /**
+     * Record how this link is ending. First writer wins: a link that the peer said goodbye to and
+     * that this end then retires is still, in the only sense the dialler cares about, the first
+     * thing that happened to it.
+     */
+    void ended(End how) {
+        if (end != End.RUNNING) return;
+        end = how;
+    }
+
+    // ------------------------------------------------------------------ opening
 
     /** Completes the dialler's handshake, or throws having closed the socket it was given. */
     private static Link dialled(SyncService s, Owner o, String target, Connection c) throws Exception {
+        Hello hello;
         try {
-            c.hello(s, o.clipTs(), o.clipSha());
+            hello = c.hello(s, o.clipTs(), o.clipSha());
         } catch (Exception e) {
             c.close();                     // the socket is ours from the moment we were handed it
             throw e;
         }
-        return new Link(o, target, c);
+        return new Link(o, target, c, hello);
     }
 
     static Link toPeer(SyncService s, Owner o, String peer, Network net) throws Exception {
@@ -121,7 +213,7 @@ final class Link implements AutoCloseable {
      * answers with HAVE; the alternative — keying by node id — would put a UUID in front of the user
      * wherever the target appears.
      */
-    static Link accepted(SyncService s, Owner o, Connection c) throws Exception {
+    static Link accepted(SyncService s, Owner o, Connection c, Hello hello) throws Exception {
         String target = c.peerLabel;
         try {
             c.sendHello(s, o.clipTs(), o.clipSha());
@@ -129,7 +221,7 @@ final class Link implements AutoCloseable {
             c.close();
             throw e;
         }
-        return new Link(o, target, c);
+        return new Link(o, target, c, hello);
     }
 
     /**
@@ -176,7 +268,7 @@ final class Link implements AutoCloseable {
      * Close deliberately, telling the peer why first.
      *
      * <p>The BYE is the whole point: a close without one becomes a loop. The far side would see only
-     * a disconnect, reconnect, and rebuild exactly the link that was discarded. (§5)
+     * a disconnect, reconnect, and rebuild exactly the link that was discarded.
      */
     void bye(String reason) {
         try {
@@ -187,7 +279,10 @@ final class Link implements AutoCloseable {
         close();
     }
 
-    /** One keep-alive frame, sent by the device's single heartbeat. Carries t1 for clock-offset measurement (§6). */
+    /**
+     * One keep-alive frame, sent by the device's single heartbeat. Carries {@code t1} so the peer's
+     * PONG can be turned into a clock offset; see {@link #clockOffset}.
+     */
     void ping() throws Exception {
         if (alive()) {
             org.json.JSONObject j = new org.json.JSONObject();
@@ -205,7 +300,11 @@ final class Link implements AutoCloseable {
     synchronized void deliver() throws Exception {
         Object clip = owner.pendingClip();
         if (clip == null) return;
-        String h = clip instanceof Files.Ref ? ((Files.Ref) clip).sha256 : Crypto.sha256Hex((String) clip);
+        // Through the same normalisation the rest of the device uses: this hash is compared against
+        // the one the pending slot is keyed by, so computing it the other way here would make every
+        // clip containing a CRLF look undelivered forever.
+        String h = clip instanceof Files.Ref ? ((Files.Ref) clip).sha256
+                : Crypto.sha256Hex(ClipboardBridge.normalise((String) clip));
         if (h.equals(sentHash)) return;
         // Marked after the send, not before. Marking first left a link claiming delivery it had not
         // made when the send threw — and, worse, skipped `delivered`, so the clip was never released
@@ -221,48 +320,6 @@ final class Link implements AutoCloseable {
     String sentHash() {
         return sentHash;
     }
-
-    /** True once the peer has said goodbye: the link is closing on purpose, not failing. */
-    boolean saidBye() {
-        return bye != null;
-    }
-
-    /**
-     * Why the peer said goodbye, or null if it did not.
-     *
-     * <p>Kept, where it used to be a bare flag, because the reason decides what the dialler does
-     * next: a duplicate means defer to the link that won, and an idle peer means wait for it to come
-     * back rather than dial into a device that has just gone to sleep. The peer took the trouble to
-     * say which; throwing that away and treating every goodbye alike is the version of this that
-     * wakes a sleeping phone once a minute.
-     */
-    @Nullable String byeReason() {
-        return bye;
-    }
-
-    void markBye(String reason) {
-        bye = reason == null ? "" : reason;
-    }
-
-    private volatile String bye;
-
-    /**
-     * True once <em>this</em> end closed the link as a duplicate.
-     *
-     * <p>The mirror of {@link #saidBye()}, and needed for the same reason from the other side. A
-     * link closed from another thread leaves its owner seeing nothing but a dead socket, which is
-     * indistinguishable from the peer going away — and a dialler that cannot tell those apart
-     * redials immediately into the link it has just lost.
-     */
-    boolean superseded() {
-        return superseded;
-    }
-
-    void markSuperseded() {
-        superseded = true;
-    }
-
-    private volatile boolean superseded;
 
     /**
      * Run the session to its end. Returns when the peer goes away, the screen-off burst finishes, or
@@ -296,15 +353,23 @@ final class Link implements AutoCloseable {
      * or a transfer is running the window stays open, with a hard cap; otherwise one second of
      * silence ends it.
      */
-    private void burst() {
+    private void burst() throws Exception {
         long until = System.currentTimeMillis() + BURST_CAP_MS;
         try {
             while (System.currentTimeMillis() < until) {
                 conn.setSoTimeout(owner.transferBusy() ? BURST_BUSY_MS : BURST_IDLE_MS);
                 owner.onFrame(this, conn.recv());
             }
-        } catch (Exception ignored) {
-            // read timeout: the burst is over
+        } catch (java.net.SocketTimeoutException expected) {
+            // Read timeout: the burst is over, and this is the ONE clean ending it has.
+        } catch (Exception e) {
+            // Everything else — a frame that will not decrypt, a protocol error, a handler that
+            // threw — used to end here too, and the caller read that as "the burst finished". So a
+            // link that failed every single time reconnected every thirty seconds all night with
+            // the screen off, and the UI showed no fault because nothing ever reported one.
+            if (!alive()) return;        // we closed it: the read failing afterwards is the consequence
+            Logger.w("burst on " + conn.peerLabel + " ended in error: " + e);
+            throw e;
         }
     }
 

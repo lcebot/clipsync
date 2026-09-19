@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- One entry of the Direct connections list. The remove control is the field's own trailing icon
      rather than a button in a column beside it: it belongs to this row and to nothing else.
-     On the last remaining row MainActivity hides it: zero addresses is what the Direct connections
+     On the last remaining row AddressList hides it: zero addresses is what the Direct connections
      switch is for, so the row cannot be removed, and TextInputLayout offers no way to disable just the
      trailing icon without reaching into its internals.
-     The hint is replaced per row by MainActivity ("Address 1", "Address 2", …) — every row reading
+     The hint is replaced per row by AddressList ("Address 1", "Address 2", …) — every row reading
      the same hint leaves a screen reader with three identical fields.
 
      errorIconDrawable is cleared because TextInputLayout puts the error icon in the same trailing
@@ -22,7 +22,7 @@
     style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:layout_marginTop="4dp"
+    android:layout_marginTop="@dimen/spacing_seam"
     tools:hint="Address 1"
     app:endIconMode="custom"
     app:endIconDrawable="@drawable/ic_remove"

@@ -10,7 +10,8 @@ import java.util.UUID;
 
 /**
  * This device's identity on the network: an id, a type, and what it can promise about staying
- * connected. See docs/p2p-plan.md §1 and §2.
+ * connected. Every one of these is declared in HELLO and believed by peers; none of them is
+ * inferred from an address or a name.
  *
  * <p><b>The id is generated once per process and never stored.</b> It identifies a <em>session</em>,
  * not an installation, and every use of it is within one session: link dedup, the self-connection
@@ -23,7 +24,7 @@ import java.util.UUID;
  * could edit into a collision. Two nodes sharing one id breaks dedup and relay selection in ways
  * that are very hard to trace back to their cause. A fresh UUID per start cannot collide at all.
  *
- * <p>What that costs is written down in §1: after an <em>unclean</em> restart, a peer that has not
+ * <p>What that costs, accepted deliberately: after an <em>unclean</em> restart, a peer that has not
  * yet noticed the old TCP connection is dead sees the returning node as a new one, so for up to one
  * read timeout it holds a live link and a stale one and cannot collapse them by id. That is bounded,
  * self-healing, and costs duplicate delivery rather than lost delivery.
@@ -70,8 +71,9 @@ final class Node {
     }
 
     /**
-     * {@code tablet} or {@code phone}, from the smallest screen width. §2 makes this user-settable
-     * with the heuristic as the default; until that control exists the heuristic is the value.
+     * {@code tablet} or {@code phone}, from the smallest screen width. The intent is for the user to
+     * be able to override it with the heuristic as the default; until that control exists the
+     * heuristic is the value.
      */
     static String type(Context ctx) {
         Configuration c = ctx.getResources().getConfiguration();
@@ -81,7 +83,7 @@ final class Node {
     /**
      * Can this device hold a connection while idle?
      *
-     * <p><b>A declaration of capability, not an inference from type</b> (§2). It is true only when the
+     * <p><b>A declaration of capability, not an inference from type</b>. It is true only when the
      * device is charging <em>and</em> has the exemptions it needs to survive being idle, because a
      * non-rooted phone on charge still gets frozen — and electing it as the LAN's relay would elect a
      * node that silently stops relaying. Saying "yes" here when the answer is "no" is worse than
@@ -92,7 +94,11 @@ final class Node {
         return charging(ctx) && exempt(ctx);
     }
 
-    /** {@code mains} | {@code high} | {@code medium} | {@code low} — the buckets §3 compares. */
+    /**
+     * {@code mains} | {@code high} | {@code medium} | {@code low} — four buckets and not a
+     * percentage, because this is compared between nodes to pick a relay and a total order over
+     * four names is stable where a comparison of two battery readings is noise.
+     */
     static String battery(Context ctx) {
         if (charging(ctx)) return "mains";
         BatteryManager bm = ctx.getSystemService(BatteryManager.class);

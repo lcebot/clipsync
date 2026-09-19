@@ -28,7 +28,8 @@ import java.util.concurrent.TimeUnit;
  * each other, neither of them having an address the other could be configured with.
  *
  * <p>Several services is the normal case now, not a conflict to arbitrate. The probe that used to
- * decide which PC was <em>the</em> server is gone with the hub it served (docs/p2p-plan.md §4), and
+ * decide which PC was <em>the</em> server is gone with the hub it served — there is no server role
+ * left in this protocol, only peers — and
  * what a service advertises is only a label: who a peer is comes from the node id in its HELLO, so a
  * rogue advertiser costs one failed handshake and nothing else.
  */
@@ -52,6 +53,24 @@ public final class Mdns {
      *
      * <p>Failures are logged and swallowed. A device that cannot advertise can still be reached at a
      * listed address and can still dial out; it is a degradation, not a fault worth stopping for.
+     *
+     * <p><b>No TXT record on this service type</b>, deliberately — and note that the pairing type is
+     * the opposite case, which is the whole of the reasoning. The Windows side advertises
+     * {@code {"v": "5"}} here and nobody browses for it: neither this end nor clipsync.py has any
+     * code that reads a peer's TXT on {@code _clipsync._tcp}. Matching it would look like a version
+     * filter without being one, and a real one is not worth having here, because the version gate
+     * belongs in the handshake ({@code Connection.readHello}) where both ends have said who they
+     * are. A pre-dial filter would trade one avoided connection to a peer that cannot talk to us —
+     * costing a single failed handshake nobody is watching — for the risk of silently skipping a
+     * good peer whose advertisement was cached, truncated or merely missing.
+     *
+     * <p>Pairing does the reverse: {@link PairProvider} sends {@code v} and {@link PairJoiner} (with
+     * {@code clipsync_pair.find}) checks it, because there the wasted connection costs a person
+     * copying eight digits and waiting for a key, only to be told the code was wrong when it
+     * was not. Same field, opposite answer, because the thing being spent is different.
+     *
+     * <p>The PC's {@code v} on this type is left alone: removing it is a change to a file this side
+     * does not own, and if it ever goes, nothing here has to change.
      *
      * @return a handle to unregister with, or null if registration could not even be attempted
      */
@@ -91,7 +110,7 @@ public final class Mdns {
      * <p>Note that the name may come back changed: mDNS resolves a collision by suffixing, so two
      * devices that call themselves the same thing both keep advertising. That is the right outcome
      * and the reason the advertised name is only ever a label — who a peer <em>is</em> comes from
-     * the node id in its HELLO, never from what it advertises. (docs/p2p-plan.md §1)
+     * the node id in its HELLO, never from what it advertises.
      */
     public static final class Advert implements NsdManager.RegistrationListener, AutoCloseable {
         private final NsdManager nsd;
@@ -143,7 +162,13 @@ public final class Mdns {
     public static final class Instance {
         public final String name;
         public final List<InetSocketAddress> addrs;
-        /** The TXT record, never null. Empty for an ordinary node, which advertises none. */
+        /**
+         * The TXT record, never null. Empty for an ordinary Android node, which advertises none.
+         *
+         * <p>Read in exactly one place: {@code PairJoiner} takes the pairing salt out of it. A
+         * Windows peer also puts a {@code v} here and nothing on either side reads it — see
+         * {@link #advertise(Context, String, int)} for why this end neither sends nor consults one.
+         */
         public final Map<String, String> attrs;
         /** When this was last seen advertising, so a peer that goes quiet can be forgotten. */
         public final long foundAt = System.currentTimeMillis();

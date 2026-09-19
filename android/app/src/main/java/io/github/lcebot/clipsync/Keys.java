@@ -30,7 +30,8 @@ import java.util.List;
  * <p><b>Which successor wins</b> when two devices were offline from each other, both passed 48h, and
  * both generated one. The rule is <b>the larger key, compared as text</b>. Not the earlier or the
  * later: that needs the two clocks to agree, and they do not — the offset exchange that would make
- * them agree is §6, which is not built. Comparing the key material needs no clock, no extra state
+ * them agree is a clock-offset exchange between peers, which is designed but not built. Comparing
+ * the key material needs no clock, no extra state
  * and no round trip, gives a total order, and has every device reach the same verdict from what it
  * already holds. The loser's key is discarded unused, which costs nothing: neither had been adopted.
  *
@@ -38,13 +39,15 @@ import java.util.List;
  * week comes back several keys behind, and accepting only the immediately previous one would lock it
  * out after a single missed rotation. {@link #KEYRING} past keys stay acceptable, so a device may
  * miss that many rotations and still be let in — at which point its peer teaches it the current
- * schedule and it catches up. Being locked out is recoverable (pairing exists, §12) but it is a
+ * schedule and it catches up. Being locked out is recoverable — the device can be paired again from
+ * scratch, see {@link Pairing} — but it is a
  * thing the user has to notice and act on, and a week in a drawer should not require it.
  *
  * <h2>What this cannot do</h2>
  *
- * <p>There is <b>no clock agreement between devices</b>. §6's offset exchange would provide it and
- * is not built, so every deadline here is measured against the device's own clock. The consequence
+ * <p>There is <b>no clock agreement between devices</b>. The clock-offset exchange that would
+ * provide it is designed and not built, so every deadline here is measured against the device's own
+ * clock. The consequence
  * is bounded on purpose: a device is never told "retire at this instant", only "here is a successor",
  * and it retires on its own schedule while still accepting the old key for {@link #KEYRING}
  * rotations. Two devices whose clocks differ by hours therefore rotate hours apart and never notice.
@@ -134,8 +137,18 @@ final class Keys {
             return new Schedule(psk, successor, old, since, since + RETIRE_MS, agreedAt);
         }
 
-        /** A peer has acknowledged the successor, so the deadline may be honoured. */
+        /**
+         * A peer has acknowledged the successor, so the deadline may be honoured.
+         *
+         * <p>Idempotent, and that is not a micro-optimisation. Every T_KEYS frame used to produce a
+         * schedule that differed from the last one in {@code agreedAt} alone, which the caller read
+         * as "something changed": it persisted the whole configuration and announced to every peer,
+         * the peer did the same back, and two devices whose successors already matched rewrote the
+         * one file that carries the PSK once per round trip for as long as they were connected.
+         * Recording a second agreement says nothing the first did not.
+         */
         Schedule agreed(long now) {
+            if (agreedAt > since) return this;
             return new Schedule(psk, next, old, since, retireAt, now);
         }
 
@@ -158,8 +171,13 @@ final class Keys {
          *
          * <p>For the device that was behind: a peer authenticated with something we had only as a
          * successor or had not seen at all, which means it has already rotated and we have not.
-         * Following it is the only way back into the network — and the peer holds the PSK, so it is
-         * already as trusted as this device is (§15).
+         * Following it is the only way back into the network.
+         *
+         * <p>Only ever reached for a peer that authenticated with the <b>current key or the
+         * successor</b> — see {@link #reconcile}'s {@code trusted}. "The peer holds a key, so it is
+         * as trusted as we are" is true of the current key and false of a superseded one: rotation
+         * exists precisely because an old key may have leaked, and letting a leaked key nominate the
+         * network's next key turns a temporary compromise into a permanent takeover.
          */
         Schedule adopt(String key, long now) {
             if (key.equals(psk)) return this;
@@ -187,9 +205,14 @@ final class Keys {
          *       an agreement, which is what unlocks promotion at the deadline.
          * </ol>
          *
+         * @param trusted whether the connection this report arrived on authenticated with the key
+         *                this device currently holds, or with its successor. Only such a peer may
+         *                move us onto a key we have never seen; see {@link #adopt}. A peer let in on
+         *                a superseded ring key is still a peer — it is only its right to <em>lead</em>
+         *                that is withheld, and the "peer is behind" branch below teaches it instead.
          * @return the reconciled schedule (may be {@code this} when nothing changed)
          */
-        Schedule reconcile(String theirPsk, String theirNext, long now) {
+        Schedule reconcile(String theirPsk, String theirNext, long now, boolean trusted) {
             Schedule s = this;
 
             // Step 1: align the current key.
@@ -198,7 +221,7 @@ final class Keys {
                 // passed, this is the trigger to promote ourselves.
                 s = s.agreed(now);
                 if (s.phase(now) == Phase.DUE) s = s.promoted(now);
-            } else if (!theirPsk.equals(psk) && !old.contains(theirPsk)) {
+            } else if (trusted && wouldAdopt(theirPsk)) {
                 // Completely unknown key — the peer rotated past us. Adopt it.
                 s = s.adopt(theirPsk, now);
             }
@@ -219,6 +242,37 @@ final class Keys {
             }
 
             return s;
+        }
+
+        /**
+         * Would a report of {@code theirPsk} move this device onto a key it has never seen?
+         *
+         * <p>Exists so that {@link #reconcile} and the caller that logs a refusal ask the same
+         * question of the same code rather than each spelling the condition out.
+         */
+        boolean wouldAdopt(String theirPsk) {
+            if (!next.isEmpty() && theirPsk.equals(next)) return false;   // that is a promotion, not an adoption
+            return !theirPsk.equals(psk) && !old.contains(theirPsk);
+        }
+
+        /**
+         * Equal when the <b>keys and deadlines</b> are, ignoring {@link #agreedAt}.
+         *
+         * <p>Ignored because "a peer said yes again" is not a change worth persisting or announcing —
+         * see {@link #agreed}. Note that the first agreement still is one, because it moves
+         * {@code agreedAt} from 0 and therefore moves {@link #phase} from STRANDED to DUE; callers
+         * that must not miss it compare phases rather than relying on this.
+         */
+        @Override public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof Schedule)) return false;
+            Schedule s = (Schedule) o;
+            return since == s.since && retireAt == s.retireAt
+                    && psk.equals(s.psk) && next.equals(s.next) && old.equals(s.old);
+        }
+
+        @Override public int hashCode() {
+            return java.util.Objects.hash(psk, next, old, since, retireAt);
         }
     }
 

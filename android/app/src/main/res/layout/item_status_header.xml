@@ -11,9 +11,9 @@
 <TextView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:paddingHorizontal="24dp"
-    android:paddingTop="16dp"
-    android:paddingBottom="8dp"
+    android:paddingHorizontal="@dimen/sheet_gutter"
+    android:paddingTop="@dimen/card_padding"
+    android:paddingBottom="@dimen/spacing_group"
     android:accessibilityHeading="true"
     android:textAppearance="?attr/textAppearanceTitleSmall"
     android:textColor="?attr/colorPrimary" />

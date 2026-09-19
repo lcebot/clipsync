@@ -93,7 +93,7 @@
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">wrap_content</item>
         <item name="android:orientation">vertical</item>
-        <item name="android:padding">12dp</item>
+        <item name="android:padding">@dimen/card_body_inset</item>
     </style>
 
 
@@ -141,8 +141,8 @@
     <style name="ClipSync.SectionTitle" parent="android:Widget.TextView">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">wrap_content</item>
-        <item name="android:layout_marginTop">12dp</item>
-        <item name="android:layout_marginBottom">6dp</item>
+        <item name="android:layout_marginTop">@dimen/spacing_section</item>
+        <item name="android:layout_marginBottom">@dimen/spacing_heading</item>
         <item name="android:textAppearance">?attr/textAppearanceTitleSmall</item>
         <item name="android:textColor">?attr/colorPrimary</item>
         <!-- A heading, and said so. Without it a screen reader has to walk every field of a section

@@ -7,14 +7,14 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:clipToPadding="false"
-    android:paddingBottom="80dp">
+    android:paddingBottom="@dimen/fab_clearance">
 
     <LinearLayout
         android:id="@+id/settings_root"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:paddingHorizontal="16dp"
+        android:paddingHorizontal="@dimen/page_gutter"
         android:focusable="true"
         android:focusableInTouchMode="true">
 
@@ -24,7 +24,7 @@
             style="?attr/materialCardViewFilledStyle"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
+            android:layout_marginTop="@dimen/spacing_group"
             app:cardBackgroundColor="?attr/colorErrorContainer">
 
             <LinearLayout
@@ -98,7 +98,7 @@
                     style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
+                    android:layout_marginTop="@dimen/spacing_field"
                     android:hint="@string/hint_psk"
                     app:endIconMode="password_toggle">
 
@@ -131,14 +131,14 @@
                     android:id="@+id/psk_rotate"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
+                    android:layout_marginTop="@dimen/spacing_field"
                     android:minHeight="48dp"
                     android:text="@string/psk_rotate" />
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/psk_random"
                     style="@style/ClipSync.SettingsButton"
-                    android:layout_marginTop="4dp"
+                    android:layout_marginTop="@dimen/spacing_seam"
                     android:text="@string/psk_generate"
                     app:icon="@drawable/ic_dice" />
 
@@ -146,10 +146,10 @@
                      work they are: make one, take one from a device that has it, or be walked
                      through the choice. They belong together because that is the decision the user
                      is making at this field, which is also why pairing moved here out of the
-                     discovery card (docs/p2p-plan.md §12 put it there because pairing *is* mDNS —
-                     true, and the weaker pull: a control belongs next to the thing it changes, and
-                     what pairing changes is the key). The switch it no longer sits under is handled
-                     in MainActivity instead: tapping Pair turns discovery on rather than failing.
+                     discovery card (it lived there because pairing *is* mDNS at both ends — true,
+                     and the weaker pull: a control belongs next to the thing it changes, and what
+                     pairing changes is the key). The switch it no longer sits under is handled
+                     in SettingsForm instead: tapping Pair turns discovery on rather than failing.
 
                      0dp between them, not 4dp: each carries its own 4dp container inset top and
                      bottom, so consecutive buttons already stand 8dp apart — the same gap the text
@@ -169,7 +169,8 @@
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
-        <!-- This device's own addresses (docs/p2p-plan.md §4a).
+        <!-- This device's own addresses: the names and IPs by which OTHER devices reach this one.
+             They are how a target is recognised as being this device rather than a peer.
 
              Above the two switches, not below, for a reason beyond reading order: the peer list
              validates against this one, so it has to be the thing already on screen when the user
@@ -190,7 +191,7 @@
             style="?attr/materialCardViewFilledStyle"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
+            android:layout_marginTop="@dimen/spacing_group"
             android:clickable="true"
             android:focusable="true">
 
@@ -228,7 +229,7 @@
 
                     <!-- Not important for accessibility: the chevron draws the state, it does not
                          own it. The card is what is focused and clicked, so the label and the
-                         expanded/collapsed state live there (MainActivity.setOwnExpanded); a
+                         expanded/collapsed state live there (SettingsForm.setOwnExpanded); a
                          contentDescription here only made TalkBack stop twice on one control and
                          read a description of something the user cannot press. -->
                     <ImageView
@@ -241,7 +242,7 @@
                 </LinearLayout>
 
                 <!-- Collapsed by default: most devices have no name of their own, so this is a group
-                     that exists for the minority who run a dynamic DNS client. MainActivity expands
+                     that exists for the minority who run a dynamic DNS client. SettingsForm expands
                      it when the list is non-empty or carries an error — a setting the user cannot
                      see is worse than one that takes a tap. -->
                 <!-- clickable, and that is the whole trick: it swallows taps so that editing inside
@@ -267,7 +268,7 @@
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/own_add"
                         style="@style/ClipSync.SettingsButton"
-                        android:layout_marginTop="4dp"
+                        android:layout_marginTop="@dimen/spacing_seam"
                         android:text="@string/peer_add"
                         app:icon="@drawable/ic_add" />
                 </LinearLayout>
@@ -283,6 +284,9 @@
              title's own 6dp above the first card. The 8dp is the one to copy when a sub-group is
              added; it was 6dp here and 8dp above, which read as this group belonging slightly more
              to the one below it than to the one above.
+             Those three are now @dimen/spacing_group, @dimen/spacing_seam and @dimen/spacing_heading,
+             so the rule is the thing written at each call site and this paragraph is only its reason.
+             values/dimens.xml carries the rest of the vocabulary.
 
              Each switch is its own card, outside the card it governs. The switch turns
              a whole group on and off, so it sits beside the group rather than inside it, which also
@@ -303,13 +307,13 @@
             style="?attr/materialCardViewFilledStyle"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp">
+            android:layout_marginTop="@dimen/spacing_group">
 
             <com.google.android.material.materialswitch.MaterialSwitch
                 android:id="@+id/discovery"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginHorizontal="12dp"
+                android:layout_marginHorizontal="@dimen/card_body_inset"
                 android:gravity="center_vertical|start"
                 android:text="@string/switch_discovery"
                 android:textAppearance="?attr/textAppearanceBodyLarge" />
@@ -325,17 +329,38 @@
             style="?attr/materialCardViewFilledStyle"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="4dp">
+            android:layout_marginTop="@dimen/spacing_seam">
 
             <LinearLayout style="@style/ClipSync.CardBody">
 
+                <!-- labelFor is what ties this line to the slider under it for a screen reader, and
+                     it is required here rather than merely encouraged: the slider's value is an
+                     INDEX (0..6), so the only thing naming the setting is this TextView. Material's
+                     own guidance says exactly this — "If using a TextView to display the value of
+                     the slider, you should set android:labelFor so that screen readers announce
+                     that TextView refers to the slider"
+                     (docs/components/Slider.md @ 1.14.0, "Making sliders accessible").
+
+                     @+id and not @id: the label is declared BEFORE the slider, so the id does not
+                     exist yet at this point in the file and @id would not resolve. -->
                 <TextView
                     android:id="@+id/browse_label"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
+                    android:labelFor="@+id/browse"
                     android:textAppearance="?attr/textAppearanceBodyMedium"
                     tools:text="mDNS browse timeout: 4000 ms" />
 
+                <!-- The VALUE a screen reader speaks comes from the LabelFormatter set in
+                     SettingsForm, not from the raw float: BaseSlider.onPopulateNodeForVirtualView
+                     builds the node's description from formatValue(value), which returns the
+                     formatter's output when one is set (BaseSlider.java @ 1.14.0). That is why the
+                     index never has to be explained to anybody — TalkBack says "4000 ms".
+
+                     tickVisibilityMode and not the old tickVisible, which 1.14 deprecates in favour
+                     of it (slider/res/values/attrs.xml @ 1.14.0). autoLimit is the default and the
+                     nearest thing to "true": it draws every tick unless they are spaced too densely
+                     to be legible, which seven of them across a card never are. -->
                 <com.google.android.material.slider.Slider
                     android:id="@+id/browse"
                     android:layout_width="match_parent"
@@ -345,7 +370,7 @@
                     android:stepSize="1"
                     android:value="3"
                     app:labelBehavior="floating"
-                    app:tickVisible="true" />
+                    app:tickVisibilityMode="autoLimit" />
 
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
@@ -354,13 +379,13 @@
             style="?attr/materialCardViewFilledStyle"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp">
+            android:layout_marginTop="@dimen/spacing_group">
 
             <com.google.android.material.materialswitch.MaterialSwitch
                 android:id="@+id/direct"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginHorizontal="12dp"
+                android:layout_marginHorizontal="@dimen/card_body_inset"
                 android:gravity="center_vertical|start"
                 android:text="@string/switch_direct"
                 android:textAppearance="?attr/textAppearanceBodyLarge" />
@@ -371,7 +396,7 @@
             style="?attr/materialCardViewFilledStyle"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="4dp">
+            android:layout_marginTop="@dimen/spacing_seam">
 
             <LinearLayout style="@style/ClipSync.CardBody">
 
@@ -385,7 +410,7 @@
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/peer_add"
                     style="@style/ClipSync.SettingsButton"
-                    android:layout_marginTop="4dp"
+                    android:layout_marginTop="@dimen/spacing_seam"
                     android:text="@string/peer_add"
                     app:icon="@drawable/ic_add" />
             </LinearLayout>
@@ -400,8 +425,8 @@
             android:id="@+id/paths_error"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
-            android:paddingHorizontal="28dp"
+            android:layout_marginTop="@dimen/spacing_heading"
+            android:paddingHorizontal="@dimen/error_gutter"
             android:textAppearance="?attr/textAppearanceBodySmall"
             android:textColor="?attr/colorError"
             android:text="@string/paths_none"
@@ -437,7 +462,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="horizontal"
-                    android:layout_marginTop="8dp">
+                    android:layout_marginTop="@dimen/spacing_field">
 
                     <com.google.android.material.textfield.TextInputLayout
                         android:id="@+id/file_mb_layout"
@@ -461,7 +486,7 @@
                         android:layout_width="0dp"
                         android:layout_weight="1"
                         android:layout_height="wrap_content"
-                        android:layout_marginStart="8dp"
+                        android:layout_marginStart="@dimen/spacing_field"
                         android:hint="@string/hint_file_mb_local">
 
                         <com.google.android.material.textfield.TextInputEditText
@@ -473,11 +498,14 @@
                     </com.google.android.material.textfield.TextInputLayout>
                 </LinearLayout>
 
+                <!-- labelFor, for the reason recorded on browse_label above: this line is the only
+                     thing that names the setting, because the slider's own value is an index. -->
                 <TextView
                     android:id="@+id/threads_label"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="12dp"
+                    android:layout_marginTop="@dimen/spacing_label"
+                    android:labelFor="@+id/threads"
                     android:textAppearance="?attr/textAppearanceBodyMedium"
                     tools:text="Parallel connections per file: 8" />
 
@@ -490,24 +518,25 @@
                     android:stepSize="1"
                     android:value="3"
                     app:labelBehavior="floating"
-                    app:tickVisible="true" />
+                    app:tickVisibilityMode="autoLimit" />
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
-        <!-- Relay opt-out (docs/p2p-plan.md §8). Its own card at the bottom of Transfer limits:
+        <!-- Relay opt-out — declining to forward files between two peers that cannot reach each
+             other. Its own card at the bottom of Transfer limits:
              relaying is bounded by the same size limits and costs the same bandwidth, so it belongs
              with the controls that govern how much data this device handles. -->
         <com.google.android.material.card.MaterialCardView
             style="?attr/materialCardViewFilledStyle"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp">
+            android:layout_marginTop="@dimen/spacing_group">
 
             <com.google.android.material.materialswitch.MaterialSwitch
                 android:id="@+id/relay_opt_out"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginHorizontal="12dp"
+                android:layout_marginHorizontal="@dimen/card_body_inset"
                 android:gravity="center_vertical|start"
                 android:text="@string/switch_relay_opt_out"
                 android:textAppearance="?attr/textAppearanceBodyLarge" />
@@ -520,7 +549,7 @@
             style="?attr/materialCardViewFilledStyle"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginBottom="16dp">
+            android:layout_marginBottom="@dimen/page_gutter">
 
             <LinearLayout style="@style/ClipSync.CardBody">
 
@@ -545,7 +574,7 @@
                     style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
+                    android:layout_marginTop="@dimen/spacing_field"
                     android:hint="@string/hint_keep_hours">
 
                     <com.google.android.material.textfield.TextInputEditText
@@ -561,7 +590,7 @@
                     style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
+                    android:layout_marginTop="@dimen/spacing_field"
                     android:hint="@string/hint_keep_mb">
 
                     <com.google.android.material.textfield.TextInputEditText

@@ -1,5 +1,63 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- The page's spacing vocabulary.
+
+     These were prose. The settings page carried a long comment stating the rule for each gap — 8dp
+     between sub-groups, 4dp from a switch to the card it governs, 6dp under a section title — and
+     then spelled the numbers out at forty call sites, where nothing connected a given "8dp" to the
+     rule it was an instance of. A rule written in a comment is a rule the next person has to find,
+     read and choose to obey; a rule written as a named dimension is one the compiler resolves and
+     one that can be changed in a single place.
+
+     Named for the RULE, not for the value, which is the whole point: two gaps that happen to be 8dp
+     today for different reasons get different names here, so that changing one never silently moves
+     the other. The prose is kept where it was, because it says *why* each rule is what it is, and
+     that is not something a name can carry. -->
 <resources>
+    <!-- Between sub-groups of a section: the identity card, the own-addresses card, the discovery
+         pair, the direct pair. The one to copy when a sub-group is added. -->
+    <dimen name="spacing_group">8dp</dimen>
+    <!-- Between two controls inside one card: field to field, field to checkbox, column to column.
+         The same number as a group gap today and for a different reason — a card's contents are
+         spaced like each other, a page's groups are spaced like each other — so it has its own name
+         and either can move without dragging the other. -->
+    <dimen name="spacing_field">8dp</dimen>
+    <!-- A seam: a switch and the card it governs, or one settings button and the next. Tighter than
+         a group gap, so the two read as one unit while staying two surfaces. -->
+    <dimen name="spacing_seam">4dp</dimen>
+    <!-- Under a section title, and above a switch card, which introduces a group the way a title
+         does. Anything larger made the groups inside a section look further apart than the sections
+         are from each other. -->
+    <dimen name="spacing_heading">6dp</dimen>
+    <!-- Above a section title: the gap that separates one whole section from the last. -->
+    <dimen name="spacing_section">12dp</dimen>
+    <!-- Between a label and the control it names — a slider and its readout line. -->
+    <dimen name="spacing_label">12dp</dimen>
+
+    <!-- The inset of every settings card's body. Applied as padding on the card body, and as a
+         horizontal margin on a switch that is alone in its card, which puts the switch's label on
+         the fields' box-left edge and the track's right end on their box-right edge for free. -->
+    <dimen name="card_body_inset">12dp</dimen>
+    <!-- A status card in the peer sheet, which is a denser list of read-only values rather than a
+         column of controls, so it takes the standard 16dp card padding instead. -->
+    <dimen name="card_padding">16dp</dimen>
+
+    <!-- The page's own left and right margin: the column every card's edge sits on. -->
+    <dimen name="page_gutter">16dp</dimen>
+    <!-- The sheet's, which is wider: its title and its group headings sit on this line, and the
+         cards line up with them rather than bulging out to the left. -->
+    <dimen name="sheet_gutter">24dp</dimen>
+    <!-- The error line under the two path switches, indented to the text fields' label column so it
+         reads as one of their errors rather than as a note about the page. -->
+    <dimen name="error_gutter">28dp</dimen>
+    <!-- The log's own text inset. Smaller than the page gutter on purpose: a monospace log is wanted
+         wide, and it has no cards whose edges it has to line up with. -->
+    <dimen name="log_gutter">12dp</dimen>
+
+    <!-- What each scrolling page leaves at the bottom so its last row clears the FAB pair, and the
+         margin the FABs themselves sit on. -->
+    <dimen name="fab_clearance">80dp</dimen>
+    <dimen name="fab_margin">16dp</dimen>
+
     <!-- The welcome screen's one horizontal measurement.
          Named and shared rather than repeated per view, because the fault it replaces was exactly
          that: the dialog it grew out of had text at different distances from its two edges, and no

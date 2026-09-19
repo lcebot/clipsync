@@ -7,7 +7,9 @@ numbers, a real list instead of a comma-joined one, a parser from the standard l
 twice, a BOM, a value containing a comma, an in-place rewrite that has to preserve comments: none of
 it is a problem for a file that is not pretending to be prose.
 
-**Nothing here migrates anything** — see the note above the field checks, and docs/p2p-plan.md §10.
+**Nothing here migrates anything** — see the note above the field checks. No migration is written,
+for anything, ever: old keys are simply not read, and the release notes say to set the devices up
+again.
 
 Split out of clipsync.py so that `configurator.py` can import the rules rather than restate them.
 Importing clipsync.py is not an option for a settings window: it configures logging into the
@@ -37,14 +39,18 @@ LOG_PATH = os.path.join(HERE, "clipsync.log")
 CHUNK = 512 * 1024
 
 # Every key the service reads, with the value used when the file does not name it, in the type it is
-# stored as. The config.json committed to the repo carries the same values, so a fresh install and a
-# missing key behave identically.
+# stored as. A missing key falls back to the value here, so a config.json that names only some keys
+# still works. (No template is carried in the repository: config.json holds a real PSK and is
+# ignored by git.)
 DEFAULTS = {
     "port": 47521,
     "psk": "",
-    # Key rotation (docs/p2p-plan.md §17). Read whether or not rotate is on, because the ring still
-    # applies: a device that rotated and then had rotation turned off must go on accepting the keys
-    # it has already superseded.
+    # The key rotation schedule, persisted so it survives a restart: when the current key became
+    # active, the successor that has been announced but not yet promoted, the ring of superseded
+    # keys still accepted, the promotion deadline, and whether a peer has acknowledged the
+    # successor. Read whether or not rotate is on, because the ring still applies: a device that
+    # rotated and then had rotation turned off must go on accepting the keys it has already
+    # superseded.
     "psk_rotate": False,
     "psk_since": 0,
     "psk_next": "",
@@ -62,12 +68,22 @@ DEFAULTS = {
     "direct": False,
     "peers": [],
     # The names and literals that point at THIS machine — typically a domain a dynamic DNS client
-    # here keeps pointed at it. See docs/p2p-plan.md §4a. No switch of its own: empty means "this
-    # device has no name of its own", and turning such a list off could only cause the mistakes it
-    # exists to prevent.
+    # here keeps pointed at it, but a static address or a LAN name serves as well. Two things read
+    # it: validation refuses an entry typed into `peers` that matches one, and the dialler skips
+    # such a target without opening a socket. Both are the cheap half of the self-connection guard
+    # — the authority is still the id exchanged in HELLO, because a second name for this host, or a
+    # LAN address that happens to be this machine today, is not in the list and still reaches the
+    # handshake. Matching is a string comparison on the normalised form (lower-cased, brackets
+    # stripped) and never a DNS lookup, because validation runs on every keystroke.
+    #
+    # No switch of its own: empty already means "this device has no name of its own", and turning
+    # such a list off could only cause the mistakes it exists to prevent.
     "own_addresses": [],
     "start_delay": 0,
-    # Relay opt-out (docs/p2p-plan.md §8): decline relay requests from other devices.
+    # Relay opt-out: do not be the LAN's relay for other devices. It is the power-saving control,
+    # and it works by forcing this node's declared `persistent` to false, which takes it out of
+    # everyone else's relay election — plus a refusal for any RELAY_ASK that arrives anyway. See
+    # clipsync_node.declaration() and SyncState.on_relay_ask.
     "relay_opt_out": False,
 }
 
@@ -148,6 +164,17 @@ class Schedule:
         return Schedule(self.psk, successor, self.old, self.since, self.since + RETIRE_MS, self.agreed_at)
 
     def agreed(self, now: int) -> "Schedule":
+        """Record that a peer has confirmed our successor. **Idempotent, and that is the point.**
+
+        Recording it a second time changes nothing anyone reads — `phase()` only asks whether
+        `agreed_at > since` — but it produces a schedule that compares unequal to the one before it,
+        and `on_keys` persists and re-announces on any inequality. Both ends do that, so each T_KEYS
+        provoked another one: a full config rewrite and a network-wide broadcast per round trip, for
+        as long as the pre-retirement window lasted. Returning `self` once there is already an
+        agreement is what lets the exchange go quiet.
+        """
+        if self.agreed_at > self.since:
+            return self
         return Schedule(self.psk, self.next, self.old, self.since, self.retire_at, now)
 
     def extended(self) -> "Schedule":
@@ -163,13 +190,29 @@ class Schedule:
         ring = ([self.psk] if self.psk else []) + [k for k in self.old if k != key]
         return Schedule(key, "", ring[:KEYRING], now, 0, 0)
 
-    def reconcile(self, their_psk: str, their_next: str, now: int) -> "Schedule":
+    def would_adopt(self, their_psk: str) -> bool:
+        """Would `reconcile` take this peer's key as ours, if it were allowed to?
+
+        Exists so the caller can say *why* it refused without restating the branch conditions.
+        """
+        return bool(their_psk) and not (self.next and their_psk == self.next) \
+            and their_psk != self.psk and their_psk not in self.old
+
+    def reconcile(self, their_psk: str, their_next: str, now: int, trusted: bool) -> "Schedule":
+        """Merge a peer's announced schedule into ours.
+
+        `trusted` is whether the connection this arrived on authenticated with our *current* key or
+        our successor — not merely with something in the ring. Only such a peer may hand us a key we
+        have never seen (`adopt`). The ring exists because rotation assumes a superseded key may
+        have leaked, so letting one authenticate an adopt would turn a temporary leak into permanent
+        control of every device's key. A peer on an old key is behind; our own T_KEYS teaches it.
+        """
         s = self
         if s.next and their_psk == s.next:
             s = s.agreed(now)
             if s.phase(now) == "due":
                 s = s.promoted(now)
-        elif their_psk != s.psk and their_psk not in s.old:
+        elif trusted and their_psk != s.psk and their_psk not in s.old:
             s = s.adopt(their_psk, now)
         if their_psk == s.psk and their_next:
             if not s.next:
@@ -183,11 +226,21 @@ class Schedule:
         return s
 
     def __eq__(self, other):
+        """Value equality, **excluding `agreed_at`**.
+
+        `agreed_at` is a timestamp of when something was confirmed, not part of what was confirmed,
+        and including it made every re-confirmation look like a change worth persisting and
+        broadcasting. `agreed()` is idempotent now, so this is belt-and-braces — but it is the
+        cheaper of the two braces and it stops the next person reintroducing the storm.
+
+        The one transition that must still be seen as a change is the *first* agreement (0 ->
+        non-zero, which moves `phase()` from STRANDED to DUE). `on_keys` therefore compares the
+        fields it cares about explicitly rather than relying on this.
+        """
         if not isinstance(other, Schedule):
             return NotImplemented
         return (self.psk == other.psk and self.next == other.next and self.old == other.old
-                and self.since == other.since and self.retire_at == other.retire_at
-                and self.agreed_at == other.agreed_at)
+                and self.since == other.since and self.retire_at == other.retire_at)
 
     def __ne__(self, other):
         return not self.__eq__(other)
@@ -207,12 +260,22 @@ def schedule_from_raw(raw: dict) -> Schedule:
     A missing activation time is treated as **now**, matching Config.schedule() on Android.
     Otherwise an existing key looks 55 years old and triggers immediate pre-retirement the
     moment rotation is enabled.
+
+    **Malformed key material is dropped here rather than carried.** `psk` itself is validated by
+    check_all before this is ever reached, but `psk_next` and `psk_old` were not, and a single
+    non-hex entry in either bricks this device: it reaches `bytes.fromhex` on the inbound path and
+    every accepted connection dies there. A bad successor is treated as "no successor" and a bad ring
+    entry is left out: both are recoverable states the rotation machinery already knows, whereas a
+    stored value nothing can parse is not.
     """
     since = int(raw.get("psk_since", 0) or 0)
+    nxt = str(raw.get("psk_next", "")).strip().lower()
+    if nxt and check_psk(nxt) is not None:
+        nxt = ""
     return Schedule(
         psk=str(raw.get("psk", "")).strip().lower(),
-        nxt=str(raw.get("psk_next", "")).strip().lower(),
-        old=as_hex_list(raw.get("psk_old", [])),
+        nxt=nxt,
+        old=[k for k in as_hex_list(raw.get("psk_old", [])) if check_psk(k) is None],
         since=since if since else int(time.time() * 1000),
         retire_at=int(raw.get("psk_retire", 0) or 0),
         agreed_at=int(raw.get("psk_agreed", 0) or 0),
@@ -267,8 +330,10 @@ def read_config(path: str = CONFIG_PATH) -> dict:
     return raw
 
 
-# No migration is written, for anything, ever. That is docs/p2p-plan.md §10's rule and there is no
-# exception to it here: this file reads what it finds and nothing else.
+# No migration is written, for anything, ever. This file reads what it finds and nothing else, and
+# a key it does not recognise is a log line rather than a compatibility path. The rule was set when
+# the protocol version made every device need updating together anyway: the cost of asking for a
+# one-time reconfiguration is a few minutes, and the cost of carrying migration code is permanent.
 #
 # Worth keeping because it is what stops the idea coming back. One attempt at being helpful, moving
 # names out of `peers` into `own_addresses`, also turned `direct` off -- which can leave both paths
@@ -508,7 +573,18 @@ def check_all(raw: dict, *, discovery: bool = None, direct: bool = None) -> dict
 # ----------------------------------------------------------------------------- the parsed config
 class Cfg:
     """The service's view of config.json: parsed, coerced and derived. Raises SystemExit on a config
-    the service cannot run with, because that is exactly what should happen at start-up."""
+    the service cannot run with, because that is exactly what should happen at start-up.
+
+    **Three fields are mutable; everything else is a start-up snapshot.** `psk`, `psk_hex` and
+    `keys` are rewritten by `SyncState.persist_schedule` — inside `state.lock`, and nowhere else —
+    because key rotation changes them while the process runs and the connection paths read them on
+    every dial and every accept. Android reaches the same place by reloading Config after a save;
+    this is the equivalent, and leaving it out meant the rotation machinery computed new keys that
+    nothing ever used, so a PC fell out of the network two or three cycles after it started.
+
+    A reader that needs a consistent pair (the accepted list *and* the current key, say) must take
+    `state.lock` for the read: a rotation between the two reads hands back a mismatched combination.
+    Anything else here is set once and safe to read without the lock."""
 
     def __init__(self, path: str = CONFIG_PATH):
         try:
@@ -542,9 +618,11 @@ class Cfg:
         self.discovery = as_bool(raw["discovery"])
         self.mdns_name = str(raw["mdns_name"]).strip()
         self.direct = as_bool(raw["direct"])
-        # Host names or literal addresses of peers to reach directly. Used by the advertiser to tell
-        # whether this PC is the one a shared config points at; from phase 3 it is also what this PC
-        # dials. Empty when the switch is off, exactly as Config.from() does on Android: the
+        # Host names or literal addresses of peers to reach directly -- this is what this PC dials.
+        # It used to do double duty: an advertiser probe asked "does this PC own one of these names?"
+        # and stayed quiet on the LAN if not. That probe is gone (several PCs advertising on one LAN
+        # is normal now), so the list means one thing only.
+        # Empty when the switch is off, exactly as Config.from() does on Android: the
         # addresses stay in the file so they survive a round trip through the switch, but nothing
         # acts on them.
         self.peers = as_list(raw["peers"]) if self.direct else []

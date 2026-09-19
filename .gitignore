@@ -22,4 +22,8 @@ windows/app/clipsync.log
 windows/app/clipsync.log.old
 windows/install-state.json
 windows/app/received/
+# The same folder one level up, which is where a files_dir of "received" resolved before
+# clipsync_config moved into app/. Nothing writes here any more, but an existing install still has
+# one, and the files in it are the user's clipboard history in the clear.
+windows/received/
 __pycache__/

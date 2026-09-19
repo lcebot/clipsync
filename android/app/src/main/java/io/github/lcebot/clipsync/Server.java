@@ -4,8 +4,6 @@ import android.content.Context;
 import android.net.ConnectivityManager;
 import android.net.Network;
 
-import org.json.JSONObject;
-
 import java.io.Closeable;
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -24,7 +22,7 @@ import java.util.concurrent.TimeUnit;
  * a phone and a tablet on the same Wi-Fi could not find each other at all with the PC switched off.
  * Neither of them has a name the other can be configured with. Only one of the two has to find the
  * other for both to be connected — so a listening socket plus an mDNS advertisement is the whole of
- * it. (docs/p2p-plan.md §13, phase 4)
+ * it. Every device listens; there is no server role left anywhere in this protocol.
  *
  * <p>What arrives here is either a <b>control</b> connection, which becomes an ordinary peer link
  * indistinguishable from one we dialled, or a <b>data</b> connection, which is one stream of one
@@ -32,8 +30,8 @@ import java.util.concurrent.TimeUnit;
  * the handshake was split in two ({@link Connection#readHello()} / {@link Connection#sendHello}):
  * the accepter has to know who is calling before it can answer.
  *
- * <p>The cost is recorded in §14: the attack surface grows from one open port on the PC to one on
- * every device. What limits it is that the PSK handshake completes before a single frame is parsed —
+ * <p>The cost, accepted deliberately: the attack surface grows from one open port on the PC to one
+ * on every device. What limits it is that the PSK handshake completes before a single frame is parsed —
  * an unauthenticated peer gets 32 bytes of nonce read and nothing else — and that this pool is
  * bounded, so a flood of sockets cannot become a flood of threads.
  */
@@ -43,11 +41,17 @@ final class Server implements Closeable {
         /**
          * A control connection whose HELLO has been read and answered for. Runs the whole session;
          * returning ends it.
+         *
+         * @param hello what the peer declared. Passed on rather than dropped because the accepting
+         *              end needs {@code clipTs} / {@code clipSha} for the same reason the dialling
+         *              end does: they say whether the peer's clipboard is behind ours, and a peer
+         *              that reconnects after our pending slot was released has no other way to be
+         *              told what it missed.
          */
-        void onControl(Connection c) throws Exception;
+        void onControl(Connection c, Hello hello) throws Exception;
 
         /** One data connection of one transfer: the peer will push chunks or pull them. */
-        void onData(Connection c, JSONObject hello) throws Exception;
+        void onData(Connection c, Hello hello) throws Exception;
 
         Config config();
     }
@@ -140,9 +144,16 @@ final class Server implements Closeable {
             ConnectivityManager cm = ctx.getSystemService(ConnectivityManager.class);
             Network net = cm != null ? cm.getActiveNetwork() : null;
             c = Connection.accept(ctx, handler.config(), s, net);
-            JSONObject hello = c.readHello();
-            if ("data".equals(hello.optString("role"))) handler.onData(c, hello);
-            else handler.onControl(c);
+            Hello hello = c.readHello();
+            if (Hello.ROLE_DATA.equals(hello.role)) handler.onData(c, hello);
+            // A role this port does not serve, rather than "anything that is not data is a peer".
+            // Connection.readHello lets a declared role past the "peer sent no node id" check,
+            // because a data connection legitimately has none — so a `role=pair` HELLO arriving
+            // here would be handed to onControl and register() would key the peer map on null.
+            // Pairing has its own ephemeral listener (PairProvider); it never belongs on this port.
+            else if (!hello.role.isEmpty())
+                throw new java.io.IOException("role '" + hello.role + "' is not served on this port");
+            else handler.onControl(c, hello);
         } catch (Connection.SelfConnection e) {
             // Reached ourselves — our own mDNS advertisement, most often, since a device browses the
             // same LAN it advertises on.

@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Pairing, both ends of it (docs/p2p-plan.md §12).
+<!-- Pairing, both ends of it: handing the key to a new device over the LAN, authenticated by a code
+     read off one screen and typed into the other.
 
      One layout for two roles, because they are the same conversation seen from opposite sides and
      share every part of it: a title, a line of explanation, something turning while waiting, and one
@@ -28,6 +29,18 @@
         android:textAppearance="?attr/textAppearanceTitleLarge"
         android:textColor="?attr/colorOnSurface" />
 
+    <!-- The one line of explanation, rewritten at every state. minLines, and this is the reason it
+         is here rather than left to wrap_content: this view carries eight different strings over the
+         life of the sheet — the two bodies, "Found these…", "Enter the code shown on…", and four
+         endings — and they are not the same number of lines. Left to itself the sheet grew and shrank
+         by a line of body text every time one replaced another, which on the joining side is three
+         times in the few seconds between picking a device and being paired. Two lines is what the
+         longest of the ordinary ones takes on a narrow phone, so reserving two costs nothing in the
+         states that need two and holds the sheet still in the ones that need one.
+
+         minLines and not a fixed height: it is a reservation, not a cap. Anything longer still wraps,
+         and the blank line a shorter string leaves behind is part of the same TextView, so TalkBack
+         reads the string and nothing else — there is no empty view here to focus. -->
     <TextView
         android:id="@+id/pair_text"
         android:layout_width="match_parent"
@@ -35,17 +48,29 @@
         android:paddingHorizontal="24dp"
         android:paddingTop="4dp"
         android:lineSpacingExtra="2dp"
+        android:minLines="2"
         android:textAppearance="?attr/textAppearanceBodyMedium"
         android:textColor="?attr/colorOnSurfaceVariant" />
 
-    <!-- The code, on the device that holds the key. Display type and wide tracking because it is
-         read aloud across a room and typed on a phone in the other hand — six digits that run
-         together are six digits typed wrong. Monospace so every digit takes the same width and the
-         eye can group them without the text reflowing as they change.
+    <!-- The code, on the device that holds the key. Display type and tracking because it is read
+         aloud across a room and typed on a phone in the other hand — eight digits that run together
+         are eight digits typed wrong. Monospace so every digit takes the same width and the eye can
+         group them without the text reflowing as they change.
 
-         It starts as six greyed digits rather than empty, and that is what stops the sheet jumping
-         open. The code cannot exist yet when this is laid out — deriving it is 200 000 PBKDF2 rounds
-         on a worker — so an empty view meant the sheet measured itself without a line of display
+         0.25, up from the 0.15 nine digits needed and still below the 0.3 this carried at six.
+         Monospace tracking adds to every glyph including the last, so the line's advance is
+         n × (1 + spacing) em: nine digits at 0.15 was 10.35 em and that was the width that just fit
+         a narrow phone inside the 24dp gutters. Eight at 0.25 is 10.0 em — under the width already
+         proven to fit — while 0.3 would be 10.4 em, i.e. very slightly over it. So 0.25 is the last
+         value that buys separation without going back to guessing. The gutters are not negotiable.
+
+         This is a single-line TextView, so tracking changes its width and never its height: the
+         three-state equal-height layout the rest of this sheet is built around (see pair_progress
+         and PairSheet.KEEP) is untouched by the number above.
+
+         It starts as eight greyed digits rather than empty, and that is what stops the sheet jumping
+         open. The code cannot exist yet when this is laid out — deriving it is a deliberately slow
+         scrypt on a worker — so an empty view meant the sheet measured itself without a line of display
          type and then grew by exactly that much a moment later. Digits and not dashes because the
          two do not draw to the same height: a row of dashes reserved the width but not the line. -->
     <TextView
@@ -56,7 +81,7 @@
         android:paddingHorizontal="24dp"
         android:gravity="center"
         android:fontFamily="monospace"
-        android:letterSpacing="0.3"
+        android:letterSpacing="0.25"
         android:text="@string/pair_code_placeholder"
         android:textAppearance="?attr/textAppearanceDisplaySmall"
         android:textColor="?attr/colorPrimary"
@@ -70,7 +95,15 @@
          inherited, and next to Expressive's springy motion everywhere else on this surface it reads
          as a different app's idea of waiting. Left on its default style deliberately: its size and
          colours come from the theme, which is the whole point of using the component instead of
-         drawing one. -->
+         drawing one.
+
+         On the joining side this row is INVISIBLE rather than GONE for part of its life, and that is
+         deliberate — see PairSheet.KEEP. Typing a code, waiting for it to be checked, and being told
+         it was wrong are three states of one screen, and this row and the button below take turns:
+         the row appears exactly when the button goes. Removing either one's space while the other
+         arrives moved the sheet's top edge twice in a second, once in each direction. Holding this
+         row's space through all three is what makes that screen one height. Do not "save a
+         measurement" by turning it back into GONE; the measurement is what is being paid for. -->
     <LinearLayout
         android:id="@+id/pair_progress"
         android:layout_width="match_parent"
@@ -103,6 +136,17 @@
         android:orientation="vertical"
         android:visibility="gone" />
 
+    <!-- errorEnabled up front, which is the opposite of what Ui.showError does elsewhere in this app
+         and is the point: there the error line is collapsed when the complaint goes, because a
+         settings form has a dozen fields and a dozen permanent gaps. Here there is one field, and
+         everything it can be told — "Eight digits", or what the connection failed with — arrives
+         while the user is staring at the sheet waiting for a verdict. Enabling the line from the
+         start reserves it once, so a wrong code adds a message instead of adding a message AND a row
+         of height. The reserved line is empty text in a view with no content, so it is not announced
+         and cannot be focused.
+
+         PairSheet therefore calls setError directly and never Ui.showError: that helper's
+         setErrorEnabled(false) would undo this on the first cleared error. -->
     <com.google.android.material.textfield.TextInputLayout
         android:id="@+id/pair_code_layout"
         style="?attr/textInputOutlinedStyle"
@@ -111,19 +155,31 @@
         android:layout_marginTop="16dp"
         android:layout_marginHorizontal="24dp"
         android:hint="@string/pair_code_hint"
+        app:errorEnabled="true"
         android:visibility="gone">
 
+        <!-- number, not numberPassword or text: the code is not a secret from the person holding the
+             phone, and a digits-only keyboard is the whole point. maxLength must track
+             Pairing.CODE_DIGITS — PairSheet refuses anything shorter, and a field that accepted nine
+             digits would let the user type one the provider can never match.
+
+             (This comment used to sit between the attributes of the tag below, where XML does not
+             allow one.) -->
         <com.google.android.material.textfield.TextInputEditText
             android:id="@+id/pair_code_input"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:inputType="number"
-            android:maxLength="6"
+            android:maxLength="8"
             android:imeOptions="actionDone"
             android:fontFamily="monospace"
             android:letterSpacing="0.2" />
     </com.google.android.material.textfield.TextInputLayout>
 
+    <!-- The one button. It is the other half of the exchange described on pair_progress: while a
+         code is being checked this goes INVISIBLE and not GONE, so the row above it can appear into
+         a sheet that does not move. INVISIBLE also takes it out of the accessibility tree and out of
+         reach of a tap, which is what is wanted anyway — there is nothing to press while waiting. -->
     <com.google.android.material.button.MaterialButton
         android:id="@+id/pair_action"
         android:layout_width="wrap_content"

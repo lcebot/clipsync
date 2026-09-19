@@ -8,7 +8,6 @@ import org.json.JSONObject;
 
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -83,7 +82,10 @@ public final class Status {
         }
     }
 
-    /** A peer this device knows about through T_PEERS but is not directly connected to (§18). */
+    /**
+     * A peer this device knows about only because a direct peer listed it in its roster (T_PEERS),
+     * so it is two hops away rather than connected.
+     */
     public static final class IndirectPeer {
         public final String id, name, type, via;
 
@@ -103,7 +105,11 @@ public final class Status {
     }
 
     public static final class Snapshot {
-        /** stopped | no network | idle | connecting | connected. See docs/p2p-plan.md §11. */
+        /**
+         * stopped | no network | idle | connecting | connected | relay. Five answers to "what do I
+         * do now", which is the only reason they are distinct: *Stopped* needs a button pressed,
+         * *No network* needs the network fixed, *Idle* needs nothing at all.
+         */
         public final String state;
         /** Free text for the states that have somewhere to go but nowhere to be. */
         public final String detail;
@@ -116,7 +122,7 @@ public final class Status {
         public final List<Peer> peers;
         public final List<IndirectPeer> indirectPeers;
         public final List<Target> targets;
-        /** Number of files this device is currently relaying for others (docs/p2p-plan.md §8). */
+        /** Number of files this device is currently fetching on a LAN peer's behalf. */
         public final int relayCount;
 
         Snapshot(String state, String detail, long ts, boolean suspended, List<Peer> peers,
@@ -130,13 +136,16 @@ public final class Status {
             return !"stopped".equals(state) && System.currentTimeMillis() - ts < 120_000;
         }
 
+        /**
+         * Directly connected peers — what the status chip counts.
+         *
+         * <p>Indirect peers are deliberately left out. They are devices this one has only heard
+         * about from a neighbour, so counting them would make the chip claim connections that do
+         * not exist; they get their own group in the details sheet instead, where the distinction
+         * can be stated rather than implied by a number.
+         */
         public int count() {
             return peers.size();
-        }
-
-        /** Total devices visible: direct + indirect (for the status chip). */
-        public int totalCount() {
-            return peers.size() + indirectPeers.size();
         }
     }
 
@@ -224,12 +233,7 @@ public final class Status {
                     .put("ts", System.currentTimeMillis()).put("suspended", suspended)
                     .put("peers", ps).put("indirect_peers", ips)
                     .put("targets", ts).put("relay_count", relayCount).toString();
-            File f = file(ctx), tmp = new File(f.getPath() + ".tmp");
-            try (FileOutputStream out = new FileOutputStream(tmp)) {
-                out.write(s.getBytes(StandardCharsets.UTF_8));
-            }
-            //noinspection ResultOfMethodCallIgnored
-            tmp.renameTo(f);
+            Files.atomicWrite(file(ctx), out -> out.write(s.getBytes(StandardCharsets.UTF_8)));
         } catch (Exception ignored) {
         }
     }

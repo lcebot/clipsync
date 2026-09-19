@@ -16,14 +16,17 @@ import java.util.Properties;
  *
  * <p>Browses {@code _clipsync-pair._tcp}, connects to what it finds with a key derived from the
  * code the user typed, asks, and writes the answer into the configuration. From the next reload it
- * is an ordinary node. (docs/p2p-plan.md §12)
+ * is an ordinary node.
  *
  * <p>Static, and deliberately so: unlike {@link PairProvider} there is no window to hold open and
  * nothing to close. A join is one attempt with one code — if it fails, the user tries again, and
  * <b>that attempt is one of the provider's five</b>, which is where the brute-force bound lives.
  * Nothing on this side needs to remember anything between tries.
  *
- * <p>Every method here blocks: a browse takes seconds and the key derivation is slow on purpose.
+ * <p>Every method here blocks, and blocks for seconds rather than for a moment: a browse runs for a
+ * fixed window, the key derivation is slow on purpose (under a second — see
+ * {@link Pairing#SCRYPT_P}), and the wait for the provider's user to say yes is a person rather than
+ * a network. Nothing in this class may be called from the main thread.
  */
 final class PairJoiner {
     private PairJoiner() {}
@@ -58,17 +61,55 @@ final class PairJoiner {
      * provider's attempts — and it is why the exception this throws says what the user can act on
      * rather than what the cipher reported.
      *
+     * <p>The work is in two parts: stretching the code (under a second of native scrypt — see
+     * {@link Pairing#SCRYPT_P}), and only then does a socket open. {@code derived} is called on this
+     * thread between the two, which is the only point at which a caller can tell the user which of
+     * the two it is waiting on. It exists because "Connecting" shown over a derivation is a lie
+     * about what the phone is doing, and the user's next move — assume it hung, press something —
+     * follows from believing it. <b>It is still worth having now that the first half is short</b>:
+     * "short" is a mid-range phone's ~0.5–1 s, the callback costs one post, and the two labels
+     * are also what makes a slow device's long first half explicable rather than alarming.
+     *
+     * @param derived run when the key is ready and the first connect is about to be attempted;
+     *                on the calling thread, so an implementation posts and returns
      * @throws IOException if the advertisement is unusable, nothing answers, or the code is wrong
      */
-    static Result join(Context ctx, Mdns.Instance provider, String code) throws Exception {
-        byte[] salt = Pairing.unhex(provider.attrs.get(Pairing.TXT_SALT));
+    static Result join(Context ctx, Mdns.Instance provider, String code, Runnable derived)
+            throws Exception {
+        // Version first, because the cost of getting this wrong is paid by a person. On an ordinary
+        // link a mismatch wastes one connection nobody is watching; here it wastes copying eight
+        // digits across the room, typing them, and waiting a second for the key to derive — to be
+        // told "wrong code, or the window has closed" when the code was right. A missing `v` is not
+        // a mismatch (an older provider may not send one) and is allowed through; the handshake
+        // stays the authority either way. Mirrors clipsync_pair.find().
+        String theirV = provider.attrs.get(Pairing.TXT_VERSION);
+        if (theirV != null && !theirV.isEmpty()
+                && !theirV.equals(String.valueOf(Connection.PROTOCOL_VERSION))) {
+            throw new IOException("that device is running a different version of ClipSync"
+                    + " (it speaks " + theirV + ", this one speaks " + Connection.PROTOCOL_VERSION + ")");
+        }
+        byte[] salt = Crypto.fromHex(provider.attrs.get(Pairing.TXT_SALT));
         if (salt == null) {
             // Either not one of ours or a truncated record. Refusing beats guessing a salt: a wrong
             // one produces the same decrypt failure as a wrong code and would be blamed on the user.
             throw new IOException("that device is not offering to pair (no salt in its advertisement)");
         }
         byte[] key = Pairing.channelKey(code, salt);
+        if (derived != null) derived.run();
+        try {
+            return dial(ctx, provider, key);
+        } finally {
+            // The stretched code, gone as soon as the attempt is over — whether it succeeded, was
+            // refused or never reached anyone. It is worth a line because it is the expensive half
+            // of the secret: reaching it from the digits again costs another full scrypt, and this
+            // array is that payment sitting in the heap. Every Connection it was
+            // handed to derived its own per-direction keys from it and is closed by now.
+            java.util.Arrays.fill(key, (byte) 0);
+        }
+    }
 
+    /** One pass over the provider's addresses with an already-derived channel key. */
+    private static Result dial(Context ctx, Mdns.Instance provider, byte[] key) throws Exception {
         Network net = network(ctx);
         IOException last = null;
         // The addresses of ONE provider, in the order OnLink put them: several routes to the same

@@ -1,16 +1,17 @@
 package io.github.lcebot.clipsync;
 
+import android.animation.TimeInterpolator;
 import android.app.Activity;
 import android.os.Bundle;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.animation.AnimationUtils;
-import android.view.animation.Interpolator;
 
 import androidx.activity.OnBackPressedCallback;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.transition.TransitionManager;
 
+import com.google.android.material.motion.MotionUtils;
 import com.google.android.material.transition.MaterialSharedAxis;
 
 /**
@@ -41,6 +42,17 @@ public final class WelcomeActivity extends AppCompatActivity {
     static final String MANUAL = "manual";
 
     private View intro, choose;
+
+    /**
+     * The open pairing sheet, or null.
+     *
+     * <p>Held for {@link #onDestroy()} alone. A BottomSheetDialog is not in this Activity's view
+     * tree and survives it; the sheet opened by *Generate* holds a {@link PairProvider}, which holds
+     * an mDNS advertisement and an accept loop that gives the PSK away. A rotation on this screen
+     * left exactly that running with nothing on screen — no code visible, and the key still on
+     * offer to the network.
+     */
+    private PairSheet sheet;
 
     /** True once a key exists, by either route: this screen's whole job, done. */
     private boolean setUp;
@@ -75,8 +87,8 @@ public final class WelcomeActivity extends AppCompatActivity {
         // a sheet, and a sheet that can only exist on the settings page would mean leaving the setup
         // flow to do the one thing the setup flow is for. Only "set up manually" leaves, because
         // leaving IS what it means.
-        Haptics.onClick(findViewById(R.id.choose_join), () -> PairSheet.join(this, host));
-        Haptics.onClick(findViewById(R.id.choose_generate), () -> PairSheet.generateAndOffer(this, host));
+        Haptics.onClick(findViewById(R.id.choose_join), () -> sheet = PairSheet.join(this, host));
+        Haptics.onClick(findViewById(R.id.choose_generate), () -> sheet = PairSheet.generateAndOffer(this, host));
         Haptics.onClick(findViewById(R.id.choose_manual), () -> finishWith(MANUAL));
 
         // Back walks the pages before it leaves, which is what a series of screens promises by
@@ -109,24 +121,56 @@ public final class WelcomeActivity extends AppCompatActivity {
      */
     private void enter() {
         View hero = findViewById(R.id.intro_hero);
-        Interpolator spatial = AnimationUtils.loadInterpolator(this,
-                android.R.interpolator.fast_out_slow_in);
-        rise(hero, 0, spatial);
-        rise(findViewById(R.id.intro_title), 60, spatial);
-        rise(findViewById(R.id.intro_body), 110, spatial);
-        rise(findViewById(R.id.intro_next), 160, spatial);
+        // From the theme, not from the platform. android.R.interpolator.fast_out_slow_in is
+        // Material 2's curve and is symmetric-ish; M3 Expressive's entrances use *emphasized
+        // decelerate*, which arrives fast and settles slowly — the difference is exactly the
+        // "assembling itself" quality this staggered entrance is for. Reading it from the theme
+        // rather than naming a curve also means a theme that retunes its motion retunes this too.
+        //
+        // Both calls are checked against Material 1.14.0's own source rather than guessed at:
+        //   MotionUtils.resolveThemeInterpolator(Context, @AttrRes int, TimeInterpolator) -> TimeInterpolator
+        //   MotionUtils.resolveThemeDuration(Context, @AttrRes int, int) -> int
+        // (lib/java/com/google/android/material/motion/MotionUtils.java @ 1.14.0). The third
+        // argument of each is the fallback used when the theme does not name the attribute, which
+        // is why neither call can fail on a theme that has not been given these tokens.
+        //
+        // TimeInterpolator — android.animation, not view.animation.Interpolator — is what the
+        // signature actually returns, and it has to be: the *Interpolator attributes point at an
+        // @interpolator RESOURCE, and for the legacy string forms MotionUtils builds a
+        // PathInterpolator itself. Both attribute names exist in 1.14
+        // (motion/res/values/attrs.xml declares motionEasingEmphasizedDecelerateInterpolator and
+        // motionDurationLong2), so neither of these is a hopeful guess at a token name.
+        //
+        // The duration is widened int -> long on the way into `enter`; that is deliberate, since
+        // everything it is handed to (setStartDelay, setDuration) takes a long.
+        TimeInterpolator spatial = MotionUtils.resolveThemeInterpolator(this,
+                com.google.android.material.R.attr.motionEasingEmphasizedDecelerateInterpolator,
+                AnimationUtils.loadInterpolator(this, android.R.interpolator.decelerate_quint));
+        long enter = MotionUtils.resolveThemeDuration(this,
+                com.google.android.material.R.attr.motionDurationLong2, 450);
+        // The stagger is a fraction of the duration rather than three pinned numbers: it is what
+        // makes three views read as a sequence instead of one sliding panel, and it only does that
+        // if it keeps its proportion when the duration changes.
+        long step = enter / 6;
+        rise(hero, 0, enter, spatial);
+        rise(findViewById(R.id.intro_title), step, enter, spatial);
+        rise(findViewById(R.id.intro_body), step * 2, enter, spatial);
+        rise(findViewById(R.id.intro_next), step * 3, enter, spatial);
 
         hero.setScaleX(0.8f);
         hero.setScaleY(0.8f);
-        hero.animate().scaleX(1f).scaleY(1f).setDuration(ENTER_MS)
+        hero.animate().scaleX(1f).scaleY(1f).setDuration(enter)
                 .setInterpolator(spatial).start();
     }
 
-    private void rise(View v, long delay, Interpolator spatial) {
+    private void rise(View v, long delay, long duration, TimeInterpolator spatial) {
         v.setAlpha(0f);
-        v.setTranslationY(RISE_PX);
+        // RISE_DP is a dp figure and setTranslationY takes pixels, so it has to be converted. It
+        // was not, which made the rise 32 physical pixels — about 10dp on a 3x phone, a third of
+        // what the constant below says and small enough to read as a wobble rather than an arrival.
+        v.setTranslationY(RISE_DP * v.getResources().getDisplayMetrics().density);
         v.animate().alpha(1f).translationY(0f)
-                .setStartDelay(delay).setDuration(ENTER_MS).setInterpolator(spatial).start();
+                .setStartDelay(delay).setDuration(duration).setInterpolator(spatial).start();
     }
 
     /**
@@ -135,7 +179,7 @@ public final class WelcomeActivity extends AppCompatActivity {
      * <p>{@link MaterialSharedAxis} on X is the transition for peer destinations — the pages slide
      * and cross-fade in the direction of travel, so going back looks like going back rather than
      * like a second forward step. Left on its themed durations for the reason recorded on
-     * {@code MainActivity.visibilityMotion}: setting a duration on the set overwrites the spec.
+     * {@code Ui.visibilityMotion}: setting a duration on the set overwrites the spec.
      */
     private void page(boolean forward) {
         MaterialSharedAxis axis = new MaterialSharedAxis(MaterialSharedAxis.X, forward);
@@ -147,12 +191,25 @@ public final class WelcomeActivity extends AppCompatActivity {
         Haptics.tick(forward ? choose : intro);
     }
 
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        PairSheet s = sheet;
+        sheet = null;
+        // Dismissing runs the sheet's own shutdown — the same path Back takes — which is what closes
+        // the pairing window rather than leaving it advertising without a surface.
+        if (s != null) s.dismiss();
+    }
+
     private void finishWith(String choice) {
         setResult(Activity.RESULT_OK, new android.content.Intent().putExtra(EXTRA_CHOICE, choice));
         finish();
     }
 
-    /** Long enough to be a movement, short enough not to be a wait. */
-    private static final long ENTER_MS = 350;
-    private static final float RISE_PX = 32f;
+    /**
+     * How far the three text blocks travel. The one number still written here — a distance, not a
+     * duration, and M3 has no token for it: the spec says "a short distance", and 32dp is the one
+     * that reads as a rise rather than a slide at every screen size this app sees.
+     */
+    private static final float RISE_DP = 32f;
 }

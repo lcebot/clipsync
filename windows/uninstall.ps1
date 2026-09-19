@@ -6,7 +6,15 @@
 #
 # Run it however you like; it asks for administrator rights itself.
 
-$ErrorActionPreference = "Stop"
+# See install.ps1: an empty param() with [CmdletBinding()] is what makes the common parameters
+# (-Verbose, -ErrorAction, ...) work on a script that is otherwise double-clicked.
+[CmdletBinding()]
+param()
+
+# Stop at the first failure. Unlike the installer there is nothing to roll back here, but there is
+# something worse to avoid: deleting install-state.json at the end of a run that did not actually
+# remove what the file records, which would leave rules nothing knows about any more.
+$ErrorActionPreference = 'Stop'
 
 # --- elevation (see install.ps1 for why this is first) -----------------------------------------
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -30,11 +38,33 @@ $app       = Join-Path $here 'app'
 $stateFile = Join-Path $here 'install-state.json'
 
 if (-not (Test-Path $stateFile)) {
+    # No record, so the names install.ps1 uses are reconstructed instead -- from config.json, which
+    # is where the port in two of the three names came from in the first place.
+    #
+    # Named exactly, never 'ClipSync *'. That wildcard was this script's one unbounded action: a
+    # rule somebody else created called "ClipSync Remote Desktop", or one an earlier ClipSync made
+    # for a port this folder has nothing to do with, matched it and was deleted without being shown.
+    # A fallback path is the wrong place to be generous, because it runs precisely when there is no
+    # record of what this installation owns.
+    $port = 47521
+    $conf = Join-Path $app 'config.json'
+    if (Test-Path $conf) {
+        try {
+            $p = (Get-Content $conf -Raw -Encoding UTF8 | ConvertFrom-Json).port
+            if ($p) { $port = [int]$p }
+        } catch {
+            Write-Host "config.json is not valid JSON; assuming the default port $port"
+        }
+    }
+    $names = @("ClipSync TCP $port", "ClipSync pairing $($port + 1)-$($port + 8)", "ClipSync mDNS")
     Write-Host "install-state.json not found - install.ps1 was not run from this folder."
-    Write-Host "Falling back to: task 'ClipSync' + firewall rules named 'ClipSync *'."
-    $state = @{ rules = @(); task = 'ClipSync'; packages = @(); legacy = $true }
+    Write-Host "Falling back to: task 'ClipSync' + the rules it would have made: $($names -join ', ')."
+    $state = @{ rules = $names; task = 'ClipSync'; packages = @() }
 } else {
-    $state = Get-Content $stateFile -Raw | ConvertFrom-Json
+    # -Encoding UTF8 for the reason install.ps1 spells out: Windows PowerShell 5.1 falls back to
+    # Windows-1252 for a file with no BOM, and this one may have been rewritten by configurator.py,
+    # which writes plain UTF-8.
+    $state = Get-Content $stateFile -Raw -Encoding UTF8 | ConvertFrom-Json
 }
 
 # --- scheduled task ----------------------------------------------------------------------------
@@ -61,8 +91,9 @@ foreach ($p in $procs) {
 }
 
 # --- firewall rules ----------------------------------------------------------------------------
-$rules = if ($state.legacy) { Get-NetFirewallRule -DisplayName 'ClipSync *' -ErrorAction SilentlyContinue }
-         else { $state.rules | ForEach-Object { Get-NetFirewallRule -DisplayName $_ -ErrorAction SilentlyContinue } }
+# One path now: recorded or reconstructed, the names are exact either way.
+$rules = @($state.rules) | Where-Object { $_ } |
+         ForEach-Object { Get-NetFirewallRule -DisplayName $_ -ErrorAction SilentlyContinue }
 foreach ($r in $rules) {
     Remove-NetFirewallRule -DisplayName $r.DisplayName
     Write-Host "firewall: removed $($r.DisplayName)"

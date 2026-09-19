@@ -5,7 +5,7 @@
      BottomSheetDialog is one of the few components with predictive back built in, so the gesture
      animates the sheet back down without a line of animation code.
 
-     The body is empty here and filled by MainActivity, because its length is the number of peers
+     The body is empty here and filled by StatusSheet, because its length is the number of peers
      and that is not known until it opens. Scrollable, because "three addresses of which one is
      failing" is the case this exists for and it is not the shortest one. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
@@ -13,7 +13,7 @@
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
-    android:paddingBottom="16dp">
+    android:paddingBottom="@dimen/page_gutter">
 
     <!-- the spec's own affordance: it says the sheet is draggable, and it is a real component -->
     <com.google.android.material.bottomsheet.BottomSheetDragHandleView
@@ -24,7 +24,7 @@
         android:id="@+id/sheet_title"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:paddingHorizontal="24dp"
+        android:paddingHorizontal="@dimen/sheet_gutter"
         android:textAppearance="?attr/textAppearanceTitleLarge"
         android:textColor="?attr/colorOnSurface" />
 
@@ -35,9 +35,9 @@
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:paddingHorizontal="24dp"
+        android:paddingHorizontal="@dimen/sheet_gutter"
         android:paddingTop="2dp"
-        android:paddingBottom="8dp"
+        android:paddingBottom="@dimen/spacing_field"
         android:textAppearance="?attr/textAppearanceBodySmall"
         android:textColor="?attr/colorOnSurfaceVariant"
         android:text="@string/dialog_tap_to_copy" />

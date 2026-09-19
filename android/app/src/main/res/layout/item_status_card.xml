@@ -7,16 +7,18 @@
      nothing to tell the eye where one ended and the next began. A card per device with a labelled
      field per value says the same thing without the reader having to parse it.
 
-     The whole card is the touch target and copies the device's details (see MainActivity.addCard).
+     The whole card is the touch target and copies the device's details (see StatusSheet.makeCard),
+     and StatusSheet labels that click action for a screen reader, since nothing in the card's own
+     text says what pressing it would do.
 
-     The 24dp horizontal margin is so the card's edge lines up with the sheet's title and its group
-     headings rather than bulging out to the left of them. -->
+     The horizontal margin is the sheet's gutter so the card's edge lines up with the sheet's title
+     and its group headings rather than bulging out to the left of them. -->
 <com.google.android.material.card.MaterialCardView xmlns:android="http://schemas.android.com/apk/res/android"
     style="?attr/materialCardViewFilledStyle"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:layout_marginHorizontal="24dp"
-    android:layout_marginBottom="8dp"
+    android:layout_marginHorizontal="@dimen/sheet_gutter"
+    android:layout_marginBottom="@dimen/spacing_group"
     android:clickable="true"
     android:focusable="true">
 
@@ -24,7 +26,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:padding="16dp">
+        android:padding="@dimen/card_padding">
 
         <!-- The name carries the card on its own, so it is a title and not a body line. -->
         <TextView
@@ -41,7 +43,7 @@
             android:id="@+id/card_fields"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
+            android:layout_marginTop="@dimen/spacing_group"
             android:orientation="vertical"
             android:visibility="gone" />
     </LinearLayout>

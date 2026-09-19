@@ -23,9 +23,11 @@ import java.util.Set;
  * remove icon and its own error, plus the "Add address" button that grows it.
  *
  * <p>Two of these exist on the Settings page — the Direct connections list and this device's own
- * addresses (docs/p2p-plan.md §4a) — and they are one class used twice rather than two copies of the
- * same ninety lines. They accept exactly the same things and must not drift into accepting different
- * ones; that is the same reason {@link Config#checkAddresses} takes its differences as parameters.
+ * addresses, the names and IPs by which other devices reach this one, which is how a configured
+ * target is recognised as being this device rather than a peer — and they are one class used twice
+ * rather than two copies of the same ninety lines. They accept exactly the same things and must not
+ * drift into accepting different ones; that is the same reason {@link Config#checkAddresses} takes
+ * its differences as parameters.
  *
  * <p>What actually differs between the two is small and is passed in:
  * <ul>
@@ -187,7 +189,7 @@ final class AddressList {
      */
     boolean validate(Set<String> forbidden, String emptyLast, String emptyMore) {
         if (!enabled) {
-            for (TextInputLayout row : rows) show(row, null);
+            for (TextInputLayout row : rows) Ui.showError(row, null);
             return true;
         }
         boolean ok = true;
@@ -204,7 +206,7 @@ final class AddressList {
                 else if (problem == null && forbidden.contains(normal)) problem = ctx.getString(R.string.peer_is_self);
                 if (problem == null) seen.add(normal);
             }
-            ok &= show(row, problem);
+            ok &= Ui.showError(row, problem);
         }
         return ok;
     }
@@ -212,12 +214,6 @@ final class AddressList {
     /** The row that should take focus when the whole list is reported as the problem. */
     View firstRow() {
         return rows.isEmpty() ? box : rows.get(0);
-    }
-
-    private static boolean show(TextInputLayout l, String problem) {
-        l.setError(problem);
-        l.setErrorEnabled(problem != null);
-        return problem == null;
     }
 
     private static String text(TextInputLayout row) {

@@ -14,16 +14,17 @@ import java.util.Map;
 /**
  * The device that holds the key, offering it for a while.
  *
- * <p>Opens a window: a six-digit code, an ephemeral port, and an advertisement on
+ * <p>Opens a window: an eight-digit code, an ephemeral port, and an advertisement on
  * {@code _clipsync-pair._tcp} carrying the salt. Anything that can complete the handshake knows the
- * code, and the code is the whole of the authentication — so a peer that gets that far is handed the
- * PSK and the window closes. (docs/p2p-plan.md §12)
+ * code — and then <b>the user is asked, by name, whether that device may have the key</b>. The
+ * handshake proves possession of the code; the prompt is what makes a guessed code still not enough,
+ * because a device the user has never heard of shows up under a name they do not recognise.
  *
  * <p><b>The port is asked for, not chosen.</b> {@code ServerSocket(0)} cannot collide, cannot fail
  * and needs no search, and the joiner never has to guess it because it is in the SRV record it just
  * discovered. There is no firewall on the device to pre-authorise, so a predictable number would buy
- * nothing at all. (The PC would want one, if it ever acted as provider — that is what §12's bounded
- * search from {@code port + 1} is for.)
+ * nothing at all. (The PC would want one, if it ever acted as provider: there a firewall rule has to
+ * name a port in advance, which is why that side searches upwards from {@code port + 1} instead.)
  *
  * <p><b>Nothing is parsed before the channel is authenticated.</b> A caller with the wrong code gets
  * as far as exchanging plaintext nonces and no further: its first real frame fails to decrypt, which
@@ -42,6 +43,28 @@ final class PairProvider implements Closeable {
          * One code, one window, as many devices as walk up to it.
          */
         void onPaired(String device, String type);
+
+        /**
+         * A caller proved it knows the code. May it have the key?
+         *
+         * <p><b>Called on the provider's own thread and expected to block</b> until the user has
+         * answered — the accept loop serves one caller at a time anyway, so there is nothing else
+         * this thread could usefully be doing, and the alternative (hand the key over and tell the
+         * UI afterwards) is what this exists to replace. The implementation puts the question on the
+         * main thread and waits for it here.
+         *
+         * <p>The label and type are the peer's own claims, straight out of its HELLO. They are not
+         * authenticated by anything except the code, and that is precisely what makes them useful:
+         * an attacker who guessed the code still has to appear under a name the person standing
+         * there recognises.
+         *
+         * @return true to hand the key over. False — including on a timeout, see
+         *         {@link PairProvider#ASK_TIMEOUT_MS} — means no, and <b>a no is not a wrong
+         *         code</b>: it does
+         *         not count towards {@link Pairing#MAX_TRIES}. Burning the window on the user's own
+         *         refusal would turn "no, not that one" into "now read out a new code".
+         */
+        boolean onAskUser(String device, String type);
 
         /**
          * The window is over, whether or not anyone joined.
@@ -73,9 +96,11 @@ final class PairProvider implements Closeable {
      * When the window will close, by the same clock a countdown would read.
      *
      * <p>Published rather than recomputed by the UI, because the two would not agree: the key
-     * derivation is deliberately slow, so by the time a sheet hears about this object the window has
-     * already been open for a fraction of a second. A countdown started from "now" would run late
-     * and still be showing seconds after the socket had timed out.
+     * derivation is deliberately slow — under a second now that it is scrypt rather than the
+     * several seconds of PBKDF2 it was (see {@link Pairing#channelKey}), plus binding a socket and
+     * registering an advertisement. A countdown started from "now" would run a second or so behind
+     * by the end of a two-minute window, and would still be showing time left after the socket had
+     * timed out. Smaller than it was; still not zero, and the fix costs nothing.
      */
     final long closesAt;
     private Mdns.Advert advert;
@@ -83,8 +108,8 @@ final class PairProvider implements Closeable {
     private int failures;
 
     /**
-     * Opens the window. Blocking work — the key derivation is deliberately slow — so construct this
-     * off the main thread.
+     * Opens the window. Blocking work — the key derivation is deliberately slow, and binding and
+     * advertising are network calls — so construct this off the main thread.
      *
      * @param pskHex the key to give away, as the configuration stores it
      */
@@ -95,9 +120,11 @@ final class PairProvider implements Closeable {
         this.listener = listener;
         this.code = Pairing.newCode();
         byte[] salt = Pairing.newSalt();
-        // Once per window, not once per connection: 200 000 PBKDF2 rounds is the point of the
-        // exercise, and paying it per caller would let anyone on the network cost this device a
-        // tenth of a second by opening a socket.
+        // Once per window, not once per connection: being slow is the point of the exercise (see
+        // Pairing.SCRYPT_N), so paying it per caller would let anyone on the network cost this
+        // device up to a second and 16 MiB just by opening a socket — and cost it on the one thread
+        // that serves everybody, since callers are handled serially. Cheaper than the four seconds
+        // of PBKDF2 this used to be, and still not something to hand out for free.
         this.key = Pairing.channelKey(code, salt);
 
         socket = new ServerSocket();
@@ -106,7 +133,7 @@ final class PairProvider implements Closeable {
 
         advert = Mdns.advertise(ctx, Pairing.SERVICE_TYPE, Node.name(), socket.getLocalPort(),
                 Map.of(Pairing.TXT_VERSION, String.valueOf(Connection.PROTOCOL_VERSION),
-                        Pairing.TXT_SALT, Pairing.hex(salt)));
+                        Pairing.TXT_SALT, Crypto.toHex(salt)));
 
         // Stamped here, immediately before the accept loop starts counting: everything above this
         // line has already spent some of the window.
@@ -141,7 +168,8 @@ final class PairProvider implements Closeable {
                 // Serially, one caller at a time. Pairing is a thing a person does with devices in
                 // front of them, so there is no concurrency to serve — and refusing to spawn a
                 // thread per connection is what stops a flood from costing anything but a queue.
-                if (serve(s)) {
+                Outcome o = serve(s);
+                if (o == Outcome.PAIRED) {
                     paired++;
                     // A success does NOT end the window: the next device in the pile wants the same
                     // key, and the same code is still on screen. It does clear the strikes, because
@@ -150,6 +178,11 @@ final class PairProvider implements Closeable {
                     failures = 0;
                     continue;
                 }
+                // A refusal is not a strike. The caller knew the code — that is why the user was
+                // asked at all — so counting it would let a mis-tap on "No" burn a window the user
+                // is still standing in front of, and would let a device the user keeps declining
+                // close the window on the devices queued behind it.
+                if (o == Outcome.DECLINED) continue;
                 if (++failures >= Pairing.MAX_TRIES) {
                     burned = true;
                     break;
@@ -168,18 +201,40 @@ final class PairProvider implements Closeable {
         }
     }
 
-    /** @return true when the key was handed over */
-    private boolean serve(Socket s) {
+    /** How one caller ended, and the three endings are three different things to do next. */
+    private enum Outcome {
+        /** The key was handed over. */
+        PAIRED,
+        /** The user said no, or did not answer. Costs the caller nothing but its connection. */
+        DECLINED,
+        /** Wrong code, wrong protocol, or a dropped connection: one of {@link Pairing#MAX_TRIES}. */
+        FAILED
+    }
+
+    private Outcome serve(Socket s) {
         Connection c = null;
         try {
             c = Connection.pairAccept(s, key);
-            JSONObject hello = c.readHello();
-            if (!"pair".equals(hello.optString("role"))) throw new IllegalStateException("not a pairing client");
+            Hello hello = c.readHello();
+            if (!Hello.ROLE_PAIR.equals(hello.role)) throw new IllegalStateException("not a pairing client");
             // readHello raises the timeout to the session one — ninety seconds, which is right for a
             // peer that will be quiet between heartbeats and wrong for this, where callers are served
             // one at a time and a silent one is standing in front of the person actually pairing.
             c.setSoTimeout(HANDSHAKE_MS);
             if (c.recv().type != Connection.T_PAIR_ASK) throw new IllegalStateException("expected PAIR_ASK");
+
+            // Between the ask and the answer, which is the only place it can go: before PAIR_ASK
+            // there is nothing to show the user but "something connected", and after PAIR_KEY the
+            // key has already left the device. Blocking here is fine — callers are served serially,
+            // so there is no second one being kept waiting that was not already waiting.
+            //
+            // The socket read timeout is untouched on purpose: it is a per-read timeout, and no read
+            // is in flight while we are asking. The window's own deadline is what bounds this, and
+            // the listener's own timeout bounds it sooner.
+            if (!listener.onAskUser(c.peerLabel, c.peerType)) {
+                Logger.i("pairing: the user declined " + c.peerLabel + " (" + c.peerType + ")");
+                return Outcome.DECLINED;
+            }
 
             c.sendJson(Connection.T_PAIR_KEY, new JSONObject()
                     .put("psk", pskHex)
@@ -188,13 +243,15 @@ final class PairProvider implements Closeable {
                     .put("type", Node.type(ctx)));
             Logger.i("pairing: key given to " + c.peerLabel + " (" + c.peerType + ")");
             listener.onPaired(c.peerLabel, c.peerType);
-            return true;
+            return Outcome.PAIRED;
         } catch (Exception e) {
             // Every failure is counted, including the ones that are not guesses — a dropped
             // connection looks exactly like a wrong code from here, and erring towards closing the
             // window early is the safe direction when the thing being guarded is the key itself.
+            // (A refusal is the one ending that is NOT counted, and it returns above rather than
+            // throwing, precisely so it cannot be swept in here.)
             Logger.i("pairing: attempt " + (failures + 1) + " failed: " + e);
-            return false;
+            return Outcome.FAILED;
         } finally {
             if (c != null) c.close();
             else try { s.close(); } catch (Exception ignored) { }
@@ -206,6 +263,17 @@ final class PairProvider implements Closeable {
         advert = null;
         if (a != null) a.close();
         try { socket.close(); } catch (Exception ignored) { }
+        // The channel key dies with the window. It is the code's only stretched form, so a heap
+        // dump taken minutes later would otherwise still contain the thing that authenticates
+        // handing over the PSK. Safe to do here and only here: the socket is closed above, so no
+        // further caller can be served, and a Connection derives its per-direction keys from this
+        // array once, at construction, into arrays of its own. (A pairing Connection does keep the
+        // array as its `matchedSecret`, but nothing reads that on a pairing channel — it exists for
+        // the key-rotation logic on ordinary links — and every such connection is closed by now.)
+        //
+        // Idempotent on purpose — shut() is reached both from close() and from the accept loop's
+        // finally, and zeroing an already-zeroed array costs nothing.
+        java.util.Arrays.fill(key, (byte) 0);
     }
 
     /** Give up on the window early — the user closed the sheet, or turned discovery off. */
@@ -223,4 +291,27 @@ final class PairProvider implements Closeable {
      * waste a worker, it is in front of the person actually trying to pair.
      */
     private static final int HANDSHAKE_MS = 10_000;
+
+    /**
+     * How long {@link Listener#onAskUser} may take before the answer is read as "no".
+     *
+     * <p>Enforced by the implementation rather than here, because the call is a blocking one and
+     * there is no safe way to abandon it from this side. Twenty seconds: long enough to look up from
+     * the phone, read a device name and decide, short enough that a prompt nobody is in the room for
+     * does not hold the window — and the failure direction is refusal, which costs the caller
+     * nothing but another connection.
+     *
+     * <p><b>It does not have to cover the joiner's key derivation</b>, and that is worth writing down
+     * because the two look as though they might overlap. They cannot, and the reason is structural
+     * rather than arithmetic: the joiner derives its channel key <em>before</em> it opens a socket
+     * ({@link PairJoiner#join} derives, then dials), so by the time this question is asked the slow
+     * part of the other end is already paid for. That was the argument when the derivation was four
+     * seconds and it is the same argument now that scrypt has made it half of one — the separation
+     * is what makes this timeout safe, not the size of the number on the other side of it. What this
+     * timeout is spent against is one
+     * {@link #HANDSHAKE_MS}-bounded read plus a person reading a dialog. The joiner's own wait is
+     * the mirror image: it must be at least this long, because after PAIR_ASK it is waiting on a
+     * human at this end.
+     */
+    static final long ASK_TIMEOUT_MS = 20_000;
 }

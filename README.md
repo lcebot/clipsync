@@ -7,9 +7,9 @@ Copy & paste anywhere with text, images and files fully supported.
 
 ## What it does
 
-- Devices connect to your PC directly without a server in the middle. Every device connects to the PC, and the PC relays to all the others.
+- Your devices connect to each other directly, with no server in the middle and no hub to route through. Everyone dials everyone they can see and everyone listens, so a phone and a tablet on the same Wi-Fi talk to each other whether or not the PC is switched on.
 - ClipSync works like a small-file transfer tool too. It features a robust design that supports multithreaded transfers, resume-from-breakpoint functionality and cache reuse, enabling the easy & rapid transfer of files between devices.
-- When on the same LAN, devices can also find the PC by mDNS, with no DNS setup at all. With a DDNS name pointing at your PC over IPv6, the phone can also reach it from mobile data as well.
+- On the same LAN, devices find each other by mDNS with no DNS setup at all. With a DDNS name pointing at your PC over IPv6, a phone reaches it from mobile data too. When several devices on one network are offered the same file, only one of them downloads it over the expensive link and passes it to the rest.
 - With root privileges, sync process is exempted from the system freezer and is restarted if the system kills it. Also usable without root in one direction. See below.
 - Messages are encrypted with a pre-shared key. Nothing is readable in transit.
 
@@ -68,7 +68,8 @@ The release contains two files:
 ## Setup
 
 You do **not** need to make a key by hand. One device makes it and the rest take it over the network;
-the six-digit code shown on the first device is what authorises the handover.
+the eight-digit code shown on the first device opens the channel, and the device holding the key asks
+you to confirm before it hands it over.
 
 ### 1. Windows
 
@@ -89,7 +90,7 @@ In the settings window, either:
 - **Generate random PSK key**, if this is your first device — then **Share this key…** when you set
   up the next one; or
 - **Pair with a device…**, if a phone is already set up: tap **Pair new devices** there, and type the
-  six digits it shows.
+  eight digits it shows.
 
 If your devices will reach this PC at an address, turn on **Direct connections** and add it — a DDNS
 name, a static address, whatever applies. For a LAN-only setup there is nothing to add: **Local

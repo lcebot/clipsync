@@ -1,7 +1,6 @@
 package io.github.lcebot.clipsync;
 
 import android.content.Context;
-import android.os.Build;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -30,13 +29,14 @@ public final class Transfer {
     private final Context ctx;
     private final Config cfg;
     /**
-     * The control connection this transfer belongs to.
+     * Where this transfer's bytes are going, and how to reach that peer again.
      *
-     * <p>Readable, because with several links the service has to tell a transfer's own peer apart
-     * from the others: a link closing must abort only what it was carrying, and an ABORT must go to
-     * the peer that is sending or receiving rather than to whichever one the caller had to hand.
+     * <p>It used to be the whole control {@link Connection}. {@link PeerRoute} is the three things
+     * anything here turned out to need — open a data connection, say one thing out of band, and
+     * answer "is this the transfer that link was carrying?" — and nothing else, so a transfer can no
+     * longer reach past its own job into a peer session.
      */
-    final Connection control;
+    private final PeerRoute route;
     private final List<int[]> ranges;
     private final Done done;
     private final AtomicBoolean aborted = new AtomicBoolean(false);
@@ -45,11 +45,11 @@ public final class Transfer {
     private final long t0 = System.currentTimeMillis();
     private volatile String failure;
 
-    private Transfer(Context ctx, Config cfg, Connection control, String sha, boolean upload, Files.Ref ref,
+    private Transfer(Context ctx, Config cfg, PeerRoute route, String sha, boolean upload, Files.Ref ref,
                      Files.Partial partial, List<int[]> ranges, Done done) {
         this.ctx = ctx;
         this.cfg = cfg;
-        this.control = control;
+        this.route = route;
         this.sha256 = sha;
         this.upload = upload;
         this.ref = ref;
@@ -58,12 +58,37 @@ public final class Transfer {
         this.done = done;
     }
 
-    public static Transfer upload(Context ctx, Config cfg, Connection control, Files.Ref ref, List<int[]> ranges, Done done) {
-        return new Transfer(ctx, cfg, control, ref.sha256, true, ref, null, ranges, done);
+    /** Which peer this transfer is with: the caller's handle for matching it and for aborting it. */
+    PeerRoute route() {
+        return route;
     }
 
-    public static Transfer download(Context ctx, Config cfg, Connection control, Files.Partial p, Done done) {
-        return new Transfer(ctx, cfg, control, p.sha256, false, null, p, p.missing(), done);
+    public static Transfer upload(Context ctx, Config cfg, PeerRoute route, Files.Ref ref, List<int[]> ranges, Done done) {
+        return new Transfer(ctx, cfg, route, ref.sha256, true, ref, null, ranges, done);
+    }
+
+    public static Transfer download(Context ctx, Config cfg, PeerRoute route, Files.Partial p, Done done) {
+        return new Transfer(ctx, cfg, route, p.sha256, false, null, p, p.missing(), done);
+    }
+
+    /**
+     * Called once, on whichever worker writes the first chunk of a download.
+     *
+     * <p>It exists for the relay: a node that is forwarding a file offers it to its waiters as soon
+     * as the first chunk lands, so they pull while it is still receiving rather than after. That was
+     * already true when a peer <em>pushed</em> at us, because the service does that write itself and
+     * can see it; when this end drives the download the write happens in here, out of the service's
+     * sight, and the relay silently degraded to store-and-forward — doubling the end-to-end time for
+     * every file that crossed an Android relay, with no way to tell from either log.
+     *
+     * <p>A bare Runnable rather than a handle on the service's state, because the only thing worth
+     * reporting up is that the event happened.
+     */
+    private volatile Runnable firstChunk;
+
+    public Transfer onFirstChunk(Runnable r) {
+        this.firstChunk = r;
+        return this;
     }
 
     /** Chunk indexes named by {@code ranges}, dealt round-robin into at most {@code cfg.threads} stripes. */
@@ -109,7 +134,10 @@ public final class Transfer {
     private void worker(List<Integer> mine) {
         Connection c = null;
         try {
-            c = Connection.data(cfg, control, sha256, Build.MODEL);
+            // Node.name(), not Build.MODEL: the same value today, but the name this device shows a
+            // peer is Node's answer to give, and a second reader of the system property is a second
+            // place to change when it stops being the property.
+            c = route.data(cfg, sha256, Node.name());
             synchronized (conns) { conns.add(c); }
             if (aborted.get()) return;
             if (upload) push(c, mine); else pull(c, mine);
@@ -143,22 +171,48 @@ public final class Transfer {
         JSONArray rs = new JSONArray();
         for (int idx : mine) rs.put(new JSONArray().put(idx).put(idx + 1));
         c.sendJson(Connection.T_PULL, new JSONObject().put("sha256", sha256).put("ranges", rs));
-        // read until the PC's END (not just until our chunks are in): closing earlier makes the
-        // PC's final send fail with a reset and log a spurious "connection forcibly closed"
-        while (true) {
-            if (aborted.get()) return;
-            Connection.Frame f = c.recv();
-            if (f.type == Connection.T_CHUNK) {
-                int idx = ((f.payload[0] & 0xff) << 24) | ((f.payload[1] & 0xff) << 16) | ((f.payload[2] & 0xff) << 8) | (f.payload[3] & 0xff);
-                partial.write(idx, f.payload, 4, f.payload.length - 4);
-            } else if (f.type == Connection.T_END) {
-                return;
-            } else if (f.type == Connection.T_ABORT) {
-                aborted.set(true);
-                Logger.i("PC aborted the transfer: " + new JSONObject(new String(f.payload)).optString("reason"));
-                return;
+        // read until the peer's END (not just until our chunks are in): closing earlier makes its
+        // final send fail with a reset and log a spurious "connection forcibly closed"
+        Frames.dataLoop(c, new Frames.Data() {
+            /** {@link Transfer#abort()} closes the sockets, but a worker between frames stops here. */
+            @Override public boolean stopped() {
+                return aborted.get();
             }
-        }
+
+            @Override public void chunk(int idx, byte[] payload, int off, int len) throws Exception {
+                // Asked before the write, so "was there anything here" is asked of the state the
+                // write is about to change. Several workers can be here at once and all of them can
+                // see an empty file, so the question and the flag are one operation on the Partial's
+                // own monitor (claimFirstChunk) rather than a read here and a compareAndSet on a
+                // field of this Transfer: the push side has the same rule to enforce and no Transfer
+                // to hang it on, and two implementations of one rule is how the push side ended up
+                // with none.
+                boolean wasFirst = partial.claimFirstChunk();
+                partial.write(idx, payload, off, len);
+                Runnable first = firstChunk;
+                if (wasFirst && first != null) first.run();
+            }
+
+            /**
+             * The peer gave up. Recorded as well as logged: this worker is one of several, and the
+             * flag is what stops the others asking for the rest of their stripes.
+             */
+            @Override public void aborted(Connection.Frame f) {
+                aborted.set(true);
+                String why;
+                try {
+                    why = Frames.json(f).optString("reason");
+                } catch (Exception e) {
+                    why = "no reason given";
+                }
+                Logger.i("peer aborted the transfer: " + why);
+            }
+
+            // PING is not answered here, and cannot arrive: this end opened the stream and is
+            // pulling on it, so the peer is serving chunks and never has a reason to poll a socket
+            // it is actively writing to. A stream the PEER opened can sit idle and does answer —
+            // see FileExchange.serveData.
+        });
     }
 
     private void finish() {
