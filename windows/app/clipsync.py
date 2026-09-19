@@ -14,11 +14,13 @@ Protocol (must match the Android side, see Connection.java / SyncService.java):
   nonce     : 12B = 4 zero bytes || u64 big-endian counter, per direction, starts at 0
   frame     : u32 BE len || ChaCha20-Poly1305(type(1B) || payload)
   types     : 1 HELLO   2 BYE {reason}   3 PING   4 PONG   5 KEYS {psk,since,next}
-              6 CLIP {seq,mime,sha256,data}
-              7 OFFER {seq,name,mime,size,sha256}   8 WANT {sha256,ranges}   9 HAVE {sha256}
-             10 SKIP {sha256,reason}  11 CHUNK u32 index||bytes  12 PULL {sha256,ranges}
+              6 CLIP {ts,from,to,forwarded,mime,sha256,data}
+              7 OFFER {seq,name,mime,size,sha256,from,to}  8 WANT {sha256,ranges}
+              9 HAVE {sha256}  10 SKIP {sha256,reason}
+             11 CHUNK u32 index||bytes  12 PULL {sha256,ranges}
              13 END {sha256}          14 ABORT {sha256,reason}
              15 PAIR_ASK  16 PAIR_KEY {psk,port,device,type}
+             17 RELAY_ASK {sha256}  18 RELAY_OK {sha256}  19 RELAY_NO {sha256,reason}
 
 Text goes as CLIP (JSON, <= max_bytes).  Files: OFFER -> HAVE | SKIP | WANT {ranges of missing
 chunks}; the bytes then move over up to N parallel data connections the phone opens (HELLO
@@ -89,6 +91,30 @@ from clipsync_proto import *   # noqa: E402,F403
 MAP_SAVE_EVERY = 8         # persist the received-chunk bitmap every N chunks
 WANT_RETRIES = 3           # how often the receiver re-asks for missing chunks in one session
 LOG_MAX_BYTES = 128 * 1024  # roll clipsync.log over at this size; see RotatingLog
+RELAY_ASK_TIMEOUT_S = 30   # timeout for a single step of the relay fallback walk (§7)
+
+
+def priority_key(persistent: bool, node_type: str, battery: str) -> tuple:
+    """Comparable priority tuple for relay election: lower is higher priority (§3)."""
+    type_rank = {"pc": 2, "tablet": 1}.get(node_type, 0)
+    batt_rank = {"mains": 3, "high": 2, "medium": 1}.get(battery, 0)
+    return (0 if persistent else 1, -type_rank, -batt_rank)
+
+
+class RelayWait:
+    """State for a file we are waiting on a relay to provide (§7)."""
+    __slots__ = ("sha256", "offer_hdr", "origin", "candidates", "next_idx",
+                 "ask_time", "failed", "retried")
+
+    def __init__(self, sha: str, hdr: dict, origin, candidates: list):
+        self.sha256 = sha
+        self.offer_hdr = hdr
+        self.origin = origin           # SecureChannel of the originator
+        self.candidates = candidates   # priority-sorted node ids
+        self.next_idx = 0
+        self.ask_time = 0.0            # monotonic time when RELAY_ASK was sent
+        self.failed = set()
+        self.retried = False
 
 
 class RotatingLog(logging.FileHandler):
@@ -195,6 +221,7 @@ class Partial:
 
     def __init__(self, folder: str, hdr: dict = None, part: str = None):
         self.lock = threading.Lock()
+        self.cond = threading.Condition(self.lock)   # relay serve threads wait on this (§7)
         self.have = set()
         self.finalized = False
         self.origin = None                    # control channel of the device sending it
@@ -270,6 +297,7 @@ class Partial:
             if idx in self.have:
                 return
             self.have.add(idx)
+            self.cond.notify_all()     # wake relay serve threads waiting for this chunk (§7)
             self.unsaved += 1
             if self.unsaved >= MAP_SAVE_EVERY:
                 self.save_map()
@@ -306,6 +334,26 @@ class Partial:
     def discard(self):
         with self.lock:
             self.discard_locked()
+
+    def read_chunk(self, idx: int) -> bytes:
+        """Read chunk `idx` from the .part file (for streaming relay, §7).
+
+        A chunk in `self.have` has been fully written — chunks occupy disjoint ranges, so reading
+        from a separate file handle while another connection is writing a *different* chunk is safe.
+        After finalize() the file has been renamed; use `self.final` in that case.
+        """
+        with self.lock:
+            if idx not in self.have:
+                raise ValueError(f"chunk {idx} not received yet")
+            path = self.final if self.finalized else self.part
+        pos = idx * CHUNK
+        want = min(CHUNK, self.size - pos)
+        with open(path, "rb") as f:
+            f.seek(pos)
+            data = f.read(want)
+        if len(data) != want:
+            raise ValueError(f"short read at chunk {idx}")
+        return data
 
     def __str__(self):
         with self.lock:
@@ -817,12 +865,18 @@ class SyncState:
         # is what makes a duplicate visible: two names can be two names for one machine, and the
         # only moment that becomes knowable is when a second handshake returns an id already held.
         self.by_peer: dict[str, SecureChannel] = {}
-        self.seq = 0                 # server-side sequence
-        self.latest = None           # (Item, seq) of the latest content, for catch-up
+        self.clip_ts = 0             # wall-clock ms of the current local clip (§6)
+        self.clip_from = node_id()   # node id of whoever produced the current clip
+        self.clip_sha = None         # SHA-256 hex of the current clip content
+        self.latest_item = None      # the Item, for catch-up and relay
+        self.seen_set = {}           # last 64 (ts:from -> ts), for dedup across any topology
         self.last_remote_hash = None # hash of content we last wrote into the local clipboard
         self.last_sent_hash = None
         self.last_set_path = None    # file we last put on the clipboard (cheap loop check)
         self.aborted = {}            # sha -> time of the last ABORT (pull loops check it)
+        # Relay coordination (§7).
+        self.relay_waits = {}        # sha -> RelayWait
+        self.relay_accepted = {}     # sha -> set of SecureChannel (waiters we accepted)
         # Key rotation state, mirroring SyncService.java's cfg.keys / cfg.rotate.
         self.schedule = cfg.keys
         self.rotate = cfg.rotate
@@ -896,6 +950,17 @@ class SyncState:
             self.clients.discard(ch)
             if ch.node_id and self.by_peer.get(ch.node_id) is ch:
                 del self.by_peer[ch.node_id]
+        # Relay cleanup (§7): if a relay we were waiting on disconnected, walk to next candidate.
+        if ch.node_id:
+            for rw in list(self.relay_waits.values()):
+                if ch.node_id == self._current_relay_for(rw):
+                    rw.failed.add(ch.node_id)
+                    rw.next_idx += 1
+                    self._ask_relay(rw)
+            # Remove this channel from relay-accepted waiter sets.
+            with self.lock:
+                for waiters in self.relay_accepted.values():
+                    waiters.discard(ch)
 
     def holds(self, node: str) -> bool:
         """Is some link to that node still up?  Dial-time duplicate suppression asks this."""
@@ -937,30 +1002,55 @@ class SyncState:
             self.aborted.pop(sha, None)
 
     # -- frames --
-    @staticmethod
-    def header(item: Item, seq: int) -> dict:
-        return {"seq": seq, "name": item.name, "mime": item.mime, "size": item.size, "sha256": item.sha256}
+    def header(self, item: Item) -> dict:
+        with self.lock:
+            peer_ids = [c.node_id for c in self.clients if c.node_id]
+        return {"seq": int(time.time() * 1000), "name": item.name, "mime": item.mime,
+                "size": item.size, "sha256": item.sha256,
+                "from": node_id(), "to": peer_ids}
 
-    def announce(self, item: Item, seq: int, targets):
-        """Push text, or offer a file (to the clients whose link allows its size)."""
+    def announce(self, item: Item, targets, *, ts=0, from_id="", forwarded=False, extra_to=None):
+        """Push text (with version fields §6), or offer a file."""
+        all_ids = set(c.node_id for c in targets if c.node_id)
+        if extra_to:
+            all_ids |= extra_to
         for c in targets:
             try:
                 if item.kind == "text":
-                    c.send_json(T_CLIP, {"seq": seq, "mime": "text/plain", "sha256": item.sha256, "data": item.text})
+                    c.send_json(T_CLIP, {
+                        "ts": ts or self.clip_ts,
+                        "from": from_id or self.clip_from,
+                        "to": list(all_ids),
+                        "forwarded": forwarded,
+                        "mime": "text/plain",
+                        "sha256": item.sha256,
+                        "data": item.text,
+                    })
                 elif item.size > c.limit:
                     log.info("not offering %s to %s: %d bytes > %d (%s link)", item.name, c.device, item.size,
                              c.limit, "lan" if c.lan else "internet")
                 else:
-                    c.send_json(T_OFFER, self.header(item, seq))
+                    c.send_json(T_OFFER, self.header(item))
                     log.info("offered %s to %s", item.name, c.device)
             except Exception as e:
                 log.warning("send to %s failed: %s", c.device, e)
 
-    def catch_up(self, ch: SecureChannel, last_seq: int):
+    def catch_up(self, ch: SecureChannel, peer_clip_ts: int, peer_clip_sha: str):
+        """Send our clip if it is newer than the peer's (§6 version-based catch-up)."""
         with self.lock:
-            latest = self.latest
-        if latest and latest[1] > last_seq:
-            self.announce(latest[0], latest[1], [ch])
+            item = self.latest_item
+            ts, from_id, sha = self.clip_ts, self.clip_from, self.clip_sha
+        if item is None or item.kind != "text":
+            return
+        # Same content — nothing to send.
+        if peer_clip_sha and peer_clip_sha == sha:
+            return
+        # Version comparison: (ts, from) lexicographic.  HELLO does not carry clip_from,
+        # so ch.node_id is an approximation — wrong when the peer's clip was originated by a
+        # third node.  The sha check above handles the common case; this guard is a tiebreak.
+        if peer_clip_ts > 0 and (ts, from_id) <= (peer_clip_ts, ch.node_id or ""):
+            return
+        self.announce(item, [ch])
 
     # -- local clipboard changed --
     def on_local_change(self, item: Item):
@@ -972,11 +1062,13 @@ class SyncState:
         with self.lock:
             if h == self.last_remote_hash or h == self.last_sent_hash:
                 return
-            previous = self.latest[0] if self.latest else None
-            self.seq += 1
-            seq = self.seq
+            previous = self.latest_item
             self.last_sent_hash = h
-            self.latest = (item, seq)
+            self.latest_item = item
+            if item.kind == "text":
+                self.clip_ts = int(time.time() * 1000)
+                self.clip_from = node_id()
+                self.clip_sha = h
             targets = list(self.clients)
         # a newer clip supersedes whatever is still in flight, in either direction
         if previous is not None and previous.kind == "file" and previous.sha256 != h:
@@ -987,8 +1079,8 @@ class SyncState:
         if item.kind == "file":
             self.cache.put(h, item.path)
             self.clear_abort(h)
-        log.info("local -> remote (%s, seq %d)", item, seq)
-        self.announce(item, seq, targets)
+        log.info("local -> remote (%s)", item)
+        self.announce(item, targets)
 
     # -- a peer offers a file --
     def on_offer(self, hdr: dict, origin: SecureChannel):
@@ -1012,6 +1104,34 @@ class SyncState:
             log.info("offer from %s: %s (%d bytes) -> skip, over the %s limit", origin.device, name, size,
                      "lan" if origin.lan else "internet")
             return
+
+        # --- Relay election (§7) ---
+        rw = self.relay_waits.get(sha)
+        if rw is not None and origin.node_id and origin.node_id == self._current_relay_for(rw):
+            # This OFFER is from the relay we asked — skip election, WANT directly.
+            self.relay_waits.pop(sha, None)
+            log.info("offer from relay %s: %s -> want directly", short_id(origin.node_id), name)
+        else:
+            offer_from = str(hdr.get("from", ""))
+            to_list = hdr.get("to") or []
+            if to_list and offer_from:
+                recipients = set(str(x) for x in to_list)
+                best = self._elect_relay(offer_from, origin, recipients)
+                if best and best != node_id() and best != offer_from:
+                    candidates = self._build_candidate_list(offer_from, origin, recipients)
+                    wait = RelayWait(sha, hdr, origin, candidates)
+                    self.relay_waits[sha] = wait
+                    self._ask_relay(wait)
+                    return
+
+        # Normal WANT path.
+        self._want_from_peer(hdr, origin)
+
+    def _want_from_peer(self, hdr: dict, origin: SecureChannel):
+        """The common WANT path: prepare a Partial, send WANT (extracted for relay fallback)."""
+        sha = str(hdr.get("sha256", ""))
+        name = safe_name(str(hdr.get("name", "clip")))
+        size = int(hdr.get("size", -1))
         # a new offer from this device supersedes anything it was still sending us
         for other, pt in list(self.cache.partials.items()):
             if other != sha and pt.origin is origin and pt.streams > 0:
@@ -1025,10 +1145,6 @@ class SyncState:
         pt.retries = 0
         missing = pt.missing()
         if not missing:
-            # Already complete on disk from an earlier attempt. An empty range list means
-            # *everything* to the peer, so sending one would re-stream the whole file to be
-            # discarded chunk by chunk — and the one case this happens in is a resume, which is
-            # exactly the case where the file is large.
             self._finalize(pt, origin)
             origin.send_json(T_HAVE, {"sha256": sha})
             log.info("offer from %s: %s -> already complete on disk", origin.device, name)
@@ -1091,6 +1207,8 @@ class SyncState:
         self.cache.put(pt.sha, path)
         log.info("saved %s", path)
         self._apply_remote(Item.from_path(path, pt.mime, pt.sha), pt.origin or ch)
+        # Relay (§7): offer to every waiter that asked us to relay this file.
+        self.offer_to_waiters(pt.sha)
 
     def _reask(self, pt: Partial):
         with pt.lock:
@@ -1114,6 +1232,12 @@ class SyncState:
 
     # -- data connection: phone pulls chunks of a file we have --
     def serve_pull(self, sha: str, ranges, ch: SecureChannel):
+        # Streaming relay (§7): if a Partial exists and the file is not yet in the cache,
+        # serve chunks as they become available rather than waiting for the complete file.
+        pt = self.cache.partials.get(sha)
+        if pt is not None and not pt.complete() and sha in self.relay_accepted:
+            self.serve_relay_pull(sha, ranges, ch, pt)
+            return
         path = self.cache.get(sha)
         if path is None:
             ch.send_json(T_ABORT, {"sha256": sha, "reason": "not available any more"})
@@ -1135,44 +1259,323 @@ class SyncState:
         log.info("streamed %d chunk(s) of %s to %s", sent, os.path.basename(path), ch.device)
 
     # -- a peer sent text --
-    def on_remote_text(self, item: Item, origin: SecureChannel):
-        self._apply_remote(item, origin)
+    def on_remote_text(self, item: Item, origin: SecureChannel, msg: dict):
+        """Handle a text CLIP from a peer, with version comparison and forwarding (§6)."""
+        h = item.sha256
+        remote_ts = int(msg.get("ts", 0))
+        remote_from = str(msg.get("from", ""))
+        forwarded = bool(msg.get("forwarded", False))
+
+        # Normalise ts into local clock domain.
+        offset = getattr(origin, "clock_offset", 0)
+        norm_ts = remote_ts - offset
+
+        # Seen-set check.
+        seen_key = f"{remote_ts}:{remote_from}"
+        with self.lock:
+            if seen_key in self.seen_set:
+                return
+            self.seen_set[seen_key] = remote_ts
+            # Bound to 64 entries.
+            while len(self.seen_set) > 64:
+                self.seen_set.pop(next(iter(self.seen_set)))
+
+            if h == self.last_sent_hash or h == self.last_remote_hash:
+                return
+            # Version comparison: accept only if strictly newer.
+            if self.clip_ts > 0 and (norm_ts, remote_from) <= (self.clip_ts, self.clip_from):
+                return
+            self.last_remote_hash = h
+            self.clip_ts = norm_ts
+            self.clip_from = remote_from
+            self.clip_sha = h
+            self.latest_item = item
+            others = [c for c in self.clients if c is not origin]
+
+        log.info("remote(%s) -> local (%s%s)", origin.device, item,
+                 ", forwarded" if forwarded else "")
+        if not clipboard_set_text(item.text):
+            log.warning("failed to set clipboard")
+
+        # Forwarding (§6): relay to peers not in the recipient list, up to 1 hop.
+        if not forwarded and others:
+            to_set = set(msg.get("to") or [])
+            to_set.add(remote_from)
+            to_set.add(node_id())
+            forward_targets = [c for c in others if c.node_id and c.node_id not in to_set]
+            if forward_targets:
+                self.announce(item, forward_targets, ts=remote_ts, from_id=remote_from,
+                              forwarded=True, extra_to=to_set)
+                for c in forward_targets:
+                    log.info("forwarded clip to %s", c.device)
 
     def _apply_remote(self, item: Item, origin: SecureChannel):
+        """Apply a remote file to the local clipboard and relay as OFFER."""
         h = item.sha256
         with self.lock:
             if h == self.last_sent_hash or h == self.last_remote_hash:
                 return
             self.last_remote_hash = h
-            self.seq += 1
-            seq = self.seq
-            self.latest = (item, seq)
+            self.latest_item = item
             others = [c for c in self.clients if c is not origin]
-        log.info("remote(%s) -> local (%s, seq %d)", origin.device, item, seq)
-        if item.kind == "text":
-            if not clipboard_set_text(item.text):
-                log.warning("failed to set clipboard")
+        log.info("remote(%s) -> local (%s)", origin.device, item)
+        self.last_set_path = item.path
+        if not clipboard_set_file(item.path, item.mime):
+            log.warning("failed to set clipboard")
+        self.cache.prune(item.path)
+        # relay file as OFFER to every other connected device
+        self.announce(item, others)
+
+    # -- relay coordination (§7) --
+    def _build_candidate_list(self, offer_from: str, origin_ch: SecureChannel, recipients: set) -> list:
+        """Compute the candidate list for relay election, sorted by priority (best first)."""
+        cands = []
+        # Me (PC: always persistent, type pc, battery mains).
+        cands.append((node_id(), priority_key(True, "pc", "mains")))
+        # Origin, if on LAN.
+        if origin_ch.lan:
+            cands.append((offer_from, priority_key(origin_ch.persistent, origin_ch.node_type,
+                                                    origin_ch.battery)))
+        # LAN peers that are in the recipient list.
+        with self.lock:
+            peers = [(pid, ch) for pid, ch in self.by_peer.items()
+                     if pid != offer_from and ch.lan and pid in recipients]
+        for pid, ch in peers:
+            cands.append((pid, priority_key(ch.persistent, ch.node_type, ch.battery)))
+        cands.sort(key=lambda x: (x[1], x[0]))
+        return [c[0] for c in cands]
+
+    def _elect_relay(self, offer_from: str, origin_ch: SecureChannel, recipients: set):
+        """Return the best relay candidate id, or None."""
+        ids = self._build_candidate_list(offer_from, origin_ch, recipients)
+        return ids[0] if ids else None
+
+    def _current_relay_for(self, rw: RelayWait):
+        """Return the node id of the relay we are currently asking, or None."""
+        if rw.next_idx < len(rw.candidates):
+            cid = rw.candidates[rw.next_idx]
+            origin_id = rw.origin.node_id if rw.origin else None
+            if cid != node_id() and cid != origin_id:
+                return cid
+        return None
+
+    def _ask_relay(self, rw: RelayWait):
+        """Walk the candidate list: send RELAY_ASK to the next viable candidate, or fall back
+        to the origin when the list is exhausted."""
+        while rw.next_idx < len(rw.candidates):
+            cid = rw.candidates[rw.next_idx]
+            origin_id = rw.origin.node_id if rw.origin else None
+            if cid == node_id() or cid == origin_id:
+                break                              # reached self or origin — stop walking
+            if cid in rw.failed:
+                rw.next_idx += 1
+                continue
+            with self.lock:
+                relay_ch = self.by_peer.get(cid)
+            if relay_ch is None:
+                rw.failed.add(cid)
+                rw.next_idx += 1
+                continue
+            try:
+                relay_ch.send_json(T_RELAY_ASK, {"sha256": rw.sha256})
+                rw.ask_time = time.monotonic()
+                rw.retried = False
+                log.info("relay: asking %s to relay %s", short_id(cid), rw.sha256[:12])
+
+                def _timeout(sha=rw.sha256, rw_ref=rw, cid_ref=cid):
+                    w = self.relay_waits.get(sha)
+                    if (w is rw_ref and w.ask_time > 0
+                            and time.monotonic() - w.ask_time >= RELAY_ASK_TIMEOUT_S):
+                        log.info("relay: %s timed out for %s", short_id(cid_ref), sha[:12])
+                        rw_ref.failed.add(cid_ref)
+                        rw_ref.next_idx += 1
+                        self._ask_relay(rw_ref)
+
+                t = threading.Timer(RELAY_ASK_TIMEOUT_S + 0.5, _timeout)
+                t.daemon = True
+                t.start()
+                return
+            except Exception:
+                rw.failed.add(cid)
+                rw.next_idx += 1
+
+        # Exhausted the candidate list — WANT from origin.
+        self.relay_waits.pop(rw.sha256, None)
+        if rw.origin is None:
+            return
+        with self.lock:
+            alive = rw.origin in self.clients
+        if not alive:
+            return
+        try:
+            self._want_from_peer(rw.offer_hdr, rw.origin)
+            log.info("relay: fell back to origin for %s", rw.sha256[:12])
+        except Exception as e:
+            log.warning("relay: fallback to origin failed: %s", e)
+
+    def on_relay_ask(self, msg: dict, origin: SecureChannel):
+        """A peer asks us to relay a file.  Accept unless we are ourselves waiting for it."""
+        sha = str(msg.get("sha256", ""))
+        # Relay opt-out (§8).
+        if self.cfg.relay_opt_out:
+            origin.send_json(T_RELAY_NO, {"sha256": sha, "reason": "refused"})
+            log.info("relay: declined %s from %s (opted out)", sha[:12], origin.device)
+            return
+        # PC is on mains — no low-battery refusal.
+        # A node that is itself waiting declines with busy (caps depth at one hop).
+        if sha in self.relay_waits:
+            origin.send_json(T_RELAY_NO, {"sha256": sha, "reason": "busy"})
+            log.info("relay: declined %s from %s (busy)", sha[:12], origin.device)
+            return
+        # Accept.
+        origin.send_json(T_RELAY_OK, {"sha256": sha})
+        with self.lock:
+            self.relay_accepted.setdefault(sha, set()).add(origin)
+        log.info("relay: accepted %s for %s", sha[:12], origin.device)
+        # If we already have the file, offer immediately.
+        if self.cache.get(sha) is not None:
+            self.offer_to_waiters(sha)
+            return
+        # If a complete Partial exists, finalize and offer.
+        pt = self.cache.partials.get(sha)
+        if pt is not None and pt.complete():
+            self._finalize(pt, origin)
+            # _finalize calls offer_to_waiters
+
+    def on_relay_ok(self, msg: dict, origin: SecureChannel):
+        """Relay accepted our request — wait for its OFFER."""
+        sha = str(msg.get("sha256", ""))
+        rw = self.relay_waits.get(sha)
+        if rw is None:
+            return
+        log.info("relay: %s accepted relay for %s", short_id(origin.node_id), sha[:12])
+
+    def on_relay_no(self, msg: dict, origin: SecureChannel):
+        """Relay declined — walk to the next candidate."""
+        sha = str(msg.get("sha256", ""))
+        reason = str(msg.get("reason", ""))
+        rw = self.relay_waits.get(sha)
+        if rw is None:
+            return
+        log.info("relay: %s declined %s: %s", short_id(origin.node_id), sha[:12], reason)
+        if reason == "busy" and not rw.retried:
+            rw.retried = True
+            jitter = 0.5 + struct.unpack(">H", os.urandom(2))[0] / 65535.0
+
+            def _retry(sha_ref=sha, rw_ref=rw, pid=origin.node_id):
+                w = self.relay_waits.get(sha_ref)
+                if w is not rw_ref:
+                    return
+                with self.lock:
+                    relay_ch = self.by_peer.get(pid)
+                if relay_ch is not None:
+                    try:
+                        relay_ch.send_json(T_RELAY_ASK, {"sha256": sha_ref})
+                        rw_ref.ask_time = time.monotonic()
+                        log.info("relay: retrying %s for %s", short_id(pid), sha_ref[:12])
+                        return
+                    except Exception:
+                        pass
+                rw_ref.failed.add(pid)
+                rw_ref.next_idx += 1
+                self._ask_relay(rw_ref)
+
+            t = threading.Timer(jitter, _retry)
+            t.daemon = True
+            t.start()
         else:
-            self.last_set_path = item.path
-            if not clipboard_set_file(item.path, item.mime):
-                log.warning("failed to set clipboard")
-            self.cache.prune(item.path)
-        # relay to every other connected device (phone -> PC -> tablet); files as OFFERs
-        self.announce(item, seq, others)
+            if origin.node_id:
+                rw.failed.add(origin.node_id)
+            rw.next_idx += 1
+            self._ask_relay(rw)
+
+    def offer_to_waiters(self, sha: str):
+        """Send OFFER to every waiter that asked for this file via RELAY_ASK (§7)."""
+        with self.lock:
+            waiters = self.relay_accepted.pop(sha, None)
+        if not waiters:
+            return
+        path = self.cache.get(sha)
+        if path is None:
+            return
+        item = Item.from_path(path)
+        for ch in waiters:
+            with self.lock:
+                alive = ch in self.clients
+            if not alive:
+                continue
+            try:
+                hdr = {"seq": int(time.time() * 1000), "name": item.name, "mime": item.mime,
+                       "size": item.size, "sha256": item.sha256,
+                       "from": node_id(), "to": [ch.node_id]}
+                ch.send_json(T_OFFER, hdr)
+                log.info("relay: offered %s to waiter %s", item.name, ch.device)
+            except Exception as e:
+                log.warning("relay: offer to %s failed: %s", ch.device, e)
+
+    def early_offer_to_waiters(self, sha: str, pt: Partial):
+        """Streaming relay (§7): send OFFER to waiters on the first chunk, so they can start
+        pulling while we are still receiving.  Does NOT remove from relay_accepted — that stays
+        so serve_pull knows to use the streaming path."""
+        with self.lock:
+            waiters = list(self.relay_accepted.get(sha) or ())
+        for ch in waiters:
+            with self.lock:
+                alive = ch in self.clients
+            if not alive:
+                continue
+            try:
+                hdr = {"seq": int(time.time() * 1000), "name": pt.name, "mime": pt.mime,
+                       "size": pt.size, "sha256": pt.sha,
+                       "from": node_id(), "to": [ch.node_id]}
+                ch.send_json(T_OFFER, hdr)
+                log.info("relay: early offer %s to waiter %s (streaming)", pt.name, ch.device)
+            except Exception as e:
+                log.warning("relay: early offer to %s failed: %s", ch.device, e)
+
+    def serve_relay_pull(self, sha: str, ranges, ch: SecureChannel, pt: Partial):
+        """Streaming relay (§7): forward chunks from an in-progress Partial as they arrive.
+        Waits on the Partial's condition for each missing chunk, with a 60 s per-chunk timeout."""
+        sent = 0
+        for idx in expand(ranges):
+            if idx < 0 or idx >= pt.n:
+                continue
+            if self.is_aborted(sha):
+                ch.send_json(T_ABORT, {"sha256": sha, "reason": "aborted"})
+                return
+            deadline = time.monotonic() + 60
+            with pt.cond:
+                while idx not in pt.have:
+                    if len(pt.have) == pt.n:   # inlined complete(): we already hold pt.lock
+                        break
+                    remain = deadline - time.monotonic()
+                    if remain <= 0:
+                        log.warning("relay pull: timed out waiting for chunk %d of %s", idx, sha[:12])
+                        ch.send_json(T_ABORT, {"sha256": sha, "reason": "relay timeout"})
+                        return
+                    pt.cond.wait(min(remain, 0.5))
+            if idx not in pt.have:
+                ch.send_json(T_ABORT, {"sha256": sha, "reason": "chunk not available"})
+                return
+            data = pt.read_chunk(idx)
+            ch.send(T_CHUNK, struct.pack(">I", idx) + data)
+            sent += 1
+        ch.send_json(T_END, {"sha256": sha})
+        log.info("relay: streamed %d chunk(s) of %s to %s", sent, sha[:12], ch.device)
 
 
 def parse_clip(payload: bytes, cfg: Cfg):
     msg = json.loads(payload.decode("utf-8"))
     text = msg.get("data")
     if not isinstance(text, str) or msg.get("mime", "text/plain") != "text/plain":
-        return None
+        return None, None
     if len(text.encode("utf-8")) > cfg.max_bytes:
-        return None
+        return None, None
     if msg.get("sha256") != hashlib.sha256(text.encode("utf-8")).hexdigest():
         log.warning("hash mismatch, dropping")
-        return None
+        return None, None
     # everything past this point is LF-normalised (what Windows reads back after a CRLF write)
-    return Item("text", text=text.replace("\r\n", "\n"))
+    return Item("text", text=text.replace("\r\n", "\n")), msg
 
 
 # ----------------------------------------------------------------------------- server
@@ -1230,13 +1633,22 @@ def serve(ch: SecureChannel, cfg: Cfg, state: SyncState):
             log.info("%s said goodbye: %s", ch.device, reason)
             return reason
         if typ == T_PING:
-            ch.send(T_PONG)
+            ping = json.loads(payload.decode("utf-8")) if payload else {}
+            t1 = ping.get("t1", 0)
+            t2 = int(time.time() * 1000)
+            ch.send_json(T_PONG, {"t1": t1, "t2": t2, "t3": int(time.time() * 1000)})
+            # One-way offset estimate: peer_clock = my_clock + offset.
+            # Accurate to within RTT/2, which is enough for clip version comparison (§6).
+            # The sender (Android) gets the full NTP formula from the PONG; this end cannot
+            # because it never sees t4.
+            if t1 > 0:
+                ch.clock_offset = t1 - t2
         elif typ == T_KEYS:
             on_keys(ch, json.loads(payload.decode("utf-8")), state)
         elif typ == T_CLIP:
-            item = parse_clip(payload, cfg)
-            if item:
-                state.on_remote_text(item, ch)
+            item, msg = parse_clip(payload, cfg)
+            if item and msg:
+                state.on_remote_text(item, ch, msg)
         elif typ == T_OFFER:
             state.on_offer(json.loads(payload.decode("utf-8")), ch)
         elif typ == T_WANT:
@@ -1249,8 +1661,18 @@ def serve(ch: SecureChannel, cfg: Cfg, state: SyncState):
         elif typ == T_ABORT:
             m = json.loads(payload.decode("utf-8"))
             state.abort(str(m.get("sha256", "")), f"{ch.device}: {m.get('reason', '')}")
+        elif typ == T_RELAY_ASK:
+            state.on_relay_ask(json.loads(payload.decode("utf-8")), ch)
+        elif typ == T_RELAY_OK:
+            state.on_relay_ok(json.loads(payload.decode("utf-8")), ch)
+        elif typ == T_RELAY_NO:
+            state.on_relay_no(json.loads(payload.decode("utf-8")), ch)
         elif typ == T_PONG:
-            pass
+            t4 = int(time.time() * 1000)
+            pong = json.loads(payload.decode("utf-8")) if payload else {}
+            t1, t2, t3 = pong.get("t1", 0), pong.get("t2", 0), pong.get("t3", 0)
+            if t1 > 0 and t2 > 0 and t3 > 0:
+                ch.clock_offset = ((t2 - t1) + (t3 - t4)) // 2
         else:
             log.warning("unknown frame type %d", typ)
 
@@ -1279,11 +1701,12 @@ def client_thread(sock: socket.socket, addr, cfg: Cfg, state: SyncState):
         ch.limit = cfg.max_file_bytes_local if ch.lan else cfg.max_file_bytes
         # The accepter answers with its own declaration, so both ends know who they are talking to.
         # Before protocol 2 this was one-way and only the PC learned anything.
-        # last_seq is 0 because this end keeps no cursor into the peer's sequence space: it means
-        # "I have nothing of yours", which makes the dialler catch us up exactly as we catch up an
-        # inbound client. Symmetry here is the point — an outbound link that never received the
-        # peer's current clipboard would look like a link that works only in one direction.
-        ch.send_json(T_HELLO, {"v": PROTOCOL_VERSION, "last_seq": 0, **declaration(cfg)})
+        # clip_ts/clip_sha carry the local clip version so the peer can decide whether to catch us up.
+        with state.lock:
+            my_clip_ts, my_clip_sha = state.clip_ts, state.clip_sha
+        ch.send_json(T_HELLO, {"v": PROTOCOL_VERSION,
+                               "clip_ts": my_clip_ts, "clip_sha": my_clip_sha or "",
+                               **declaration(cfg)})
         refusal = state.register(ch)
         if refusal is not None:
             # Announced, not just dropped: the peer dialled us, and a silent close is the thing its
@@ -1295,7 +1718,7 @@ def client_thread(sock: socket.socket, addr, cfg: Cfg, state: SyncState):
                  ch.device, short_id(ch.node_id), "lan" if ch.lan else "internet",
                  ch.limit // (1024 * 1024), state.online())
         send_keys(ch, state)
-        state.catch_up(ch, int(hello.get("last_seq", 0)))
+        state.catch_up(ch, int(hello.get("clip_ts", 0)), str(hello.get("clip_sha", "")))
         serve(ch, cfg, state)
     except Exception as e:
         log.info("client %s (%s) dropped: %s", addr[0], ch.device if ch else "?", e)
@@ -1341,7 +1764,13 @@ def data_thread(ch: SecureChannel, hello: dict, state: SyncState):
                     break
                 if fh is None:
                     fh = pt.open_writer()
+                with pt.lock:
+                    was_first = len(pt.have) == 0
                 state.on_chunk(pt, fh, payload)
+                # Streaming relay (§7): on the first chunk, offer to waiters so they can
+                # start pulling while we are still receiving.
+                if was_first and sha in state.relay_accepted:
+                    state.early_offer_to_waiters(sha, pt)
             elif typ == T_END:
                 clean = True
                 break
@@ -1448,7 +1877,11 @@ def dial_thread(peer: str, cfg: Cfg, state: SyncState):
             ch = SecureChannel(sock, cfg.psk, cfg.max_frame, initiator=True)
             # The dialler declares first and the accepter answers — the same order as before, now
             # with the PC on the other end of it.
-            ch.send_json(T_HELLO, {"v": PROTOCOL_VERSION, "lan": lan, "last_seq": 0, **declaration(cfg)})
+            with state.lock:
+                my_clip_ts, my_clip_sha = state.clip_ts, state.clip_sha
+            ch.send_json(T_HELLO, {"v": PROTOCOL_VERSION, "lan": lan,
+                                   "clip_ts": my_clip_ts, "clip_sha": my_clip_sha or "",
+                                   **declaration(cfg)})
             reply = ch.read_hello()
             if ch.node_id and ch.node_id == node_id():
                 log.info("%s is this PC; not dialling it again", peer)
@@ -1472,7 +1905,7 @@ def dial_thread(peer: str, cfg: Cfg, state: SyncState):
                 # Symmetric with the inbound path: tell the peer whatever it is behind on. Without
                 # this an outbound link delivers nothing until the next local copy, which reads as a
                 # link that works in one direction only.
-                state.catch_up(ch, int(reply.get("last_seq", 0)))
+                state.catch_up(ch, int(reply.get("clip_ts", 0)), str(reply.get("clip_sha", "")))
                 reason = serve(ch, cfg, state)
                 if reason == BYE_IDLE:
                     # It has gone to sleep on purpose, and it dials out the moment its screen comes

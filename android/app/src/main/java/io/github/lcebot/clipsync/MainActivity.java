@@ -18,6 +18,7 @@ import android.text.Editable;
 import android.text.TextWatcher;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.CheckBox;
 import android.widget.TextView;
 
 import androidx.activity.OnBackPressedCallback;
@@ -67,9 +68,8 @@ public class MainActivity extends AppCompatActivity {
     // fields
     private TextInputLayout portL, pskL, textKbL, fileMbL, fileMbLocalL, pathL, keepHoursL, keepMbL;
     private TextInputEditText port, psk, textKb, fileMb, fileMbLocal, path, keepHours, keepMb;
-    private MaterialSwitch discovery, direct, pskRotate;
-    /** The paragraph under {@link #pskRotate}, shown only while it is on. */
-    private View pskRotateHelp;
+    private MaterialSwitch discovery, direct, relayOptOut;
+    private CheckBox pskRotate;
     /** The Direct connections list, and this device's own addresses — one class, twice (§4a). */
     private AddressList peerList, ownList;
     private MaterialButton pskRandom;
@@ -258,7 +258,6 @@ public class MainActivity extends AppCompatActivity {
                 R.string.hint_peer, true, listHost);
         pskRandom = findViewById(R.id.psk_random);
         pskRotate = findViewById(R.id.psk_rotate);
-        pskRotateHelp = findViewById(R.id.psk_rotate_help);
         portL = findViewById(R.id.port_layout);       port = findViewById(R.id.port);
         pskL = findViewById(R.id.psk_layout);         psk = findViewById(R.id.psk);
         textKbL = findViewById(R.id.text_kb_layout);  textKb = findViewById(R.id.text_kb);
@@ -269,6 +268,7 @@ public class MainActivity extends AppCompatActivity {
         keepMbL = findViewById(R.id.keep_mb_layout);  keepMb = findViewById(R.id.keep_mb);
         discoveryCard = findViewById(R.id.discovery_card);
         directCard = findViewById(R.id.direct_card);
+        relayOptOut = findViewById(R.id.relay_opt_out);
         pathsError = findViewById(R.id.paths_error);
         ownContent = findViewById(R.id.own_content);
         ownChevron = findViewById(R.id.own_chevron);
@@ -348,7 +348,7 @@ public class MainActivity extends AppCompatActivity {
         port.setText(p.getProperty("port", "47521"));
         psk.setText(p.getProperty("psk", ""));
         pskRotate.setChecked(bool(p.getProperty("psk_rotate", "false")));
-        showRotateHelp(pskRotate.isChecked(), false);
+        relayOptOut.setChecked(bool(p.getProperty("relay_opt_out", "false")));
         textKb.setText(String.valueOf(longOf(p, "max_bytes", 1048576) / 1024));
         fileMb.setText(String.valueOf(longOf(p, "max_file_bytes", 10485760) / (1024 * 1024)));
         fileMbLocal.setText(String.valueOf(longOf(p, "max_file_bytes_local", 104857600) / (1024 * 1024)));
@@ -444,21 +444,6 @@ public class MainActivity extends AppCompatActivity {
     }
 
     /**
-     * The rotation explanation, faded in and out with everything below it sliding to follow.
-     *
-     * <p>Same motion as the settings groups, same reason it is one call: the paragraph is the only
-     * view whose visibility changes, so it is the only one named, and everything else in the card
-     * has to stay inside ChangeBounds' reach or it will not move when the gap opens under it.
-     */
-    private void showRotateHelp(boolean shown, boolean animate) {
-        int want = shown ? View.VISIBLE : View.GONE;
-        if (pskRotateHelp.getVisibility() == want) return;
-        if (animate) TransitionManager.beginDelayedTransition(
-                settingsRoot, visibilityMotion(pskRotateHelp));
-        pskRotateHelp.setVisibility(want);
-    }
-
-    /**
      * The view if it is about to change visibility, otherwise null.
      *
      * <p>Only the views that actually turn over may be handed to {@link #visibilityMotion(View...)},
@@ -545,6 +530,7 @@ public class MainActivity extends AppCompatActivity {
         v.setProperty("port", text(port));
         v.setProperty("psk", text(psk));
         v.setProperty("psk_rotate", String.valueOf(pskRotate.isChecked()));
+        v.setProperty("relay_opt_out", String.valueOf(relayOptOut.isChecked()));
         // A key typed or generated here is a NEW key, so its clock starts now. Without this, Apply
         // would write a fresh key over an old activation time — and rotation would pre-retire it
         // within minutes, on the strength of how long the one it replaced had been in use.
@@ -554,6 +540,7 @@ public class MainActivity extends AppCompatActivity {
         if (!text(psk).equalsIgnoreCase(Config.raw(this).getProperty("psk", "").trim())) {
             v.setProperty("psk_since", String.valueOf(System.currentTimeMillis()));
             v.setProperty("psk_next", "");
+            v.setProperty("psk_old", "");
             v.setProperty("psk_retire", "0");
             v.setProperty("psk_agreed", "0");
         }
@@ -623,9 +610,12 @@ public class MainActivity extends AppCompatActivity {
             e.addTextChangedListener(revalidate);
         discovery.setOnCheckedChangeListener((b, checked) -> { applySwitches(true); validate(); });
         direct.setOnCheckedChangeListener((b, checked) -> { applySwitches(true); validate(); });
-        // Its own listener, not applySwitches(): that one governs whole cards and excludes them from
-        // ChangeBounds by name, and this is one paragraph inside a card that has to keep moving.
-        pskRotate.setOnCheckedChangeListener((b, checked) -> showRotateHelp(checked, true));
+        pskRotate.setOnCheckedChangeListener((b, checked) -> {
+            if (checked) new MaterialAlertDialogBuilder(this)
+                    .setMessage(R.string.psk_rotate_help)
+                    .setPositiveButton(android.R.string.ok, null)
+                    .show();
+        });
         Haptics.onClick(pskRandom, this::newPsk);
         threads.setLabelFormatter(v -> String.valueOf(Config.THREAD_STEPS[Math.max(0, Math.min(4, Math.round(v)))]));
         Haptics.bind(threads, (s, v, u) -> threadsLabel.setText(getString(R.string.threads_label, threadsValue())));
@@ -1016,6 +1006,11 @@ public class MainActivity extends AppCompatActivity {
      */
     private List<Row> rowsFor(Status.Snapshot s) {
         List<Row> rows = new ArrayList<>();
+        // Relay status (§8): shown at the top when this device is relaying for others, so it
+        // explains why the device is staying awake.
+        if (s.relayCount > 0) {
+            rows.add(new Row("h:relay", R.string.sheet_relaying, null, null));
+        }
         List<Status.Peer> lan = new ArrayList<>(), wan = new ArrayList<>();
         for (Status.Peer p : s.peers) (p.lan ? lan : wan).add(p);
         group(rows, R.string.sheet_on_lan, lan);
@@ -1298,7 +1293,7 @@ public class MainActivity extends AppCompatActivity {
             s = Status.stopped(getString(autoStartEnabled() ? R.string.state_not_running : R.string.state_autostart_off),
                     s.suspended);
         }
-        boolean connected = "connected".equals(s.state);
+        boolean connected = "connected".equals(s.state) || "relay".equals(s.state);
         boolean busy = "connecting".equals(s.state);
         boolean stopped = "stopped".equals(s.state);
 
@@ -1322,7 +1317,7 @@ public class MainActivity extends AppCompatActivity {
         // fact about one of them and the chip has no room to say which. What kind each link is now
         // belongs beside that link, in the sheet.
         String titleText = connected
-                ? getString(R.string.state_connected, s.count())
+                ? getString("relay".equals(s.state) ? R.string.state_relay : R.string.state_connected, s.count())
                 : getString(switch (s.state) {
                     case "connecting" -> R.string.state_connecting;
                     case "no network" -> R.string.state_no_network;

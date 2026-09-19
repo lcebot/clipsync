@@ -67,6 +67,8 @@ DEFAULTS = {
     # exists to prevent.
     "own_addresses": [],
     "start_delay": 0,
+    # Relay opt-out (docs/p2p-plan.md §8): decline relay requests from other devices.
+    "relay_opt_out": False,
 }
 
 # The order keys are written in. json.dump preserves insertion order, so this is also the order
@@ -551,6 +553,7 @@ class Cfg:
         self.own_addresses = as_list(raw["own_addresses"])
         self.own = own_set(raw)
         self.start_delay = int(raw["start_delay"])
+        self.relay_opt_out = as_bool(raw.get("relay_opt_out", False))
         # largest frame we accept: a CHUNK, or a CLIP whose JSON escaping doubled the text
         self.max_frame = max(CHUNK, self.max_bytes * 2) + 64 * 1024
 

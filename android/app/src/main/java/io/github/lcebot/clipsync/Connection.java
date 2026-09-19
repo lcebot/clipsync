@@ -88,6 +88,15 @@ public final class Connection implements AutoCloseable {
      * and adding a role costs nothing by comparison.
      */
     public static final int T_PAIR_ASK = 15, T_PAIR_KEY = 16;
+
+    // Relay coordination (docs/p2p-plan.md §7).
+    /**
+     * {@code RELAY_ASK} waiter → relay, "I am waiting for this sha; offer it to me when you have it."
+     * {@code RELAY_OK} relay → waiter, "accepted."
+     * {@code RELAY_NO} relay → waiter, "declined" — with a reason: {@code busy} (retryable) or
+     * {@code refused} (final: opted out, over the size limit, or battery too low).
+     */
+    public static final int T_RELAY_ASK = 17, T_RELAY_OK = 18, T_RELAY_NO = 19;
     /**
      * 2: HELLO is exchanged in both directions and carries the node id, type, persistence and
      * battery bucket (docs/p2p-plan.md §2). A clean break, by §9 — a version 1 peer is refused
@@ -102,7 +111,7 @@ public final class Connection implements AutoCloseable {
      * Every file would move twice. A failure a version check turns into one refused connection with
      * a plain message is worth a version number; both ends are updated together regardless.
      */
-    public static final int PROTOCOL_VERSION = 3;
+    public static final int PROTOCOL_VERSION = 4;
     /** Chunk size (CHUNK frames carry u32 index ‖ bytes); also the largest frame anyone buffers. */
     public static final int CHUNK = 512 * 1024;
 
@@ -411,8 +420,8 @@ public final class Connection implements AutoCloseable {
      *
      * @throws SelfConnection when the peer turns out to be this device
      */
-    public void hello(Context ctx, long lastSeq) throws Exception {
-        sendHello(ctx, lastSeq);
+    public void hello(Context ctx, long clipTs, String clipSha) throws Exception {
+        sendHello(ctx, clipTs, clipSha);
         readHello();
     }
 
@@ -425,7 +434,7 @@ public final class Connection implements AutoCloseable {
      * <em>before</em> it has to say anything, and can therefore send a sequence cursor that is
      * actually about that peer rather than a zero.
      */
-    public void sendHello(Context ctx, long lastSeq) throws Exception {
+    public void sendHello(Context ctx, long clipTs, String clipSha) throws Exception {
         JSONObject mine = new JSONObject();
         mine.put("v", PROTOCOL_VERSION);
         mine.put("id", Node.id());
@@ -433,7 +442,8 @@ public final class Connection implements AutoCloseable {
         mine.put("type", Node.type(ctx));
         mine.put("persistent", Node.persistent(ctx));
         mine.put("battery", Node.battery(ctx));
-        mine.put("last_seq", lastSeq);
+        mine.put("clip_ts", clipTs);
+        if (clipSha != null) mine.put("clip_sha", clipSha);
         mine.put("lan", lanPeer);
         mine.put("port", listenPort);       // an accepted connection cannot see this any other way
         mine.put("data_out", true);         // this end can open data connections; see peerDataOut
@@ -443,8 +453,8 @@ public final class Connection implements AutoCloseable {
     /**
      * Read what the peer declares, and refuse it here if it cannot be talked to.
      *
-     * @return the peer's HELLO, for the fields only the caller cares about ({@code last_seq},
-     *         and on an accepted connection {@code role} and {@code sha256})
+     * @return the peer's HELLO, for the fields only the caller cares about ({@code clip_ts},
+     *         {@code clip_sha}, and on an accepted connection {@code role} and {@code sha256})
      * @throws SelfConnection when the peer turns out to be this device
      */
     public JSONObject readHello() throws Exception {

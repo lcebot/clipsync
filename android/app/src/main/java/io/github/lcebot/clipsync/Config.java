@@ -61,6 +61,12 @@ public final class Config {
     /** Whether this device replaces its key on a schedule at all (docs/p2p-plan.md §17). */
     public final boolean rotate;
     /**
+     * Opt out of relaying files for other devices on the LAN (docs/p2p-plan.md §8). When true,
+     * this node reports {@code persistent=false} in HELLO regardless of its actual state, making
+     * it unlikely to be elected, and directly declines any RELAY_ASK with "refused".
+     */
+    public final boolean relayOptOut;
+    /**
      * The key's life: successor, superseded ring, and the deadlines.
      *
      * <p>Read whether or not {@link #rotate} is on, because the <b>ring still applies</b>: a device
@@ -79,6 +85,7 @@ public final class Config {
         pskHex = p.getProperty("psk").trim().toLowerCase();
         psk = hex(pskHex);
         rotate = bool(p.getProperty("psk_rotate", "false"));
+        relayOptOut = bool(p.getProperty("relay_opt_out", "false"));
         keys = schedule(p);
         maxBytes = Integer.parseInt(p.getProperty("max_bytes").trim());
         maxFileBytes = Long.parseLong(p.getProperty("max_file_bytes").trim());
@@ -136,6 +143,7 @@ public final class Config {
         v.setProperty("psk", pskHex);
         v.setProperty("psk_since", String.valueOf(System.currentTimeMillis()));
         v.setProperty("psk_next", "");
+        v.setProperty("psk_old", "");
         v.setProperty("psk_retire", "0");
         v.setProperty("psk_agreed", "0");
     }
@@ -197,6 +205,7 @@ public final class Config {
         // Key rotation (docs/p2p-plan.md §17). Off by default: it silently changes the one setting
         // every device has to agree on, and a user who has not asked for that should not get it.
         p.setProperty("psk_rotate", "false");
+        p.setProperty("relay_opt_out", "false");
         // When the current key became active. Absent means "unknown", and unknown is read as NOW
         // rather than as the epoch — the conservative direction, because the alternative is a first
         // launch that finds a key 55 years old and rotates it before the user has finished setting

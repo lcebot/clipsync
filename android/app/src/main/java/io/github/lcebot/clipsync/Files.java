@@ -304,7 +304,37 @@ public final class Files {
             long pos = (long) idx * CHUNK;
             while (bb.hasRemaining()) pos += ch.write(bb, pos);
             have.set(idx);
+            notifyAll();              // wake relay serve threads waiting for this chunk (§7)
             if (++unsaved >= 8) saveMap();
+        }
+
+        /** Whether chunk {@code idx} has been received. Thread-safe. */
+        public synchronized boolean hasChunk(int idx) {
+            return idx >= 0 && idx < n && have.get(idx);
+        }
+
+        /**
+         * Read chunk {@code idx} into {@code buf}; returns its length.
+         *
+         * <p>For streaming relay (§7): the file is still being written by another set of threads, but
+         * chunks occupy disjoint ranges, so a chunk that {@link #hasChunk} reports as present is safe
+         * to read.  Opens a separate read descriptor each call — not the fastest path, but correct
+         * without sharing the write channel's fd ownership, and the overhead is negligible next to
+         * the 512 KiB chunk on the wire.
+         */
+        public synchronized int readChunk(int idx, byte[] buf) throws IOException {
+            if (!have.get(idx)) throw new IOException("chunk " + idx + " not received yet");
+            long pos = (long) idx * CHUNK;
+            int want = (int) Math.min(CHUNK, size - pos);
+            try (ParcelFileDescriptor rpfd = ctx.getContentResolver().openFileDescriptor(uri, "r")) {
+                if (rpfd == null) throw new IOException("cannot open " + uri + " for reading");
+                java.nio.channels.FileChannel rch = new java.io.FileInputStream(rpfd.getFileDescriptor()).getChannel();
+                ByteBuffer bb = ByteBuffer.wrap(buf, 0, want);
+                while (bb.hasRemaining()) {
+                    if (rch.read(bb, pos + bb.position()) < 0) throw new IOException("short read at chunk " + idx);
+                }
+            }
+            return want;
         }
 
         private void saveMap() throws IOException {

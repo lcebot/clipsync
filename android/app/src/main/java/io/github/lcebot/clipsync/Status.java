@@ -106,10 +106,12 @@ public final class Status {
         public final boolean suspended;
         public final List<Peer> peers;
         public final List<Target> targets;
+        /** Number of files this device is currently relaying for others (docs/p2p-plan.md §8). */
+        public final int relayCount;
 
-        Snapshot(String state, String detail, long ts, boolean suspended, List<Peer> peers, List<Target> targets) {
+        Snapshot(String state, String detail, long ts, boolean suspended, List<Peer> peers, List<Target> targets, int relayCount) {
             this.state = state; this.detail = detail; this.ts = ts; this.suspended = suspended;
-            this.peers = peers; this.targets = targets;
+            this.peers = peers; this.targets = targets; this.relayCount = relayCount;
         }
 
         /** The service process wrote recently and is not stopped. */
@@ -124,7 +126,7 @@ public final class Status {
 
     /** The snapshot the UI substitutes when the service process has died without saying so. */
     public static Snapshot stopped(String detail, boolean suspended) {
-        return new Snapshot("stopped", detail, 0, suspended, new ArrayList<>(), new ArrayList<>());
+        return new Snapshot("stopped", detail, 0, suspended, new ArrayList<>(), new ArrayList<>(), 0);
     }
 
     // Factories rather than public constructors: the service builds these, the UI only reads them.
@@ -180,7 +182,7 @@ public final class Status {
      * cheaper to be sure of.
      */
     public static synchronized void write(Context ctx, String state, String detail, boolean suspended,
-                                          List<Peer> peers, List<Target> targets) {
+                                          List<Peer> peers, List<Target> targets, int relayCount) {
         try {
             JSONArray ps = new JSONArray();
             for (Peer p : peers) {
@@ -194,7 +196,7 @@ public final class Status {
             }
             String s = new JSONObject().put("state", state).put("detail", str(detail))
                     .put("ts", System.currentTimeMillis()).put("suspended", suspended)
-                    .put("peers", ps).put("targets", ts).toString();
+                    .put("peers", ps).put("targets", ts).put("relay_count", relayCount).toString();
             File f = file(ctx), tmp = new File(f.getPath() + ".tmp");
             try (FileOutputStream out = new FileOutputStream(tmp)) {
                 out.write(s.getBytes(StandardCharsets.UTF_8));
@@ -232,9 +234,9 @@ public final class Status {
                 targets.add(new Target(get(t, "target"), get(t, "reason"), Why.of(t.optString("why"))));
             }
             return new Snapshot(o.optString("state", "stopped"), get(o, "detail"),
-                    o.optLong("ts", 0), o.optBoolean("suspended"), peers, targets);
+                    o.optLong("ts", 0), o.optBoolean("suspended"), peers, targets, o.optInt("relay_count", 0));
         } catch (Exception e) {
-            return new Snapshot("stopped", null, 0, false, new ArrayList<>(), new ArrayList<>());
+            return new Snapshot("stopped", null, 0, false, new ArrayList<>(), new ArrayList<>(), 0);
         }
     }
 }

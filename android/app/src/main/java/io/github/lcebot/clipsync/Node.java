@@ -36,10 +36,22 @@ final class Node {
      */
     private static final String ID = UUID.randomUUID().toString();
 
+    /**
+     * When true, {@link #persistent(Context)} returns false regardless of the actual charging and
+     * exemption state. Set from the config's {@code relay_opt_out} field by the service on startup
+     * and on reload. A volatile boolean: two threads (the service main thread and the config
+     * reload) can write it, and every connection thread reads it.
+     */
+    private static volatile boolean relayOptOut;
+
     private Node() { }
 
     static String id() {
         return ID;
+    }
+
+    static void setRelayOptOut(boolean optOut) {
+        relayOptOut = optOut;
     }
 
     /** The first 8 characters, which is what logs and the peer list show beside the friendly name. */
@@ -76,6 +88,7 @@ final class Node {
      * saying "no": the network would route through it and lose the traffic.
      */
     static boolean persistent(Context ctx) {
+        if (relayOptOut) return false;
         return charging(ctx) && exempt(ctx);
     }
 

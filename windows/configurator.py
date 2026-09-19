@@ -325,16 +325,6 @@ class App:
         ttk.Checkbutton(conn, text="Rotate key automatically",
                         variable=self.psk_rotate, command=self._rotate_toggled
                         ).grid(row=5, column=1, sticky="w", padx=PAD, pady=(0, 0))
-        self.rotate_help = ttk.Label(
-            conn, wraplength=460, foreground="#49454f",
-            text="When enabled, this key is replaced every 48 hours. A successor is generated "
-                 "and shared with connected devices; after 72 hours, if at least one device has "
-                 "acknowledged the new key, it takes over. If no device has been reached by then, "
-                 "the deadline is extended 24 hours at a time until one connects. Old keys stay "
-                 "accepted for 3 rotations (~6 days), so a device left off for a few days will "
-                 "still reconnect.")
-        self.rotate_help.grid(row=6, column=1, sticky="w", padx=PAD, pady=(0, PAD))
-        self.rotate_help.grid_remove()
         section_row += 1
 
         # --- This PC's own addresses (§4a)
@@ -395,6 +385,12 @@ class App:
         self.paths_error.grid(row=4, column=0, sticky="w", padx=PAD, pady=(0, PAD))
         section_row += 1
 
+        # --- Relay (§8)
+        self.relay_opt_out = tk.BooleanVar(value=False)
+        ttk.Checkbutton(dire, text="Decline relay requests from other devices",
+                        variable=self.relay_opt_out, command=self.revalidate
+                        ).grid(row=5, column=0, sticky="w", padx=PAD, pady=(0, PAD))
+
         # --- Transfer limits
         lim = ttk.LabelFrame(body, text="Transfer limits")
         lim.grid(row=section_row, column=0, sticky="ew", padx=PAD, pady=(PAD, 0))
@@ -437,11 +433,16 @@ class App:
     def _toggle_psk(self):
         self.psk.entry.configure(show="" if self.psk_shown.get() else "•")
 
+    _ROTATE_HELP = (
+        "Every 48 hours this device makes a new key and passes it to the others, "
+        "so a key that leaks is only useful for a few days. Devices that were "
+        "switched off still connect — the last few keys keep working for about "
+        "a week. A device left off longer than that has to be paired again."
+    )
+
     def _rotate_toggled(self):
         if self.psk_rotate.get():
-            self.rotate_help.grid()
-        else:
-            self.rotate_help.grid_remove()
+            messagebox.showinfo("Rotate key automatically", self._ROTATE_HELP)
 
     def _direct_toggled(self):
         self.peer_list.set_enabled(self.direct.get())
@@ -463,7 +464,6 @@ class App:
         self.port.set(raw["port"])
         self.psk.set(raw["psk"])
         self.psk_rotate.set(cfgmod.as_bool(raw.get("psk_rotate", False)))
-        self._rotate_toggled()
         self.mdns_name.set(raw["mdns_name"])
         self.discovery.set(cfgmod.as_bool(raw["discovery"]))
         self.direct.set(cfgmod.as_bool(raw["direct"]))
@@ -475,6 +475,7 @@ class App:
         self.keep_hours.set(raw["keep_hours"])
         self.keep_max_mb.set(raw["keep_max_mb"])
         self.start_delay.set(raw["start_delay"])
+        self.relay_opt_out.set(cfgmod.as_bool(raw.get("relay_opt_out", False)))
 
         self.own_list.set_values(cfgmod.as_list(raw["own_addresses"]))
         self.peer_list.set_values(cfgmod.as_list(raw["peers"]))
@@ -509,6 +510,7 @@ class App:
             "peers": self.peer_list.values(),
             "own_addresses": self.own_list.values(),
             "start_delay": _int(self.start_delay.get()),
+            "relay_opt_out": bool(self.relay_opt_out.get()),
         }
         # A key typed or generated here is a NEW key, so its clock starts now. Without this,
         # Apply would write a fresh key over an old activation time — and rotation would
@@ -521,6 +523,7 @@ class App:
         if d["psk"] != old_psk:
             d["psk_since"] = int(time.time() * 1000)
             d["psk_next"] = ""
+            d["psk_old"] = []
             d["psk_retire"] = 0
             d["psk_agreed"] = 0
         return d

@@ -132,7 +132,9 @@ final class PairJoiner {
      */
     static void apply(Context ctx, Result r) throws IOException {
         Properties v = new Properties();
-        v.setProperty("psk", r.pskHex);
+        // freshKey resets the whole schedule — activation time, successor, old-key ring — so the
+        // paired key starts clean rather than inheriting the previous key's rotation state.
+        Config.freshKey(v, r.pskHex);
         v.setProperty("discovery", "true");
         // Only when the provider named one. Writing a 0 would be worse than writing nothing: the
         // port is the one setting a joiner cannot discover, and overwriting a working value with a

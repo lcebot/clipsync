@@ -92,7 +92,11 @@ public class SyncService extends Service {
     private void refreshStatus() {
         if (!running) { setStatus("stopped"); return; }
         if (!hasNetwork) { setStatus("no network"); return; }
-        if (!byPeer.isEmpty()) { setStatus("connected"); return; }
+        if (!byPeer.isEmpty()) {
+            // §11: "Relay (n)" when this device is actively relaying for others.
+            setStatus(relayAccepted.isEmpty() ? "connected" : "relay");
+            return;
+        }
         if (!screenOn) { setStatus("idle", "screen off"); return; }
         setStatus("connecting");
     }
@@ -159,7 +163,7 @@ public class SyncService extends Service {
         if (searching != null) {
             targets.add(Status.target(getString(R.string.target_discovery), searching, Status.Why.WAITING));
         }
-        Status.write(this, lastState, lastDetail, suspendedOnce, peers, targets);
+        Status.write(this, lastState, lastDetail, suspendedOnce, peers, targets, relayAccepted.size());
     }
 
     private volatile Config cfg;
@@ -222,14 +226,25 @@ public class SyncService extends Service {
     private boolean wasSentByUs(String hash) {
         synchronized (sentHashes) { return sentHashes.contains(hash); }
     }
+    // ---- clip versioning (§6) ----
+    /** Wall-clock ms when the current local clip was produced. Compared (ts, from) lexicographically. */
+    private volatile long clipTs;
+    /** Node id of whoever produced the current clip (this device or a remote peer). */
+    private volatile String clipFrom;
+    /** SHA-256 hex of the current clip content, for catch-up and the seen-set. */
+    private volatile String clipSha;
+
     /**
-     * How far into each peer's stream we have seen, by target.
+     * Last 64 (ts, from, sha256) triples seen, for duplicate suppression across any topology.
      *
-     * <p>One cursor per target, where there used to be one for the device. With several peers a
-     * single number is not merely imprecise, it is meaningless: the peers have independent sequence
-     * spaces, and a number from one of them tells another nothing about what we are missing.
+     * <p>Rule 3 of §6: identical clips arriving from two routes are dropped here, regardless of the
+     * path they took. Bounded to keep the cost per incoming frame at one linear scan of a small list.
      */
-    private final java.util.Map<String, Long> seqByTarget = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.LinkedHashMap<String, long[]> seenSet = new java.util.LinkedHashMap<>() {
+        @Override protected boolean removeEldestEntry(java.util.Map.Entry<String, long[]> e) {
+            return size() > 64;
+        }
+    };
     /**
      * The newest local clip, or null.
      *
@@ -294,6 +309,7 @@ public class SyncService extends Service {
         startForegroundQuiet();             // must happen promptly after startForegroundService()
         try {
             cfg = Config.load(this);
+            Node.setRelayOptOut(cfg.relayOptOut);
         } catch (RuntimeException e) {
             Logger.w("invalid config: " + e.getMessage() + " — open the app and fix it");
             setStatus("stopped", "invalid config");
@@ -394,6 +410,7 @@ public class SyncService extends Service {
             return;
         }
         cfg = next;
+        Node.setRelayOptOut(cfg.relayOptOut);
         Logger.i("config reloaded: " + targets(cfg)
                 + ", " + cfg.threads + " streams, files -> " + cfg.filesDir);
         abortTransfers(null, "configuration changed", null);
@@ -633,6 +650,12 @@ public class SyncService extends Service {
                 // re-entry preserves the original stamp.
                 pendingHash = h;
                 pendingSince = System.currentTimeMillis();
+                // Version stamp for text clips (§6).
+                if (out instanceof String) {
+                    clipTs = System.currentTimeMillis();
+                    clipFrom = Node.id();
+                    clipSha = h;
+                }
             }
             Logger.i("clip (" + source + "): " + (out instanceof Files.Ref ? out.toString() : "text " + ((String) out).length() + " chars"));
             // copying something new while a file is still moving: stop that transfer first
@@ -687,7 +710,14 @@ public class SyncService extends Service {
             String h = Crypto.sha256Hex(text);
             markSent(h);
             JSONObject j = new JSONObject();
-            j.put("seq", System.currentTimeMillis());
+            j.put("ts", clipTs);
+            j.put("from", Node.id());
+            org.json.JSONArray to = new org.json.JSONArray();
+            for (Link peer : byPeer.values()) {
+                if (peer.isOpen() && peer.peerId() != null) to.put(peer.peerId());
+            }
+            j.put("to", to);
+            j.put("forwarded", false);
             j.put("mime", "text/plain");
             j.put("sha256", h);
             j.put("data", text);
@@ -697,22 +727,95 @@ public class SyncService extends Service {
     }
 
     // ------------------------------------------------------------------ PC -> local clipboard
+
+    /**
+     * Compare two clip versions lexicographically by (ts, from).
+     *
+     * @return positive if a is newer, negative if b is newer, 0 if equal
+     */
+    private static int compareVersion(long tsA, String fromA, long tsB, String fromB) {
+        int c = Long.compare(tsA, tsB);
+        if (c != 0) return c;
+        if (fromA == null) fromA = "";
+        if (fromB == null) fromB = "";
+        return fromA.compareTo(fromB);
+    }
+
     private void onRemoteClip(Link l, JSONObject msg) {
         String text = msg.optString("data", null);
         if (text == null || !"text/plain".equals(msg.optString("mime", "text/plain"))) return;
         if (text.getBytes(StandardCharsets.UTF_8).length > cfg.maxBytes) return;
         String h = Crypto.sha256Hex(text);
         if (!h.equals(msg.optString("sha256"))) return;
-        advance(l, msg.optLong("seq", 0));
+
+        long remoteTs = msg.optLong("ts", 0);
+        String remoteFrom = msg.optString("from", "");
+        boolean forwarded = msg.optBoolean("forwarded", false);
+
+        // Normalise ts into local clock domain using the offset from PING/PONG (§6).
+        long normTs = remoteTs - l.clockOffset;
+
+        // Seen-set check: drop if we have already processed this exact (ts, from, sha) triple.
+        String seenKey = remoteTs + ":" + remoteFrom;
+        synchronized (seenSet) {
+            if (seenSet.containsKey(seenKey)) {
+                long[] prev = seenSet.get(seenKey);
+                if (prev != null && prev[0] == remoteTs) return;   // duplicate
+            }
+            seenSet.put(seenKey, new long[]{remoteTs});
+        }
+
         synchronized (lock) {
-            // Content hashes, so this works whichever link it arrived on: a clip we sent to A and had
-            // relayed back by B is recognised by what it is, not by where it came from.
             if (wasSentByUs(h) || h.equals(lastRemoteHash)) return;
+
+            // Version comparison: accept only if the incoming clip is strictly newer.
+            if (clipTs > 0 && compareVersion(normTs, remoteFrom, clipTs, clipFrom) <= 0) return;
+
             lastRemoteHash = h;
             lastRemoteUri = null;
+            clipTs = normTs;
+            clipFrom = remoteFrom;
+            clipSha = h;
         }
         clipboard.setPrimaryClip(ClipData.newPlainText("clipsync", text));
-        Logger.i("remote -> local (" + text.length() + " chars)");
+        Logger.i("remote -> local (" + text.length() + " chars"
+                + (forwarded ? ", forwarded" : "") + ")");
+
+        // Forwarding (§6): relay to peers not in the recipient list, up to 2 hops.
+        if (!forwarded) {
+            org.json.JSONArray toArr = msg.optJSONArray("to");
+            java.util.Set<String> recipients = new java.util.HashSet<>();
+            if (toArr != null) {
+                for (int i = 0; i < toArr.length(); i++) recipients.add(toArr.optString(i, ""));
+            }
+            recipients.add(remoteFrom);          // the originator already has it
+            recipients.add(Node.id());           // we have it now too
+
+            for (Link peer : byPeer.values()) {
+                if (!peer.isOpen() || peer.peerId() == null) continue;
+                if (recipients.contains(peer.peerId())) continue;
+                if (peer == l) continue;             // don't send back to the link it came from
+                try {
+                    JSONObject fwd = new JSONObject();
+                    fwd.put("ts", remoteTs);         // original ts, not normalised
+                    fwd.put("from", remoteFrom);
+                    org.json.JSONArray fwdTo = new org.json.JSONArray();
+                    // include everyone the originator listed plus us and the forwarded-to peer
+                    for (String r : recipients) fwdTo.put(r);
+                    fwdTo.put(peer.peerId());
+                    fwd.put("to", fwdTo);
+                    fwd.put("forwarded", true);
+                    fwd.put("mime", "text/plain");
+                    fwd.put("sha256", h);
+                    fwd.put("data", text);
+                    peer.connection().send(Connection.T_CLIP,
+                            fwd.toString().getBytes(StandardCharsets.UTF_8));
+                    Logger.i("forwarded clip to " + peer.connection().peer);
+                } catch (Exception e) {
+                    Logger.i("forward to " + peer.connection().peer + " failed: " + e);
+                }
+            }
+        }
     }
 
     // ---- files: OFFER (hash) -> WANT {ranges} / HAVE / SKIP -> chunks over parallel data connections ----
@@ -721,13 +824,67 @@ public class SyncService extends Service {
     /** Files fully uploaded recently; a late re-WANT (lost stream on the PC side) is served from here. */
     private final java.util.LinkedHashMap<String, Files.Ref> sent = new java.util.LinkedHashMap<>();
 
-    private static JSONObject header(Files.Ref f) throws Exception {
+    // ---- relay coordination (docs/p2p-plan.md §7, §8) ----
+
+    /**
+     * Priority key for relay election (§3).  Lower array = higher priority; elements are compared
+     * left to right, and the node id breaks ties (lower id wins).  The order is total, so every
+     * node computes the same answer from the same HELLO fields without exchanging an election
+     * message.
+     */
+    private static int[] priorityKey(boolean persistent, String type, String battery) {
+        int typeRank = "pc".equals(type) ? 2 : "tablet".equals(type) ? 1 : 0;
+        int battRank = "mains".equals(battery) ? 3 : "high".equals(battery) ? 2 : "medium".equals(battery) ? 1 : 0;
+        return new int[]{persistent ? 0 : 1, -typeRank, -battRank};
+    }
+
+    private static int comparePriority(int[] a, String idA, int[] b, String idB) {
+        for (int i = 0; i < Math.min(a.length, b.length); i++) {
+            int c = Integer.compare(a[i], b[i]);
+            if (c != 0) return c;
+        }
+        return idA.compareTo(idB);
+    }
+
+    /** State for a file we are waiting on a relay to provide (§7). */
+    private static class RelayWait {
+        final String sha256;
+        final JSONObject offerHdr;          // the original OFFER header, for a later WANT to the origin
+        final Link origin;                  // who sent the OFFER
+        final List<String> candidates;      // priority-sorted node ids (walk order)
+        int nextIdx;                        // current position in the fallback walk
+        long askTime;                       // SystemClock.elapsedRealtime when RELAY_ASK was sent
+        final java.util.Set<String> failed = new java.util.HashSet<>();
+        boolean retried;                    // whether the current busy candidate was retried once
+
+        RelayWait(String sha, JSONObject hdr, Link origin, List<String> candidates) {
+            this.sha256 = sha;
+            this.offerHdr = hdr;
+            this.origin = origin;
+            this.candidates = candidates;
+        }
+    }
+
+    /** Files we are waiting on a relay to provide, keyed by sha256. */
+    private final java.util.Map<String, RelayWait> relayWaits = new java.util.concurrent.ConcurrentHashMap<>();
+    /** Relay requests we accepted: sha → set of waiter Links that will receive the OFFER. */
+    private final java.util.Map<String, java.util.Set<Link>> relayAccepted = new java.util.concurrent.ConcurrentHashMap<>();
+    /** Timeout for a single step of the relay fallback walk (generous — it is a backstop, not a scheduler). */
+    private static final long RELAY_ASK_TIMEOUT_MS = 30_000;
+
+    private JSONObject header(Files.Ref f) throws Exception {
         JSONObject hdr = new JSONObject();
         hdr.put("seq", System.currentTimeMillis());
         hdr.put("name", f.name);
         hdr.put("mime", f.mime);
         hdr.put("size", f.size);
         hdr.put("sha256", f.sha256);
+        hdr.put("from", Node.id());
+        JSONArray to = new JSONArray();
+        for (Link peer : byPeer.values()) {
+            if (peer.isOpen() && peer.peerId() != null) to.put(peer.peerId());
+        }
+        hdr.put("to", to);
         return hdr;
     }
 
@@ -786,7 +943,10 @@ public class SyncService extends Service {
         }
     }
 
-    /** The PC offers a file: re-use our cached copy (HAVE), refuse (SKIP), or ask for the chunks we miss (WANT) and pull them. */
+    /**
+     * A peer offers a file: re-use our cached copy (HAVE), refuse (SKIP), elect a relay (§7),
+     * or ask for the chunks we miss (WANT) and pull them.
+     */
     private void onOffer(Link l, JSONObject hdr) throws Exception {
         Connection c = l.connection();
         String sha = hdr.optString("sha256");
@@ -801,14 +961,12 @@ public class SyncService extends Service {
             echo = wasSentByUs(sha) || sha.equals(lastRemoteHash);
         }
         if (echo) {
-            advance(l, seq);
             c.sendJson(Connection.T_HAVE, shaMsg(sha));
             return;
         }
         Uri cached = cache.get(sha);
         if (cached != null) {
             c.sendJson(Connection.T_HAVE, shaMsg(sha));
-            advance(l, seq);
             synchronized (lock) {
                 lastRemoteHash = sha;
                 lastRemoteUri = cached.toString();
@@ -822,10 +980,129 @@ public class SyncService extends Service {
         if (size < 0 || size > limit) {
             String why = size + " bytes > " + limit + " (" + (c.lanPeer ? "LAN" : "internet") + " limit)";
             c.sendJson(Connection.T_SKIP, shaMsg(sha).put("reason", why));
-            advance(l, seq);
             Logger.i("offer: " + name + " -> skipped, " + why);
             return;
         }
+
+        // --- Relay election (§7): if an OFFER from outside the LAN carries a recipient list, every
+        //     node on the LAN computes the same priority order and the highest-priority one pulls from
+        //     the origin; the rest ask that node to relay. ---
+        RelayWait rw = relayWaits.get(sha);
+        if (rw != null && l.peerId() != null && l.peerId().equals(currentRelayFor(rw))) {
+            // This OFFER is from the relay we asked — skip election, WANT directly.
+            relayWaits.remove(sha);
+            Logger.i("offer: " + name + " from relay " + Node.shortId(l.peerId()) + " -> want directly");
+        } else {
+            String offerFrom = hdr.optString("from", "");
+            JSONArray toArr = hdr.optJSONArray("to");
+            if (toArr != null && toArr.length() > 0 && !offerFrom.isEmpty()) {
+                java.util.Set<String> recipients = new java.util.HashSet<>();
+                for (int i = 0; i < toArr.length(); i++) recipients.add(toArr.optString(i));
+                String best = electRelay(offerFrom, c, recipients);
+                if (best != null && !best.equals(Node.id()) && !best.equals(offerFrom)) {
+                    // A higher-priority LAN peer should relay; ask it.
+                    List<String> candidateIds = buildCandidateList(offerFrom, c, recipients);
+                    RelayWait wait = new RelayWait(sha, hdr, l, candidateIds);
+                    relayWaits.put(sha, wait);
+                    askRelay(wait);
+                    return;
+                }
+            }
+        }
+
+        // Normal WANT path (we are the best candidate, or no relay election applies).
+        wantFromPeer(l, sha, name, hdr, size, seq);
+    }
+
+    /** Compute the candidate list for relay election, sorted by priority (best first). */
+    private List<String> buildCandidateList(String offerFrom, Connection originConn, java.util.Set<String> recipients) {
+        // Each candidate: [id, persistent, type, battery].
+        List<String[]> cands = new ArrayList<>();
+        // Me.
+        cands.add(new String[]{Node.id(), String.valueOf(Node.persistent(this)), Node.type(this), Node.battery(this)});
+        // Origin, if on LAN.
+        if (originConn.lanPeer) {
+            cands.add(new String[]{offerFrom, String.valueOf(originConn.peerPersistent), originConn.peerType, originConn.peerBattery});
+        }
+        // LAN peers that are in the recipient list.
+        for (Link peer : byPeer.values()) {
+            if (!peer.isOpen() || peer.peerId() == null || peer.peerId().equals(offerFrom)) continue;
+            Connection pc = peer.connection();
+            if (pc.lanPeer && recipients.contains(peer.peerId())) {
+                cands.add(new String[]{peer.peerId(), String.valueOf(pc.peerPersistent), pc.peerType, pc.peerBattery});
+            }
+        }
+        cands.sort((a, b) -> comparePriority(
+                priorityKey(Boolean.parseBoolean(a[1]), a[2], a[3]), a[0],
+                priorityKey(Boolean.parseBoolean(b[1]), b[2], b[3]), b[0]));
+        List<String> ids = new ArrayList<>();
+        for (String[] c : cands) ids.add(c[0]);
+        return ids;
+    }
+
+    /** @return the best relay candidate id, or null if the candidate set is empty. */
+    private String electRelay(String offerFrom, Connection originConn, java.util.Set<String> recipients) {
+        List<String> ids = buildCandidateList(offerFrom, originConn, recipients);
+        return ids.isEmpty() ? null : ids.get(0);
+    }
+
+    /** @return the node id of the relay we are currently asking, or null. */
+    private String currentRelayFor(RelayWait rw) {
+        if (rw.nextIdx < rw.candidates.size()) {
+            String id = rw.candidates.get(rw.nextIdx);
+            if (!id.equals(Node.id()) && (rw.origin == null || !id.equals(rw.origin.peerId()))) return id;
+        }
+        return null;
+    }
+
+    /**
+     * Walk the candidate list: send RELAY_ASK to the next viable candidate, or fall back to the
+     * origin when the list is exhausted.
+     */
+    private void askRelay(RelayWait rw) {
+        while (rw.nextIdx < rw.candidates.size()) {
+            String cid = rw.candidates.get(rw.nextIdx);
+            if (cid.equals(Node.id()) || (rw.origin != null && cid.equals(rw.origin.peerId()))) break; // reached self or origin
+            if (rw.failed.contains(cid)) { rw.nextIdx++; continue; }
+            Link relay = byPeer.get(cid);
+            if (relay == null || !relay.isOpen()) { rw.failed.add(cid); rw.nextIdx++; continue; }
+            try {
+                relay.connection().sendJson(Connection.T_RELAY_ASK, shaMsg(rw.sha256));
+                rw.askTime = android.os.SystemClock.elapsedRealtime();
+                rw.retried = false;
+                Logger.i("relay: asking " + Node.shortId(cid) + " to relay " + shortSha(rw.sha256));
+                // Schedule a timeout for this step of the walk.
+                new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+                    RelayWait w = relayWaits.get(rw.sha256);
+                    if (w == rw && w.askTime > 0 && android.os.SystemClock.elapsedRealtime() - w.askTime >= RELAY_ASK_TIMEOUT_MS) {
+                        Logger.i("relay: " + Node.shortId(cid) + " timed out for " + shortSha(rw.sha256));
+                        rw.failed.add(cid);
+                        rw.nextIdx++;
+                        askRelay(rw);
+                    }
+                }, RELAY_ASK_TIMEOUT_MS + 500);
+                return;
+            } catch (Exception e) {
+                rw.failed.add(cid);
+                rw.nextIdx++;
+            }
+        }
+        // Exhausted the candidate list — WANT from origin.
+        relayWaits.remove(rw.sha256);
+        if (rw.origin == null || !rw.origin.isOpen()) return;
+        try {
+            String name = new java.io.File(rw.offerHdr.optString("name", "clip")).getName();
+            if (name.isEmpty()) name = "clip";
+            wantFromPeer(rw.origin, rw.sha256, name, rw.offerHdr, rw.offerHdr.optLong("size", -1), rw.offerHdr.optLong("seq", 0));
+            Logger.i("relay: fell back to origin for " + shortSha(rw.sha256));
+        } catch (Exception e) {
+            Logger.w("relay: fallback to origin failed: " + e.getMessage());
+        }
+    }
+
+    /** The common WANT path: prepare a Partial, send WANT, start data connections if we drive. */
+    private void wantFromPeer(Link l, String sha, String name, JSONObject hdr, long size, long seq) throws Exception {
+        Connection c = l.connection();
         // a newer offer supersedes a download still running (the peer already stopped serving it)
         Transfer d = download.get();
         if (d != null && !d.sha256.equals(sha)) { d.abort(); d.partial.keep(); }
@@ -852,6 +1129,163 @@ public class SyncService extends Service {
         // one, the WANT above is the whole of our part: the peer pushes the chunks over connections
         // it opens, and serveData() receives them.
         if (c.drivesTransfer()) startDownload(l, p, 0);
+    }
+
+    // ---- relay handlers (§7) ----
+
+    /**
+     * A peer asks us to relay a file.  Accept unless we are opted out, on low battery, or are
+     * ourselves waiting for the same file.
+     */
+    private void onRelayAsk(Link l, JSONObject msg) throws Exception {
+        String sha = msg.optString("sha256");
+        Connection c = l.connection();
+        // Check opt-out and low battery.
+        if (cfg.relayOptOut) {
+            c.sendJson(Connection.T_RELAY_NO, new JSONObject().put("sha256", sha).put("reason", "refused"));
+            Logger.i("relay: declined " + shortSha(sha) + " from " + l.peerId() + " (opted out)");
+            return;
+        }
+        if ("low".equals(Node.battery(this))) {
+            c.sendJson(Connection.T_RELAY_NO, new JSONObject().put("sha256", sha).put("reason", "refused"));
+            Logger.i("relay: declined " + shortSha(sha) + " from " + l.peerId() + " (low battery)");
+            return;
+        }
+        // A node that is itself waiting declines with busy (caps depth at one hop).
+        if (relayWaits.containsKey(sha)) {
+            c.sendJson(Connection.T_RELAY_NO, new JSONObject().put("sha256", sha).put("reason", "busy"));
+            Logger.i("relay: declined " + shortSha(sha) + " from " + l.peerId() + " (busy, also waiting)");
+            return;
+        }
+        // Accept.
+        c.sendJson(Connection.T_RELAY_OK, shaMsg(sha));
+        relayAccepted.computeIfAbsent(sha, k -> java.util.concurrent.ConcurrentHashMap.newKeySet()).add(l);
+        Logger.i("relay: accepted " + shortSha(sha) + " for " + Node.shortId(l.peerId()));
+        // If we already have the file, offer immediately.
+        if (cache.get(sha) != null) {
+            offerToWaiters(sha);
+            return;
+        }
+        // If a complete Partial exists, finalize and offer.
+        Files.Partial p = partials.get(sha);
+        if (p != null && p.complete()) {
+            finishDownload(null, p);
+            // finishDownload calls offerToWaiters
+        }
+        // Otherwise, the offer will come when our own download completes (finishDownload → offerToWaiters)
+        // or via streaming relay once the first chunks arrive (endPush → offerToWaiters).
+    }
+
+    /** Relay accepted our request — wait for its OFFER. */
+    private void onRelayOk(Link l, JSONObject msg) {
+        String sha = msg.optString("sha256");
+        RelayWait rw = relayWaits.get(sha);
+        if (rw == null) return;
+        Logger.i("relay: " + Node.shortId(l.peerId()) + " accepted relay for " + shortSha(sha));
+        // Nothing else to do: the relay will send OFFER when it has the file, and onOffer
+        // recognises the relay as the source and WANTs directly.
+    }
+
+    /** Relay declined — walk to the next candidate. */
+    private void onRelayNo(Link l, JSONObject msg) {
+        String sha = msg.optString("sha256");
+        String reason = msg.optString("reason", "");
+        RelayWait rw = relayWaits.get(sha);
+        if (rw == null) return;
+        Logger.i("relay: " + Node.shortId(l.peerId()) + " declined " + shortSha(sha) + ": " + reason);
+        if ("busy".equals(reason) && !rw.retried) {
+            // One retry after a short jittered delay (the candidate may be about to become the relay).
+            rw.retried = true;
+            long jitter = 500 + (long) (Math.random() * 1000);
+            new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+                RelayWait w = relayWaits.get(sha);
+                if (w != rw) return;
+                try {
+                    Link relay = byPeer.get(l.peerId());
+                    if (relay != null && relay.isOpen()) {
+                        relay.connection().sendJson(Connection.T_RELAY_ASK, shaMsg(sha));
+                        rw.askTime = android.os.SystemClock.elapsedRealtime();
+                        Logger.i("relay: retrying " + Node.shortId(l.peerId()) + " for " + shortSha(sha));
+                    } else {
+                        rw.failed.add(l.peerId());
+                        rw.nextIdx++;
+                        askRelay(rw);
+                    }
+                } catch (Exception e) {
+                    rw.failed.add(l.peerId());
+                    rw.nextIdx++;
+                    askRelay(rw);
+                }
+            }, jitter);
+        } else {
+            rw.failed.add(l.peerId());
+            rw.nextIdx++;
+            askRelay(rw);
+        }
+    }
+
+    /**
+     * Send OFFER to every waiter that asked for this file via RELAY_ASK (§7).
+     * Called from finishDownload when we have the complete file in the cache.
+     */
+    private void offerToWaiters(String sha) {
+        java.util.Set<Link> waiters = relayAccepted.remove(sha);
+        if (waiters == null || waiters.isEmpty()) return;
+        Files.Ref f = refFor(sha);
+        if (f == null) return;
+        synchronized (offered) {
+            offered.put(sha, f);
+            while (offered.size() > 8) offered.remove(offered.keySet().iterator().next());
+        }
+        for (Link w : waiters) {
+            if (!w.isOpen()) continue;
+            try {
+                JSONObject hdr = new JSONObject();
+                hdr.put("seq", System.currentTimeMillis());
+                hdr.put("name", f.name);
+                hdr.put("mime", f.mime);
+                hdr.put("size", f.size);
+                hdr.put("sha256", f.sha256);
+                hdr.put("from", Node.id());
+                JSONArray to = new JSONArray();
+                to.put(w.peerId());
+                hdr.put("to", to);
+                w.connection().sendJson(Connection.T_OFFER, hdr);
+                Logger.i("relay: offered " + f.name + " to waiter " + Node.shortId(w.peerId()));
+            } catch (Exception e) {
+                Logger.w("relay: offer to " + Node.shortId(w.peerId()) + " failed: " + e);
+            }
+        }
+    }
+
+    /**
+     * Streaming relay (§7): send OFFER to waiters as soon as we have the first chunk, so they can
+     * start pulling while we are still receiving.  Does NOT remove from relayAccepted — that stays
+     * so servePull knows to use the streaming path, and offerToWaiters cleans it when the file
+     * completes.
+     */
+    private void earlyOfferToWaiters(String sha, Files.Partial p) {
+        java.util.Set<Link> waiters = relayAccepted.get(sha);
+        if (waiters == null || waiters.isEmpty()) return;
+        for (Link w : waiters) {
+            if (!w.isOpen()) continue;
+            try {
+                JSONObject hdr = new JSONObject();
+                hdr.put("seq", System.currentTimeMillis());
+                hdr.put("name", p.name);
+                hdr.put("mime", p.mime);
+                hdr.put("size", p.size);
+                hdr.put("sha256", p.sha256);
+                hdr.put("from", Node.id());
+                JSONArray to = new JSONArray();
+                to.put(w.peerId());
+                hdr.put("to", to);
+                w.connection().sendJson(Connection.T_OFFER, hdr);
+                Logger.i("relay: early offer " + p.name + " to waiter " + Node.shortId(w.peerId()) + " (streaming)");
+            } catch (Exception e) {
+                Logger.w("relay: early offer to " + Node.shortId(w.peerId()) + " failed: " + e);
+            }
+        }
     }
 
     /**
@@ -909,12 +1343,14 @@ public class SyncService extends Service {
     }
 
     /** @param l the link the file came in on, or null when a peer pushed it over data connections */
+    /** @param l the link the file came in on, or null when a peer pushed it over data connections */
     private void finishDownload(Link l, Files.Partial p) {
         try {
             partials.remove(p.sha256);              // the file exists now; a later OFFER hits the cache
             Uri uri = p.finalizeFile();
             cache.put(p.sha256, uri, p.name, p.mime, p.size);
-            if (l != null) advance(l, p.seq);
+            // Relay §7: offer to any waiters that asked for this file.
+            offerToWaiters(p.sha256);
             synchronized (lock) {
                 if (wasSentByUs(p.sha256) || p.sha256.equals(lastRemoteHash)) return;
                 lastRemoteHash = p.sha256;
@@ -1021,7 +1457,13 @@ public class SyncService extends Service {
                     if (f.payload.length < 4) throw new java.io.IOException("truncated chunk");
                     int idx = ((f.payload[0] & 0xff) << 24) | ((f.payload[1] & 0xff) << 16)
                             | ((f.payload[2] & 0xff) << 8) | (f.payload[3] & 0xff);
+                    boolean wasFirst = p.haveCount() == 0;
                     p.write(idx, f.payload, 4, f.payload.length - 4);
+                    // Streaming relay (§7): on the first chunk, send OFFER to waiters so they can
+                    // start pulling while we are still receiving.
+                    if (wasFirst && relayAccepted.containsKey(sha)) {
+                        earlyOfferToWaiters(sha, p);
+                    }
                 } else if (f.type == Connection.T_END || f.type == Connection.T_ABORT) {
                     return;
                 } else if (f.type == Connection.T_PING) {
@@ -1045,6 +1487,13 @@ public class SyncService extends Service {
 
     /** Stream the chunks a peer asked for, then END — the far side of Transfer's pull worker. */
     private void servePull(Connection c, String sha, JSONObject msg) throws Exception {
+        // Streaming relay (§7): if a Partial exists and the file is not yet in the cache,
+        // serve chunks as they become available rather than waiting for the complete file.
+        Files.Partial p = partials.get(sha);
+        if (p != null && !p.complete() && relayAccepted.containsKey(sha)) {
+            serveRelayPull(c, sha, msg, p);
+            return;
+        }
         Files.Ref f = refFor(sha);
         if (f == null) {
             Logger.w("pull: " + shortSha(sha) + " not available any more");
@@ -1060,6 +1509,47 @@ public class SyncService extends Service {
                 }
         }
         c.sendJson(Connection.T_END, shaMsg(sha));
+    }
+
+    /**
+     * Streaming relay serve (§7): forward chunks from an in-progress Partial as they arrive.
+     *
+     * <p>Waits on the Partial's monitor for each missing chunk, with a per-chunk timeout.  If the
+     * file completes or the waiter falls too far behind (bounded queue), it degrades: remaining
+     * chunks are served from the finalised file (store-and-forward fallback).
+     */
+    private void serveRelayPull(Connection c, String sha, JSONObject msg, Files.Partial p) throws Exception {
+        int n = p.n;
+        byte[] buf = new byte[Connection.CHUNK];
+        int served = 0;
+        for (int[] r : rangesOf(msg.optJSONArray("ranges"), n)) {
+            for (int i = r[0]; i < r[1]; i++) {
+                // Wait for the chunk to become available (written by the origin's push threads).
+                long deadline = System.nanoTime() + 60_000_000_000L; // 60s per chunk backstop
+                synchronized (p) {
+                    while (!p.hasChunk(i)) {
+                        if (p.complete()) break; // all chunks in, switch to normal read
+                        long remain = (deadline - System.nanoTime()) / 1_000_000;
+                        if (remain <= 0) {
+                            Logger.w("relay pull: timed out waiting for chunk " + i + " of " + shortSha(sha));
+                            c.sendJson(Connection.T_ABORT, shaMsg(sha).put("reason", "relay timeout"));
+                            return;
+                        }
+                        p.wait(Math.min(remain, 500)); // wake on each write via notifyAll
+                    }
+                }
+                if (!p.hasChunk(i)) {
+                    // complete() returned true but chunk is missing — should not happen, but guard
+                    c.sendJson(Connection.T_ABORT, shaMsg(sha).put("reason", "chunk not available"));
+                    return;
+                }
+                int len = p.readChunk(i, buf);
+                c.sendChunk(i, buf, len);
+                served++;
+            }
+        }
+        c.sendJson(Connection.T_END, shaMsg(sha));
+        Logger.i("relay: streamed " + served + " chunks of " + shortSha(sha) + " to " + c.peerLabel);
     }
 
     /** Twelve characters of a hash, or as many as there are. Every log line wants this and one of
@@ -1104,7 +1594,25 @@ public class SyncService extends Service {
             case Connection.T_SKIP -> onSkip(new JSONObject(new String(f.payload, StandardCharsets.UTF_8)));
             case Connection.T_ABORT -> onAbort(new JSONObject(new String(f.payload, StandardCharsets.UTF_8)));
             case Connection.T_KEYS -> onKeys(l, new JSONObject(new String(f.payload, StandardCharsets.UTF_8)));
-            case Connection.T_PING -> c.send(Connection.T_PONG);
+            case Connection.T_PING -> {
+                JSONObject ping = new JSONObject(new String(f.payload, StandardCharsets.UTF_8));
+                long t2 = System.currentTimeMillis();
+                JSONObject pong = new JSONObject();
+                pong.put("t1", ping.optLong("t1", 0));
+                pong.put("t2", t2);
+                pong.put("t3", System.currentTimeMillis());
+                c.sendJson(Connection.T_PONG, pong);
+            }
+            case Connection.T_PONG -> {
+                long t4 = System.currentTimeMillis();
+                JSONObject pong = new JSONObject(new String(f.payload, StandardCharsets.UTF_8));
+                long t1 = pong.optLong("t1", 0);
+                long t2 = pong.optLong("t2", 0);
+                long t3 = pong.optLong("t3", 0);
+                if (t1 > 0 && t2 > 0 && t3 > 0) {
+                    l.clockOffset = ((t2 - t1) + (t3 - t4)) / 2;
+                }
+            }
             case Connection.T_BYE -> {
                 String why = new JSONObject(new String(f.payload, StandardCharsets.UTF_8)).optString("reason", "");
                 Logger.i(c.peer + " said goodbye: " + (why.isEmpty() ? "no reason given" : why));
@@ -1118,6 +1626,9 @@ public class SyncService extends Service {
                 if (Connection.BYE_IDLE.equals(why) && c.peerId != null) idlePeers.add(c.peerId);
                 l.close();
             }
+            case Connection.T_RELAY_ASK -> onRelayAsk(l, new JSONObject(new String(f.payload, StandardCharsets.UTF_8)));
+            case Connection.T_RELAY_OK -> onRelayOk(l, new JSONObject(new String(f.payload, StandardCharsets.UTF_8)));
+            case Connection.T_RELAY_NO -> onRelayNo(l, new JSONObject(new String(f.payload, StandardCharsets.UTF_8)));
             default -> { }
         }
     }
@@ -1233,11 +1744,6 @@ public class SyncService extends Service {
         }
     }
 
-    /** Remember how far into a peer's stream we have seen. One cursor per target (see seqByTarget). */
-    private void advance(Link l, long seq) {
-        if (seq <= 0) return;
-        seqByTarget.merge(l.target, seq, Math::max);
-    }
 
     private boolean transferBusy() {
         Transfer u = upload.get(), d = download.get();
@@ -1245,6 +1751,9 @@ public class SyncService extends Service {
         // this device is in the middle of, even though no Transfer of ours is tracking it. Without
         // it the screen-off burst would close the control link under a download in progress.
         if (!pushing.isEmpty()) return true;
+        // Relay pinning (§7): a node relaying keeps the job — defer screen-off disconnect while
+        // any accepted relay request is outstanding.
+        if (!relayAccepted.isEmpty()) return true;
         synchronized (offered) {
             return !offered.isEmpty() || (u != null && !u.isAborted()) || (d != null && !d.isAborted());
         }
@@ -1481,10 +1990,9 @@ public class SyncService extends Service {
             refreshStatus();
         }
 
-        @Override public long lastSeq(String target) {
-            Long v = seqByTarget.get(target);
-            return v == null ? 0 : v;
-        }
+        @Override public long clipTs() { return clipTs; }
+
+        @Override public String clipSha() { return clipSha; }
 
         @Override public Object pendingClip() {
             return pendingLocal;
@@ -1968,6 +2476,19 @@ public class SyncService extends Service {
             if (!u.isAborted()) unanswered = u.ref;
             u.abort();
             upload.compareAndSet(u, null);
+        }
+        // Relay cleanup (§7): if a relay we were waiting on disconnected, walk to the next candidate.
+        if (c.peerId != null) {
+            for (RelayWait rw : new ArrayList<>(relayWaits.values())) {
+                String cur = currentRelayFor(rw);
+                if (c.peerId.equals(cur)) {
+                    rw.failed.add(c.peerId);
+                    rw.nextIdx++;
+                    askRelay(rw);
+                }
+            }
+            // Remove this link from relay-accepted waiter sets.
+            for (java.util.Set<Link> waiters : relayAccepted.values()) waiters.remove(l);
         }
         // `offered` is deliberately NOT cleared here. It is what answers a WANT, it is keyed by hash
         // rather than by peer, and the same file is offered to every link — so clearing it when one

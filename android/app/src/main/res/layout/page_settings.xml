@@ -124,31 +124,16 @@
                      box (containerInsetTop), so 4dp of margin reads as the same 8dp gap the fields
                      leave between each other. -->
                 <!-- Directly under the field it governs, above the buttons: it is a property of the
-                     key, where the three buttons below are ways of getting one. A switch and not a
-                     checkbox because every other on/off on this page is a MaterialSwitch, and one
-                     checkbox among them would read as a different kind of setting. -->
-                <com.google.android.material.materialswitch.MaterialSwitch
+                     key, where the three buttons below are ways of getting one. A checkbox rather
+                     than a switch: this is an attribute of the PSK field, not a standalone section
+                     toggle like Discovery or Direct connections. -->
+                <CheckBox
                     android:id="@+id/psk_rotate"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="8dp"
                     android:minHeight="48dp"
                     android:text="@string/psk_rotate" />
-
-                <!-- Only while it is on. An explanation of a feature nobody has enabled is a
-                     paragraph between the user and the button they were reaching for; once enabled
-                     it is the only place that says what the device will now do on its own. -->
-                <TextView
-                    android:id="@+id/psk_rotate_help"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
-                    android:layout_marginBottom="4dp"
-                    android:lineSpacingExtra="2dp"
-                    android:textAppearance="?attr/textAppearanceBodySmall"
-                    android:textColor="?attr/colorOnSurfaceVariant"
-                    android:text="@string/psk_rotate_help"
-                    android:visibility="gone" />
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/psk_random"
@@ -422,6 +407,26 @@
             android:text="@string/paths_none"
             android:visibility="gone"
             tools:visibility="visible" />
+
+        <!-- Relay opt-out (docs/p2p-plan.md §8). Its own card, like the discovery and direct switches,
+             because it governs a behaviour rather than a field. Placed after the connection switches
+             and before the limits: it is about how this device participates, not about data volumes.
+             8dp margin matches the inter-group spacing of the two switches above. -->
+        <com.google.android.material.card.MaterialCardView
+            style="?attr/materialCardViewFilledStyle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp">
+
+            <com.google.android.material.materialswitch.MaterialSwitch
+                android:id="@+id/relay_opt_out"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="12dp"
+                android:gravity="center_vertical|start"
+                android:text="@string/switch_relay_opt_out"
+                android:textAppearance="?attr/textAppearanceBodyLarge" />
+        </com.google.android.material.card.MaterialCardView>
 
         <!-- ===== Transfer limits ===== -->
         <TextView style="@style/ClipSync.SectionTitle" android:text="@string/section_limits" />

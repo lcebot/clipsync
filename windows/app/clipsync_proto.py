@@ -30,6 +30,7 @@ __all__ = [
     "T_HELLO", "T_BYE", "T_PING", "T_PONG", "T_KEYS", "T_CLIP",
     "T_OFFER", "T_WANT", "T_HAVE", "T_SKIP", "T_CHUNK", "T_PULL", "T_END", "T_ABORT",
     "T_PAIR_ASK", "T_PAIR_KEY",
+    "T_RELAY_ASK", "T_RELAY_OK", "T_RELAY_NO",
     "BYE_IDLE", "PROTOCOL_VERSION", "READ_TIMEOUT", "hkdf_sha256", "SecureChannel",
 ]
 
@@ -62,6 +63,10 @@ T_CHUNK, T_PULL, T_END, T_ABORT = 11, 12, 13, 14
 # Pairing (docs/p2p-plan.md §12): ask for the key, and here it is.  Ordinary frames on an ordinary
 # channel, reached after an ordinary handshake and an ordinary HELLO -- only the key differs.
 T_PAIR_ASK, T_PAIR_KEY = 15, 16
+
+# Relay coordination (docs/p2p-plan.md §7): the waiter asks a higher-priority LAN peer to relay a
+# file, the relay accepts or declines, and on acceptance it sends a normal OFFER when it has the data.
+T_RELAY_ASK, T_RELAY_OK, T_RELAY_NO = 17, 18, 19
 # 2: HELLO is exchanged in both directions and carries the node id, type, persistence and battery
 # bucket (docs/p2p-plan.md §2). A clean break, by §9 — a version 1 peer is refused rather than
 # tolerated, because a peer that cannot name itself cannot be deduplicated or recognised as self.
@@ -70,7 +75,7 @@ T_PAIR_ASK, T_PAIR_KEY = 15, 16
 # open its own data connections for a file at the same moment as the other end opens its, because
 # the rule that stops that is the field it does not send.  Every file would move twice.  A version
 # check turns that into one refused connection with a plain message.
-PROTOCOL_VERSION = 3
+PROTOCOL_VERSION = 4
 READ_TIMEOUT = 90          # seconds without any frame -> drop client
 
 
@@ -123,6 +128,7 @@ class SecureChannel:
         # and a dialler that cannot tell those apart redials into the link it just lost.
         self.superseded = False
         self.matched_secret = None     # the secret that authenticated (set on first recv)
+        self.clock_offset = 0          # NTP-style offset to peer in ms: peer_clock = my_clock + offset (§6)
         self.send_lock = threading.Lock()
         mine = os.urandom(32)
         if initiator:

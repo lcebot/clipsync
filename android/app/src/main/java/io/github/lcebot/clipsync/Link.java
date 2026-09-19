@@ -36,18 +36,11 @@ final class Link implements AutoCloseable {
 
         void onConnected(Link link);
 
-        /**
-         * How far into this peer's stream we have seen.
-         *
-         * <p>Keyed by <b>target</b> and not by node id, for a reason that only shows up here: the
-         * cursor has to go out in our HELLO, and the peer does not say who it is until its HELLO
-         * comes back. The target is the only name we have at that moment, and in practice it maps to
-         * one peer — a listed address, or the service instance mDNS resolved.
-         *
-         * <p>Asked for at handshake time rather than passed in: a connect can take as long as an
-         * mDNS browse, and a transfer finishing during it advances the cursor.
-         */
-        long lastSeq(String target);
+        /** Wall-clock ms of the current local clip, or 0 if none. */
+        long clipTs();
+
+        /** SHA-256 hex of the current local clip, or null if none. */
+        @Nullable String clipSha();
 
         /** The newest local clip, or null. Not consumed — every link delivers it once. */
         @Nullable Object pendingClip();
@@ -82,6 +75,15 @@ final class Link implements AutoCloseable {
      */
     private volatile String sentHash;
 
+    /**
+     * NTP-style clock offset to this peer, in milliseconds.
+     *
+     * <p>{@code peer_clock = my_clock + offset}. Updated on every PONG round trip, so it tracks
+     * drift without extra messages. Used to normalise an incoming version into the local clock
+     * domain before comparing (§6).
+     */
+    volatile long clockOffset;
+
     private Link(Owner owner, String target, Connection c) {
         this.owner = owner;
         this.target = target;
@@ -91,7 +93,7 @@ final class Link implements AutoCloseable {
     /** Completes the dialler's handshake, or throws having closed the socket it was given. */
     private static Link dialled(SyncService s, Owner o, String target, Connection c) throws Exception {
         try {
-            c.hello(s, o.lastSeq(target));
+            c.hello(s, o.clipTs(), o.clipSha());
         } catch (Exception e) {
             c.close();                     // the socket is ours from the moment we were handed it
             throw e;
@@ -122,7 +124,7 @@ final class Link implements AutoCloseable {
     static Link accepted(SyncService s, Owner o, Connection c) throws Exception {
         String target = c.peerLabel;
         try {
-            c.sendHello(s, o.lastSeq(target));
+            c.sendHello(s, o.clipTs(), o.clipSha());
         } catch (Exception e) {
             c.close();
             throw e;
@@ -185,9 +187,13 @@ final class Link implements AutoCloseable {
         close();
     }
 
-    /** One keep-alive frame, sent by the device's single heartbeat. */
+    /** One keep-alive frame, sent by the device's single heartbeat. Carries t1 for clock-offset measurement (§6). */
     void ping() throws Exception {
-        if (alive()) conn.send(Connection.T_PING);
+        if (alive()) {
+            org.json.JSONObject j = new org.json.JSONObject();
+            j.put("t1", System.currentTimeMillis());
+            conn.sendJson(Connection.T_PING, j);
+        }
     }
 
     /**

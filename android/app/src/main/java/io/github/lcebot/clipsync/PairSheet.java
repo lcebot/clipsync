@@ -470,7 +470,7 @@ final class PairSheet {
     static void generateAndOffer(Activity a, Host host) {
         try {
             Properties v = new Properties();
-            v.setProperty("psk", Crypto.randomPskHex());
+            Config.freshKey(v, Crypto.randomPskHex());
             v.setProperty("discovery", "true");
             Config.save(a, v);
             host.keyChanged();
