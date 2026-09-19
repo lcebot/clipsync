@@ -805,6 +805,14 @@ public class SyncService extends Service {
      */
     private final java.util.Map<String, Files.Partial> partials = new java.util.concurrent.ConcurrentHashMap<>();
 
+    /**
+     * @return the shared Partial, or null when one cannot be made — a MediaStore insert that fails
+     *         because the configured path is gone or storage is full. Caught here rather than thrown,
+     *         because the caller can answer SKIP and keep the link: letting it out of
+     *         {@code handleFrame} would tear down a working session over one undeliverable file, and
+     *         the peer would learn nothing about why. The reason goes to the log; the peer gets a
+     *         refusal it can act on.
+     */
     private Files.Partial partialFor(String sha, String name, String mime, long size, long seq) {
         Files.Partial p = partials.get(sha);
         if (p != null) return p;
@@ -812,7 +820,12 @@ public class SyncService extends Service {
             p = partials.get(sha);
             if (p != null) return p;
             p = Files.Partial.resume(this, sha);
-            if (p == null) p = Files.Partial.create(this, cfg.relativePath, name, mime, size, sha, seq);
+            if (p == null) try {
+                p = Files.Partial.create(this, cfg.relativePath, name, mime, size, sha, seq);
+            } catch (Exception e) {
+                Logger.w("cannot open a file for " + name + " under " + cfg.relativePath + ": " + e);
+                return null;
+            }
             if (p != null) partials.put(sha, p);
             return p;
         }
