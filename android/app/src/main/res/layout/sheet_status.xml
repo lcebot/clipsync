@@ -9,6 +9,7 @@
      and that is not known until it opens. Scrollable, because "three addresses of which one is
      failing" is the case this exists for and it is not the shortest one. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/sheet_root"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
@@ -24,9 +25,22 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:paddingHorizontal="24dp"
-        android:paddingBottom="8dp"
         android:textAppearance="?attr/textAppearanceTitleLarge"
         android:textColor="?attr/colorOnSurface" />
+
+    <!-- Under the title, not at the foot of the sheet. A bottom sheet arrives from the bottom edge,
+         so its last line is the one the animation sweeps past and the one a partially expanded sheet
+         is most likely to cut off — the worst place to put the instruction for using everything
+         above it. Here it reads as a subtitle to "Peers", which is what it is. -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingHorizontal="24dp"
+        android:paddingTop="2dp"
+        android:paddingBottom="8dp"
+        android:textAppearance="?attr/textAppearanceBodySmall"
+        android:textColor="?attr/colorOnSurfaceVariant"
+        android:text="@string/dialog_tap_to_copy" />
 
     <androidx.core.widget.NestedScrollView
         android:layout_width="match_parent"
@@ -40,14 +54,4 @@
             android:orientation="vertical" />
     </androidx.core.widget.NestedScrollView>
 
-    <!-- 8dp from the last card, which already carries 8dp of its own: the hint is about the cards, so
-         it sits closer to them than the sheet's own bottom padding puts it from the edge. -->
-    <TextView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:paddingHorizontal="24dp"
-        android:textAppearance="?attr/textAppearanceBodySmall"
-        android:textColor="?attr/colorOnSurfaceVariant"
-        android:text="@string/dialog_tap_to_copy" />
 </LinearLayout>

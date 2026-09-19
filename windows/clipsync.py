@@ -1659,8 +1659,16 @@ def mdns_thread(cfg: Cfg):
     except ImportError:
         log.warning("mDNS disabled: 'zeroconf' not installed (pip install zeroconf)")
         return
-    host = socket.gethostname().split(".")[0]
-    name = cfg.mdns_name or f"ClipSync on {host}"
+    host = node_name()
+    # The device name, and nothing added to it. Android advertises Build.MODEL — the same string it
+    # puts in HELLO's `device` — while this end advertised "ClipSync on HOSTNAME", so one LAN showed
+    # two naming conventions and the browse results did not look like they came from one product.
+    #
+    # Unadorned is also the correct half of the disagreement to keep. The service type already says
+    # what the service is, so "ClipSync on" was repeating it in the one field that exists to say
+    # *which* device; and the instance name is what the peer sheet shows and what the dialler keys a
+    # target by, so it wants to read like a device, not like a sentence.
+    name = cfg.mdns_name or host
     props = {"v": str(PROTOCOL_VERSION)}
 
     zc = None

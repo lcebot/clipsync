@@ -1,6 +1,7 @@
 package io.github.lcebot.clipsync;
 
 import android.content.Context;
+import android.os.FileObserver;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -15,8 +16,9 @@ import java.util.List;
 
 /**
  * Service state shared with the UI across processes (the service lives in ":sync"):
- * files/status.json, rewritten by the service on every change and refreshed by the heartbeat, read
- * by MainActivity every second.
+ * files/status.json, rewritten by the service on every change and refreshed by the heartbeat. The UI
+ * is told about a rewrite rather than looking for one — see {@link #watch} — and keeps a slow poll
+ * only for the things no write can announce.
  *
  * <p><b>It carries a list now, not a connection.</b> The flat {@code via/lan/host/addr} tuple this
  * replaced could only describe one peer, which stopped being a fact about the device the moment it
@@ -102,6 +104,35 @@ public final class Status {
 
     private static File file(Context ctx) {
         return new File(ctx.getApplicationContext().getFilesDir(), "status.json");
+    }
+
+    /**
+     * Fire {@code onChange} whenever the service replaces the status file.
+     *
+     * <p>Push instead of poll, across a process boundary that has no other channel: the service
+     * writes this file, the UI reads it, and inotify is the one thing both ends already share. What
+     * it replaces is a read, a parse and a render once a second for as long as the app is in front,
+     * nearly all of which found nothing new — while still being up to a second late when there
+     * was.
+     *
+     * <p><b>The directory is watched, not the file</b>, and that is forced by {@link #write}: it
+     * writes a temporary file and renames it over the old one, so the inode a file watch attaches to
+     * is precisely the one being discarded. Such a watch fires once and is then bound to nothing.
+     * Watching the parent for {@code MOVED_TO} and filtering by name is the shape an atomic writer
+     * demands, and it is also why the two are documented together.
+     *
+     * <p>{@code onEvent} arrives on the observer's own thread, so the caller has to marshal. The
+     * returned observer must be held in a field and started: an unreferenced FileObserver is
+     * collected and stops delivering, silently.
+     */
+    public static FileObserver watch(Context ctx, Runnable onChange) {
+        File f = file(ctx);
+        String name = f.getName();
+        return new FileObserver(f.getParentFile(), FileObserver.MOVED_TO | FileObserver.CLOSE_WRITE) {
+            @Override public void onEvent(int event, String path) {
+                if (name.equals(path)) onChange.run();
+            }
+        };
     }
 
     /**

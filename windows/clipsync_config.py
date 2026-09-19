@@ -270,8 +270,9 @@ def check_files_dir(s: str):
 
 
 def check_mdns_name(s: str):
-    """Empty means "ClipSync on <hostname>". A service instance name is otherwise free text; DNS-SD
-    caps its length at 63 bytes of UTF-8, and a dot would split it into labels."""
+    """Empty means this machine's name — the same string it declares as `device`, which is also what
+    Android advertises. A service instance name is otherwise free text; DNS-SD caps its length at
+    63 bytes of UTF-8, and a dot would split it into labels."""
     s = str(s).strip()
     if not s:
         return None

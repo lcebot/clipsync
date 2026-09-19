@@ -9,6 +9,7 @@ import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.FileObserver;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
@@ -127,16 +128,48 @@ public class MainActivity extends AppCompatActivity {
     // lines written in this process arrive here; lines written by the :sync process arrive through
     // the file, picked up by the poll below
     private final Logger.Listener logListener = line -> ui.post(this::showLog);
-    // the service runs in its own process: its log and state reach us through files, polled 1/s
+    // The log is a tail: it grows by appending, there is no "the whole thing changed" event to wait
+    // for, and a second's latency on a line of text is not felt. So it is still polled.
     private final Runnable tick = new Runnable() {
         @Override
         public void run() {
             Logger.refresh();
             showLog();
-            refreshStatus();
             ui.postDelayed(this, 1000);
         }
     };
+
+    /**
+     * Read the status file and render it. Posted, never called from the observer's thread.
+     *
+     * <p>Both users of a status change end here: the file watch, which is the normal path, and the
+     * slow poll below.
+     */
+    private final Runnable statusChanged = this::refreshStatus;
+    /**
+     * Coalesces a burst. One event on the service side — a network change, a reload — makes several
+     * threads rewrite the file within a few milliseconds of each other, and rendering each of those
+     * would start a transition and cancel it with the next.
+     */
+    private static final long STATUS_DEBOUNCE_MS = 60;
+    /**
+     * The backstop, and it cannot be removed however good the watch is, because two of the things
+     * this render decides are <b>timeouts</b>: {@code Snapshot.alive()}, which is how a service that
+     * was killed is noticed, and {@link #WAIT_TIMEOUT_MS}, which hands the buttons back when a start
+     * never arrives. Neither has an event — they are both the absence of one — so something has to
+     * look. Five seconds is fine against a 120 s liveness window and a 12 s wait, and it is a
+     * twentieth of the work the old one-second poll did.
+     */
+    private static final long STATUS_POLL_MS = 5_000;
+    private final Runnable statusPoll = new Runnable() {
+        @Override
+        public void run() {
+            refreshStatus();
+            ui.postDelayed(this, STATUS_POLL_MS);
+        }
+    };
+    /** Held in a field on purpose: an unreferenced FileObserver is collected and stops delivering. */
+    private FileObserver statusWatch;
 
     /**
      * Brings the visible log up to date, appending where it can.
@@ -807,103 +840,261 @@ public class MainActivity extends AppCompatActivity {
      * instead of previewing an exit from the app.
      */
     private void showConnectionDetails() {
-        Status.Snapshot s = Status.read(this);
         BottomSheetDialog sheet = new BottomSheetDialog(this);
         sheet.setContentView(R.layout.sheet_status);
         TextView title = sheet.findViewById(R.id.sheet_title);
         ViewGroup list = sheet.findViewById(R.id.sheet_list);
         if (title == null || list == null) return;
         title.setText(R.string.sheet_title);
-
-        List<Status.Peer> lan = new ArrayList<>(), wan = new ArrayList<>();
-        for (Status.Peer p : s.peers) (p.lan ? lan : wan).add(p);
-        addPeerGroup(list, R.string.sheet_on_lan, lan);
-        addPeerGroup(list, R.string.sheet_over_internet, wan);
-        if (!s.targets.isEmpty()) {
-            addHeader(list, R.string.sheet_not_connected);
-            for (Status.Target t : s.targets) {
-                View card = addCard(list, t.target, t.target);
-                // Red only when there is something to act on. A target deferring to another route to
-                // the same machine, or recognised as this device, is the system choosing correctly —
-                // painting that as an error says something is broken when nothing is. See
-                // Status.Target.fault.
-                if (t.reason != null) field(card, R.string.field_reason, t.reason, t.fault);
-            }
-        }
-        if (list.getChildCount() == 0) addCard(list, getString(R.string.sheet_none), null);
+        sheetList = list;
+        // The scene root is the dialog's CoordinatorLayout, one level above the sheet frame — not the
+        // sheet's own content, which is where this started and which is not enough.
+        //
+        // A bottom sheet is anchored to the bottom edge, so when a card goes the frame gets shorter
+        // by moving its TOP edge down. Inside that frame nothing moves: the title is still at y=0 of
+        // its parent, and ChangeBounds on the content therefore has nothing to animate for it. The
+        // view whose bounds actually change is the frame, and to capture that the scene root has to
+        // be its parent. With the coordinator as the root, one transition carries the whole thing —
+        // the sheet's top edge, and the cards reflowing inside it, on the same clock.
+        //
+        // Falls back to the content root if the id ever moves: a sheet that animates its cards and
+        // snaps its frame is worse than one that animates both, and better than one that crashes.
+        sheetRoot = sheet.findViewById(com.google.android.material.R.id.coordinator);
+        if (sheetRoot == null) sheetRoot = sheet.findViewById(R.id.sheet_root);
+        // Guarded on identity: a listener fires after its dialog is gone, and one that cleared the
+        // fields unconditionally would tear down a *newer* sheet that had already claimed them.
+        sheet.setOnDismissListener(d -> {
+            if (sheetList == list) { sheetList = null; sheetRoot = null; }
+        });
+        renderSheet(Status.read(this), false);
         sheet.show();
     }
 
-    private void addPeerGroup(ViewGroup list, int headerRes, List<Status.Peer> peers) {
-        if (peers.isEmpty()) return;
-        addHeader(list, headerRes);
-        for (Status.Peer p : peers) {
-            String name = p.name == null || p.name.isEmpty() ? "?" : p.name;
-            String addr = p.addr == null ? "?" : p.addr;
-            // The copied text is unchanged: name, then the FULL id, then the address, one per line.
-            // The card shows the id's first 8 characters because 36 are unreadable at a glance, and
-            // copying is how you get the rest — so the two must not be the same string.
-            View card = addCard(list, name, name + "\n" + (p.id == null ? "" : p.id) + "\n" + addr);
-            // Monospace for the two that are machine-readable strings: hex digits and dotted quads are
-            // read character by character, and a proportional font makes 1/l and 0/O work for it.
-            field(card, R.string.field_id, Node.shortId(p.id), false)
-                    .setTypeface(android.graphics.Typeface.MONOSPACE);
-            field(card, R.string.field_type, p.type == null ? "?" : p.type, false);
-            field(card, R.string.field_address, addr, false)
-                    .setTypeface(android.graphics.Typeface.MONOSPACE);
+    /**
+     * The open sheet, or null. Held so the once-a-second tick can keep it current.
+     *
+     * <p>It used to be built once and left to go stale, which is exactly wrong for the thing it
+     * exists to show: someone opens it *because* a peer is missing, and then watches for it to come
+     * back. A sheet that cannot change is a sheet you have to close and reopen to use.
+     */
+    private ViewGroup sheetList;
+    private View sheetRoot;
+
+    /** One entry the sheet shows: a group heading, a connected peer, or a target that is not. */
+    private static final class Row {
+        final String key;                 // identity across a refresh, not a label
+        final int header;                 // a string resource, or 0
+        final Status.Peer peer;
+        final Status.Target target;
+
+        Row(String key, int header, Status.Peer peer, Status.Target target) {
+            this.key = key; this.header = header; this.peer = peer; this.target = target;
         }
     }
 
-    private void addHeader(ViewGroup list, int textRes) {
-        TextView h = (TextView) getLayoutInflater().inflate(R.layout.item_status_header, list, false);
-        h.setText(textRes);
-        // A heading, and said so: TalkBack can then jump between the groups instead of reading every
-        // peer to find where the next one starts, which in a list like this is the whole navigation.
-        h.setAccessibilityHeading(true);
-        list.addView(h);
+    /**
+     * What the sheet should contain, in order, for this snapshot.
+     *
+     * <p>Keys are the point of this list. A heading is keyed by its own string, a peer by its node
+     * id, a target by its name — so a refresh can tell "this card is still the same device" from
+     * "a different device now occupies that position", which is the difference between reflowing a
+     * list and rebuilding it under the reader's eyes.
+     */
+    private List<Row> rowsFor(Status.Snapshot s) {
+        List<Row> rows = new ArrayList<>();
+        List<Status.Peer> lan = new ArrayList<>(), wan = new ArrayList<>();
+        for (Status.Peer p : s.peers) (p.lan ? lan : wan).add(p);
+        group(rows, R.string.sheet_on_lan, lan);
+        group(rows, R.string.sheet_over_internet, wan);
+        if (!s.targets.isEmpty()) {
+            rows.add(new Row("h:down", R.string.sheet_not_connected, null, null));
+            for (Status.Target t : s.targets) rows.add(new Row("t:" + t.target, 0, null, t));
+        }
+        if (rows.isEmpty()) rows.add(new Row("none", 0, null, null));
+        return rows;
+    }
+
+    private void group(List<Row> rows, int headerRes, List<Status.Peer> peers) {
+        if (peers.isEmpty()) return;      // no members, no heading: see renderSheet
+        rows.add(new Row("h:" + headerRes, headerRes, null, null));
+        // The id, not the name or the address: a peer that moves from Wi-Fi to cellular keeps its
+        // card and slides between the two sections instead of vanishing from one and appearing in
+        // the other as a different device.
+        for (Status.Peer p : peers) rows.add(new Row("p:" + p.id, 0, p, null));
     }
 
     /**
-     * One device card, empty of fields. Add them with {@link #field}.
+     * Bring the sheet to this snapshot, animating what changed.
      *
-     * @param copyText what tapping the card copies, or null for a card that is not a device at all
-     *                 ("No peers connected") and therefore not a control
-     * @return the card, to pass back to {@code field}
+     * <p>A diff and not a rebuild. Rebuilding once a second would cross-fade every card on the screen
+     * whether or not anything about it moved, and would throw away the scroll position while it was
+     * at it. So views are matched to rows by key: the ones whose key is gone fade out, the ones whose
+     * key is new fade in, and every survivor is re-bound in place and slides to wherever the others
+     * left it.
+     *
+     * <p>A section heading is an ordinary keyed row with no members of its own, which is what makes
+     * "the heading leaves with its last card" fall out rather than need arranging: {@link #group}
+     * emits no heading for an empty section, so the heading's key disappears in the same pass as the
+     * card's and the two fade together.
+     *
+     * <p>The new views are created <b>before</b> the transition begins and while they are still
+     * detached, because {@link #visibilityMotion} needs to name the views that fade — and a view that
+     * is not in the start scene is one that appears. The ones that are leaving are named from the
+     * container as it stands.
      */
-    private View addCard(ViewGroup list, String name, String copyText) {
+    private void renderSheet(Status.Snapshot s, boolean animate) {
+        ViewGroup list = sheetList;
+        if (list == null) return;
+        List<Row> rows = rowsFor(s);
+
+        List<View> fading = new ArrayList<>();
+        java.util.Set<String> wanted = new java.util.HashSet<>();
+        for (Row r : rows) wanted.add(r.key);
+        for (int i = 0; i < list.getChildCount(); i++) {
+            View child = list.getChildAt(i);
+            if (!wanted.contains(String.valueOf(child.getTag()))) fading.add(child);
+        }
+        // Built here, still unattached: created after beginDelayedTransition they would be part of
+        // neither scene, and named as fade targets they are exactly what MaterialFade animates in.
+        java.util.Map<String, View> fresh = new java.util.LinkedHashMap<>();
+        for (Row r : rows) {
+            if (childWithKey(list, r.key) != null) continue;
+            View v = r.header != 0 ? makeHeader(list, r) : makeCard(list, r);
+            fresh.put(r.key, v);
+            fading.add(v);
+        }
+        if (animate && !fading.isEmpty() && sheetRoot != null) {
+            TransitionManager.beginDelayedTransition(sheetRoot, visibilityMotion(fading.toArray(new View[0])));
+        }
+
+        for (int i = list.getChildCount() - 1; i >= 0; i--) {
+            if (!wanted.contains(String.valueOf(list.getChildAt(i).getTag()))) list.removeViewAt(i);
+        }
+        for (int i = 0; i < rows.size(); i++) {
+            Row r = rows.get(i);
+            View v = childWithKey(list, r.key);
+            if (v == null) {
+                list.addView(fresh.get(r.key), i);
+            } else if (list.indexOfChild(v) != i) {
+                // Detached and reinserted, not faded: it is the same device in a new place, so the
+                // transition sees a bounds change and slides it there.
+                list.removeView(v);
+                list.addView(v, i);
+            }
+            if (r.header == 0) bindCard(list.getChildAt(i), r);
+        }
+    }
+
+    private static View childWithKey(ViewGroup list, String key) {
+        for (int i = 0; i < list.getChildCount(); i++) {
+            if (key.equals(list.getChildAt(i).getTag())) return list.getChildAt(i);
+        }
+        return null;
+    }
+
+    private View makeHeader(ViewGroup list, Row r) {
+        TextView h = (TextView) getLayoutInflater().inflate(R.layout.item_status_header, list, false);
+        h.setTag(r.key);
+        h.setText(r.header);
+        // A heading, and said so: TalkBack can then jump between the groups instead of reading every
+        // peer to find where the next one starts, which in a list like this is the whole navigation.
+        h.setAccessibilityHeading(true);
+        return h;
+    }
+
+    /**
+     * An empty card with the fields its kind needs. The values arrive in {@link #bindCard}, which is
+     * what lets a refresh change them without replacing the card.
+     */
+    private View makeCard(ViewGroup list, Row r) {
         View card = getLayoutInflater().inflate(R.layout.item_status_card, list, false);
-        ((TextView) card.findViewById(R.id.card_name)).setText(name);
-        if (copyText != null) {
-            Haptics.onClick(card, () -> copy(copyText));
+        card.setTag(r.key);
+        if (r.peer != null) {
+            // Monospace for the two that are machine-readable strings: hex digits and dotted quads
+            // are read character by character, and a proportional font makes 1/l and 0/O work for it.
+            field(card, R.string.field_id).setTypeface(android.graphics.Typeface.MONOSPACE);
+            field(card, R.string.field_type);
+            field(card, R.string.field_address).setTypeface(android.graphics.Typeface.MONOSPACE);
+        } else if (r.target != null) {
+            field(card, R.string.field_reason);
+        }
+        return card;
+    }
+
+    private void bindCard(View card, Row r) {
+        if (r.peer != null) {
+            Status.Peer p = r.peer;
+            String name = p.name == null || p.name.isEmpty() ? "?" : p.name;
+            String addr = p.addr == null ? "?" : p.addr;
+            setTextIfChanged(card.findViewById(R.id.card_name), name);
+            value(card, 0, Node.shortId(p.id), false);
+            value(card, 1, p.type == null ? "?" : p.type, false);
+            value(card, 2, addr, false);
+            // The copied text is unchanged: name, then the FULL id, then the address, one per line.
+            // The card shows the id's first 8 characters because 36 are unreadable at a glance, and
+            // copying is how you get the rest — so the two must not be the same string.
+            clickToCopy(card, name + "\n" + (p.id == null ? "" : p.id) + "\n" + addr);
+        } else if (r.target != null) {
+            setTextIfChanged(card.findViewById(R.id.card_name), r.target.target);
+            // Red only when there is something to act on. A target deferring to another route to the
+            // same machine, or recognised as this device, is the system choosing correctly — painting
+            // that as an error says something is broken when nothing is. See Status.Target.fault.
+            value(card, 0, r.target.reason, r.target.fault);
+            clickToCopy(card, r.target.target);
         } else {
+            setTextIfChanged(card.findViewById(R.id.card_name), getString(R.string.sheet_none));
             // Not just unclickable: a card with clickable=true carries a ripple and takes focus, so
             // leaving those on gives a placeholder the feedback of a control that does nothing. The
             // card keeps its surface; only the affordance goes.
             card.setClickable(false);
             card.setFocusable(false);
         }
-        list.addView(card);
-        return card;
     }
 
     /**
-     * One labelled field inside a card.
+     * Copy this text when the card is tapped, re-binding only when the text actually changed.
      *
-     * @param fault the only thing in this sheet that gets colorError — see Status.Target.fault
-     * @return the value view, for the callers that want a different typeface on it
+     * <p>{@code bindCard} runs once a second per card for as long as the sheet is open, and a fresh
+     * listener each time is a fresh lambda holding a fresh string — garbage produced by a sheet that
+     * is simply sitting there. The text doubles as the memo of what is already bound; the tag key is
+     * an id from this layout, which is the usual way to keep a view's own bookkeeping on the view.
      */
-    private TextView field(View card, int labelRes, String value, boolean fault) {
+    private void clickToCopy(View card, String text) {
+        if (text.equals(card.getTag(R.id.card_name))) return;
+        card.setTag(R.id.card_name, text);
+        Haptics.onClick(card, () -> copy(text));
+    }
+
+    /** One labelled field, value still empty. Position in the card is the caller's order. */
+    private TextView field(View card, int labelRes) {
         ViewGroup fields = card.findViewById(R.id.card_fields);
         // Revealed on the first field rather than always visible: its 8dp top margin would otherwise
         // hang off the bottom of a card that has no fields at all ("No peers connected").
         fields.setVisibility(View.VISIBLE);
         View row = getLayoutInflater().inflate(R.layout.item_status_field, fields, false);
         ((TextView) row.findViewById(R.id.field_label)).setText(labelRes);
-        TextView v = row.findViewById(R.id.field_value);
-        v.setText(value == null || value.isEmpty() ? "?" : value);
-        if (fault) v.setTextColor(MaterialColors.getColor(v, androidx.appcompat.R.attr.colorError));
         fields.addView(row);
-        return v;
+        return row.findViewById(R.id.field_value);
+    }
+
+    /**
+     * Set one field's value by position.
+     *
+     * @param fault the only thing in this sheet that gets colorError — see Status.Target.fault. Reset
+     *              on every call, not only when true: a target can stop being a fault, and a colour
+     *              left behind outlives the condition that justified it.
+     */
+    private void value(View card, int index, String text, boolean fault) {
+        ViewGroup fields = card.findViewById(R.id.card_fields);
+        if (index >= fields.getChildCount()) return;
+        TextView v = fields.getChildAt(index).findViewById(R.id.field_value);
+        setTextIfChanged(v, text == null || text.isEmpty() ? "?" : text);
+        // Compared before it is set, like every other setter on the once-a-second path: setTextColor
+        // invalidates whether or not the colour differs.
+        int want = MaterialColors.getColor(v, fault
+                ? androidx.appcompat.R.attr.colorError
+                : com.google.android.material.R.attr.colorOnSurface);
+        if (v.getCurrentTextColor() != want) v.setTextColor(want);
     }
 
     private void copy(String text) {
@@ -930,6 +1121,14 @@ public class MainActivity extends AppCompatActivity {
         Logger.addListener(logListener);
         wasConnected = false;
         ui.post(tick);
+        ui.post(statusPoll);
+        statusWatch = Status.watch(this, () -> {
+            // Off the observer's thread and coalesced in one step: removeCallbacks + postDelayed is
+            // the whole debounce, and it lands the work on the thread that may touch views.
+            ui.removeCallbacks(statusChanged);
+            ui.postDelayed(statusChanged, STATUS_DEBOUNCE_MS);
+        });
+        statusWatch.startWatching();
     }
 
     @Override
@@ -937,6 +1136,12 @@ public class MainActivity extends AppCompatActivity {
         super.onPause();
         Logger.removeListener(logListener);
         ui.removeCallbacks(tick);
+        ui.removeCallbacks(statusPoll);
+        ui.removeCallbacks(statusChanged);
+        if (statusWatch != null) {
+            statusWatch.stopWatching();
+            statusWatch = null;
+        }
         pulse.cancel();
     }
 
@@ -1001,6 +1206,10 @@ public class MainActivity extends AppCompatActivity {
         // Tappable whenever there is anything to list — which now includes "nothing is connected and
         // here is why", the case the sheet is most worth opening for.
         statusChip.setClickable(!s.peers.isEmpty() || !s.targets.isEmpty());
+        // The same snapshot the chip was just built from, rather than a second read: two reads a
+        // second of a file another process rewrites can disagree, and the chip saying Connected (2)
+        // above a sheet listing one peer is the kind of contradiction nobody can explain.
+        renderSheet(s, true);
 
         if (connected != wasConnected) {
             wasConnected = connected;

@@ -337,7 +337,9 @@ class App:
                         variable=self.discovery, command=self.revalidate
                         ).grid(row=0, column=0, columnspan=2, sticky="w", padx=PAD, pady=(PAD, 0))
         self.mdns_name = Field(lan, 1, "Service name (optional)")
-        ttk.Label(lan, text="Empty means “ClipSync on %s”." % _hostname(), foreground="#49454f"
+        # The hostname bare, because that is now the default: Android advertises its device name and
+        # this end advertised "ClipSync on HOSTNAME", so one LAN showed two conventions in one list.
+        ttk.Label(lan, text="Empty means “%s”, this PC's name." % _hostname(), foreground="#49454f"
                   ).grid(row=3, column=1, sticky="w", padx=PAD, pady=(0, PAD))
         section_row += 1
 
