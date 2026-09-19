@@ -878,7 +878,8 @@ public class MainActivity extends AppCompatActivity {
      * back. A sheet that cannot change is a sheet you have to close and reopen to use.
      */
     private ViewGroup sheetList;
-    private View sheetRoot;
+    /** The transition's scene root, which is why it is a ViewGroup and not a View. */
+    private ViewGroup sheetRoot;
 
     /** One entry the sheet shows: a group heading, a connected peer, or a target that is not. */
     private static final class Row {
