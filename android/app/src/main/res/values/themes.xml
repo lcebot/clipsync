@@ -46,7 +46,10 @@
         <item name="colorOnSurfaceVariant">@color/brand_on_surface_variant</item>
         <item name="colorSurfaceInverse">@color/brand_inverse_surface</item>
         <item name="colorOnSurfaceInverse">@color/brand_inverse_on_surface</item>
-        <item name="colorSurfaceTint">@color/brand_primary</item>
+        <!-- No colorSurfaceTint: that is a Compose role, not one the Views library declares, and
+             naming it fails resource linking. The elevation tint here is elevationOverlayColor,
+             which the parent already points at ?attr/colorPrimary — a theme reference, so it
+             follows whatever colorPrimary ends up being and needs no restating. -->
 
         <item name="colorSurfaceDim">@color/brand_surface_dim</item>
         <item name="colorSurfaceBright">@color/brand_surface_bright</item>
@@ -58,6 +61,30 @@
 
         <item name="colorOutline">@color/brand_outline</item>
         <item name="colorOutlineVariant">@color/brand_outline_variant</item>
+    </style>
+
+    <!-- The roles whose MEANING is fixed, re-pinned on top of the wallpaper palette.
+
+         Monet is a palette, not a vocabulary. It is welcome to decide what "this app's accent" looks
+         like — that is the whole point of it — but it does not get a say in what *error* looks like,
+         because red is not a decorative choice here: it is the difference between "a target is
+         deferring to a better route" and "a target you need to fix", and between the battery card
+         and the rest of the settings page. A wallpaper that turned the error container green would
+         leave those distinctions drawn in a colour that means the opposite of what they say.
+
+         Applied by ClipSyncApp AFTER the dynamic overlay, because that overlay is applied with
+         force=true and would otherwise win. Whether it currently touches these roles at all is not
+         the point — Android 12's palette had no error hue, later ones do, and this app should not
+         have to re-check which platform version decided what. Pinning makes the guarantee ours.
+
+         Only the error family. colorTertiary — the peer sheet's "asleep" accent — is deliberately
+         NOT here: that one is an accent doing an accent's job, and it should follow the wallpaper
+         with everything else. -->
+    <style name="ThemeOverlay.ClipSync.Semantic" parent="">
+        <item name="colorError">@color/brand_error</item>
+        <item name="colorOnError">@color/brand_on_error</item>
+        <item name="colorErrorContainer">@color/brand_error_container</item>
+        <item name="colorOnErrorContainer">@color/brand_on_error_container</item>
     </style>
 
     <!-- Segmented-button segment: normal button type (labelLarge); three labels fit a phone width
