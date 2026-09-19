@@ -1,10 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Connection details, shown when the status chip is tapped.
+<!-- Peers, shown when the status chip is tapped.
      A bottom sheet rather than a dialog for two reasons: M3 reserves dialogs for decisions that
      need an answer, while this is supplementary content you glance at and dismiss — and
      BottomSheetDialog is one of the few components with predictive back built in, so the gesture
      animates the sheet back down without a line of animation code.
-     Each value wraps and copies itself when tapped. -->
+
+     The body is empty here and filled by MainActivity, because its length is the number of peers
+     and that is not known until it opens. Scrollable, because "three addresses of which one is
+     failing" is the case this exists for and it is not the shortest one. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
@@ -21,51 +24,21 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:paddingHorizontal="24dp"
-        android:paddingBottom="12dp"
+        android:paddingBottom="8dp"
         android:textAppearance="?attr/textAppearanceTitleLarge"
         android:textColor="?attr/colorOnSurface" />
 
-    <TextView
+    <androidx.core.widget.NestedScrollView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:paddingHorizontal="24dp"
-        android:textAppearance="?attr/textAppearanceLabelMedium"
-        android:textColor="?attr/colorPrimary"
-        android:text="@string/dialog_peer" />
+        android:fillViewport="true">
 
-    <TextView
-        android:id="@+id/sheet_peer"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:background="?attr/selectableItemBackground"
-        android:clickable="true"
-        android:focusable="true"
-        android:paddingHorizontal="24dp"
-        android:paddingVertical="8dp"
-        android:textAppearance="?attr/textAppearanceBodyLarge"
-        android:textColor="?attr/colorOnSurface" />
-
-    <TextView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="12dp"
-        android:paddingHorizontal="24dp"
-        android:textAppearance="?attr/textAppearanceLabelMedium"
-        android:textColor="?attr/colorPrimary"
-        android:text="@string/dialog_address" />
-
-    <TextView
-        android:id="@+id/sheet_address"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:background="?attr/selectableItemBackground"
-        android:clickable="true"
-        android:focusable="true"
-        android:paddingHorizontal="24dp"
-        android:paddingVertical="8dp"
-        android:fontFamily="monospace"
-        android:textAppearance="?attr/textAppearanceBodyMedium"
-        android:textColor="?attr/colorOnSurface" />
+        <LinearLayout
+            android:id="@+id/sheet_list"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical" />
+    </androidx.core.widget.NestedScrollView>
 
     <TextView
         android:layout_width="match_parent"

@@ -32,7 +32,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.json.JSONObject;
 
 /**
- * One authenticated TCP session to the Windows server. Wire format documented in clipsync.py.
+ * One authenticated TCP session with one peer, dialled or accepted. Wire format in clipsync.py.
  */
 public final class Connection implements AutoCloseable {
     public static final int T_HELLO = 1, T_CLIP = 2, T_PING = 3, T_PONG = 4, T_OFFER = 6, T_WANT = 7,
@@ -53,9 +53,17 @@ public final class Connection implements AutoCloseable {
      * 2: HELLO is exchanged in both directions and carries the node id, type, persistence and
      * battery bucket (docs/p2p-plan.md §2). A clean break, by §9 — a version 1 peer is refused
      * rather than tolerated, because a peer that cannot name itself cannot be deduplicated or
-     * recognised as self. Both ends must be updated together.
+     * recognised as self.
+     *
+     * <p>3: HELLO also carries {@code port} and {@code data_out}, and every device listens.
+     *
+     * <p>The bump is not bookkeeping. The two new fields have defaults, so a version-2 peer would
+     * connect and work — and then answer a WANT by opening its own data connections at the same
+     * moment as this end opens its, because the rule that stops that is the field it does not send.
+     * Every file would move twice. A failure a version check turns into one refused connection with
+     * a plain message is worth a version number; both ends are updated together regardless.
      */
-    public static final int PROTOCOL_VERSION = 2;
+    public static final int PROTOCOL_VERSION = 3;
     /** Chunk size (CHUNK frames carry u32 index ‖ bytes); also the largest frame anyone buffers. */
     public static final int CHUNK = 512 * 1024;
 
@@ -66,13 +74,20 @@ public final class Connection implements AutoCloseable {
     private static final int CONNECT_TIMEOUT_MS = 10_000;
     private static final int MDNS_CONNECT_TIMEOUT_MS = 3_000;   // LAN: fail fast
     private static final int READ_TIMEOUT_MS = 90_000;
+    /**
+     * How long an accepted socket may stay silent before it has said who it is.
+     *
+     * <p>Much shorter than {@link #READ_TIMEOUT_MS} on purpose. An authenticated peer is allowed to
+     * be quiet for a heartbeat interval; before that, silence is either a stuck network or something
+     * that is not a peer at all, and either way it is holding one of a bounded number of accept
+     * workers. Raised to the session timeout the moment the HELLO lands.
+     */
+    private static final int HANDSHAKE_TIMEOUT_MS = 15_000;
 
-    private static final long MDNS_CACHE_MS = 24 * 3600_000L;
-
-    /** Last address that worked via mDNS (and its advertised name); tried before a fresh browse. */
-    private static volatile InetSocketAddress mdnsCached;
-    private static volatile String mdnsCachedName;
-    private static volatile long mdnsCachedAt;
+    // The single "last mDNS address that worked" cache is gone, along with the single LAN peer it
+    // assumed. What replaces it is the service's own map of discovered instances, refreshed by a
+    // browse on a schedule: a cache of one address could not hold two peers, and a cache with a
+    // 24-hour life could not notice one of them leaving.
 
     /**
      * Targets a handshake has proved to be this device.
@@ -92,9 +107,8 @@ public final class Connection implements AutoCloseable {
         if (target != null) selfTargets.add(Config.normalisePeer(target));
     }
 
-    /** Drop the cached LAN address and everything learned about self-targets (config changed). */
-    public static void forgetMdns() {
-        mdnsCached = null;
+    /** Forget everything learned at run time about targets (the configuration changed). */
+    public static void forgetLearned() {
         selfTargets.clear();
     }
 
@@ -103,10 +117,26 @@ public final class Connection implements AutoCloseable {
     private final OutputStream out;
     private final byte[] txKey, rxKey;
     private final int maxFrame;
+    /** This device's own listening port, declared in HELLO so an accepted peer can reach us back. */
+    private final int listenPort;
     private long txCtr = 0, rxCtr = 0;
     private final Object sendLock = new Object();
-    /** "direct" or "mdns" — which path this session came up on (for logs and the UI). */
+    /** "direct", "mdns" or "inbound" — which path this session came up on (for logs and the UI). */
     public final String via;
+    /**
+     * True when the peer opened this connection, not us.
+     *
+     * <p>It decides <b>which half of the nonce exchange</b> to perform, and which key label is ours:
+     * the labels are named for who opened the socket, so an accepted connection is the "s" side of
+     * the peer's link. Getting that backwards does not fail at the handshake, which exchanges
+     * plaintext nonces; it fails at the first frame, as a decrypt error.
+     *
+     * <p>It is also half of {@link #drivesTransfer()} — the other half being what the peer declares
+     * it can do — and it is why {@link #peerPort} exists: an accepted socket's remote port is the
+     * peer's ephemeral source port, so the listening port has to be declared rather than observed.
+     * (docs/p2p-plan.md §5, §7)
+     */
+    public final boolean inbound;
     /** Human-readable peer: listed address or mDNS service name, plus the address actually used. */
     public final String peer;
     /** Just the name part: the listed address, or the advertised mDNS service name. */
@@ -114,12 +144,28 @@ public final class Connection implements AutoCloseable {
     /** What the peer calls itself, once it has said so in HELLO; the address until then. */
     public String peerLabel;
     /**
-     * True when the PC is on our LAN: reached via mDNS, or its address is on one of the prefixes
+     * True when the peer is on our LAN: reached via mDNS, or its address is on one of the prefixes
      * of the network we are using. Decides which file-size limit applies (sent in HELLO too).
+     *
+     * <p>Not final any more, because an accepted connection learns it from the peer's HELLO and the
+     * HELLO arrives after the constructor. Taking the dialler's word rather than re-deciding is
+     * deliberate and is what the PC has always done: both ends must hold the <em>same</em> value or
+     * §5's first dedup rule can reach opposite verdicts at the two ends and close both links.
      */
-    public final boolean lanPeer;
+    public volatile boolean lanPeer;
     /** Where this session connected; data connections for file transfer go to the same place. */
     public final InetSocketAddress remote;
+    /**
+     * The network this session rides on, or null if it could not be established.
+     *
+     * <p>Two things need it. A socket <b>bound</b> to a network fails immediately when that network
+     * goes away, instead of hanging until the 90-second read timeout — switching between Wi-Fi and
+     * cellular does not close a TCP socket, it leaves it half-open, and that delay was the whole of
+     * what "the drop is noticed at once" asks for. And with several peers, "which connections died"
+     * is a question that cannot be answered at all while sockets ride the default network
+     * anonymously. (docs/p2p-plan.md §5)
+     */
+    public final Network network;
 
     // ---- what the peer declared in its HELLO (protocol 2, docs/p2p-plan.md §2). Set by hello().
     /** The peer's node id. The key for link dedup, OFFER recipients and priority tie-breaks. */
@@ -130,6 +176,26 @@ public final class Connection implements AutoCloseable {
     public boolean peerPersistent;
     /** {@code mains} | {@code high} | {@code medium} | {@code low}. */
     public String peerBattery = "medium";
+    /**
+     * Where the peer listens, from its HELLO; the port of {@link #remote} until it says.
+     *
+     * <p>Needed only on an accepted connection, and needed badly there: data connections go to the
+     * peer's <em>listening</em> port, and the one visible on an accepted socket is the ephemeral
+     * source port of its dial, which reaches nothing. On a connection we opened the two are the same
+     * number, so this changes nothing in that direction.
+     */
+    public int peerPort;
+    /**
+     * Whether the peer can open data connections of its own.
+     *
+     * <p>A file's bytes move over separate connections, and <b>exactly one</b> of the two nodes must
+     * open them: both opening transfers the file twice, neither opening transfers it not at all.
+     * While a phone only ever dialled a PC that only ever accepted, the answer was structural and
+     * needed no field. It stopped being structural the moment the PC gained a client role, and the
+     * PC still has no code to open a data connection — so it declares that, and this end takes the
+     * job whoever dialled. See {@link #drivesTransfer()}.
+     */
+    public boolean peerDataOut;
 
     /**
      * One listed address. Resolves and connects to that name and nothing else.
@@ -139,51 +205,65 @@ public final class Connection implements AutoCloseable {
      * is exactly wrong now: the losers it closed are the other peers.
      */
     public static Connection toPeer(Context ctx, Config cfg, String peer, Network net) throws Exception {
-        return new Connection(cfg, new Object[]{connectDirect(peer, cfg.port), "direct", peer}, ctx, net);
+        return new Connection(cfg, new Object[]{connectDirect(peer, cfg.port, net), "direct", peer}, ctx, net, false);
     }
 
     /**
-     * The peer found on the local network.
+     * A connection a peer opened to us.
      *
-     * <p>Still one connection out of several candidates, and still a race — but the candidates here
-     * are the addresses of *one* PC, which typically advertises every adapter it has. Choosing among
-     * them is not the same thing as choosing among peers.
+     * <p>The device listens now, which is what makes phone-to-tablet possible at all: neither of
+     * them has a stable address the other can be configured with, and only one of the two needs to
+     * find the other for both to be connected. (docs/p2p-plan.md §13, phase 4)
      *
-     * @param net the active network, so the browse is pinned to it (may be null)
+     * <p>The name is the address until the peer says otherwise: on this side the HELLO arrives
+     * before we answer, so there is no window in which the peer is anonymous for long.
      */
-    public static Connection viaMdns(Context ctx, Config cfg, Network net) throws Exception {
-        InetSocketAddress cached = freshMdnsCache();
-        if (cached != null) {
-            try {
-                return new Connection(cfg, new Object[]{connectTo(cached, MDNS_CONNECT_TIMEOUT_MS), "mdns", mdnsCachedName}, ctx, net);
-            } catch (IOException e) {
-                Logger.i("cached mdns address failed: " + e);
-                mdnsCached = null;
-            }
-        }
-        Logger.i("mdns: browsing for " + cfg.mdnsTimeoutMs + "ms");
-        List<Mdns.Candidate> cands = Mdns.discover(ctx, net, cfg.mdnsTimeoutMs);
-        if (cands.isEmpty())
-            throw new IOException("mdns: no _clipsync._tcp service found (peer not advertising, "
-                    + "UDP 5353 blocked, or AP client isolation)");
-        // A PC typically advertises every adapter it has (VMware/Hyper-V/WSL/hotspot subnets
-        // included). Put addresses on the phone's own subnet first, then race them Happy-Eyeballs
-        // style instead of eating a 3 s timeout per dead address.
-        cands = OnLink.sort(ctx, net, cands);
-        Logger.i("mdns: " + cands.size() + " candidates, trying " + cands.get(0).addr + " first");
-        Won w = race(cands, MDNS_CONNECT_TIMEOUT_MS);
-        mdnsCached = w.c.addr;
-        mdnsCachedName = w.c.name;
-        mdnsCachedAt = System.currentTimeMillis();
-        return new Connection(cfg, new Object[]{w.s, "mdns", w.c.name}, ctx, net);
+    public static Connection accept(Context ctx, Config cfg, Socket s, Network net) throws Exception {
+        return new Connection(cfg, new Object[]{s, "inbound", String.valueOf(s.getRemoteSocketAddress())
+                .replaceFirst("^[^/]*/", "")}, ctx, net, true);
     }
 
-    /** A data connection to a known address (opened by the transfer workers, several in parallel). */
+    /**
+     * One peer found on the local network, reached at whichever of its addresses answers first.
+     *
+     * <p>It takes an instance rather than browsing for itself, and that is the difference between
+     * one peer and several. Browsing inside the connect meant "find the LAN peer and connect to it",
+     * which cannot express two of them; the browse now belongs to the service, which keeps one
+     * dialler per instance it has found, and this is only the connect.
+     *
+     * <p>Still a race, and still the right one: a machine typically advertises every adapter it has
+     * (VMware/Hyper-V/WSL/hotspot subnets included), so these are several routes to <em>one</em>
+     * peer. Addresses on our own subnet go first, then Happy-Eyeballs, rather than eating a 3 s
+     * timeout per dead address.
+     *
+     * @param net the active network, used to rank addresses by whether they are on-link
+     */
+    public static Connection toInstance(Context ctx, Config cfg, Mdns.Instance inst, Network net) throws Exception {
+        List<Mdns.Candidate> cands = new ArrayList<>();
+        for (InetSocketAddress a : inst.addrs) cands.add(new Mdns.Candidate(a, inst.name));
+        if (cands.isEmpty()) throw new IOException("mdns: " + inst.name + " advertised no usable address");
+        cands = OnLink.sort(ctx, net, cands);
+        Won w = race(cands, MDNS_CONNECT_TIMEOUT_MS, net);
+        return new Connection(cfg, new Object[]{w.s, "mdns", inst.name}, ctx, net, false);
+    }
+
+    /**
+     * A data connection to a known address (opened by the transfer workers, several in parallel).
+     *
+     * <p>Opened only by the end that {@link #drivesTransfer()} names, and aimed at the peer's
+     * declared listening port rather than at the control socket's remote port.
+     */
     public static Connection data(Config cfg, Connection control, String sha256, String device) throws Exception {
-        Connection c = new Connection(cfg, new Object[]{connectTo(control.remote, control.lanPeer ? MDNS_CONNECT_TIMEOUT_MS : CONNECT_TIMEOUT_MS),
-                control.via, "data"}, null, null);
+        // The peer's LISTENING port, not the port of the control socket. On a connection we opened
+        // they are the same number; on one we accepted, the control socket's is the ephemeral source
+        // port of the peer's dial and connecting to it reaches nothing at all.
+        InetSocketAddress to = new InetSocketAddress(control.remote.getAddress(), control.peerPort);
+        Connection c = new Connection(cfg, new Object[]{
+                connectTo(to, control.lanPeer ? MDNS_CONNECT_TIMEOUT_MS : CONNECT_TIMEOUT_MS, control.network),
+                control.via, "data"}, null, control.network, false);
         JSONObject hello = new JSONObject();
         hello.put("v", PROTOCOL_VERSION);
+        hello.put("id", Node.id());        // so an accepting peer can tell whose transfer this is
         hello.put("device", device);
         hello.put("role", "data");
         hello.put("sha256", sha256);
@@ -207,6 +287,20 @@ public final class Connection implements AutoCloseable {
      * @throws SelfConnection when the peer turns out to be this device
      */
     public void hello(Context ctx, long lastSeq) throws Exception {
+        sendHello(ctx, lastSeq);
+        readHello();
+    }
+
+    /**
+     * Our half of the declaration.
+     *
+     * <p>Separate from {@link #readHello()} because the two ends do them in opposite orders, and
+     * the order is not a detail: the dialler declares first because it has nothing to wait for,
+     * and the accepter answers — which means an accepted connection knows who the peer is
+     * <em>before</em> it has to say anything, and can therefore send a sequence cursor that is
+     * actually about that peer rather than a zero.
+     */
+    public void sendHello(Context ctx, long lastSeq) throws Exception {
         JSONObject mine = new JSONObject();
         mine.put("v", PROTOCOL_VERSION);
         mine.put("id", Node.id());
@@ -216,8 +310,19 @@ public final class Connection implements AutoCloseable {
         mine.put("battery", Node.battery(ctx));
         mine.put("last_seq", lastSeq);
         mine.put("lan", lanPeer);
+        mine.put("port", listenPort);       // an accepted connection cannot see this any other way
+        mine.put("data_out", true);         // this end can open data connections; see peerDataOut
         sendJson(T_HELLO, mine);
+    }
 
+    /**
+     * Read what the peer declares, and refuse it here if it cannot be talked to.
+     *
+     * @return the peer's HELLO, for the fields only the caller cares about ({@code last_seq},
+     *         and on an accepted connection {@code role} and {@code sha256})
+     * @throws SelfConnection when the peer turns out to be this device
+     */
+    public JSONObject readHello() throws Exception {
         Frame f = recv();
         if (f.type != T_HELLO) throw new IOException("expected HELLO, got frame type " + f.type);
         JSONObject theirs = new JSONObject(new String(f.payload, StandardCharsets.UTF_8));
@@ -225,17 +330,24 @@ public final class Connection implements AutoCloseable {
         if (v != PROTOCOL_VERSION)
             throw new IOException("protocol version mismatch (peer speaks " + v + ", we speak " + PROTOCOL_VERSION + ")");
         peerId = theirs.optString("id", null);
+        peerType = theirs.optString("type", "?");
+        peerPersistent = theirs.optBoolean("persistent", false);
+        peerBattery = theirs.optString("battery", "medium");
+        peerPort = theirs.optInt("port", peerPort);
+        peerDataOut = theirs.optBoolean("data_out", false);
+        String name = theirs.optString("device", "");
+        if (!name.isEmpty()) peerLabel = name;
+        socket.setSoTimeout(READ_TIMEOUT_MS);      // it has spoken; the short leash was for silence
+        if ("data".equals(theirs.optString("role"))) return theirs;   // a stream, not a peer
         // Protocol 2's premise is that a peer can name itself, and everything downstream assumes it:
         // a link with no id cannot be deduplicated, cannot be recognised as this device, and would
         // sit outside the map that the heartbeat, the broadcast and the status all iterate — running
         // but reaching nobody. Refusing here is much easier to diagnose than that.
         if (peerId == null || peerId.isEmpty()) throw new IOException("peer sent no node id");
-        peerType = theirs.optString("type", "?");
-        peerPersistent = theirs.optBoolean("persistent", false);
-        peerBattery = theirs.optString("battery", "medium");
-        String name = theirs.optString("device", "");
-        if (!name.isEmpty()) peerLabel = name;
-        if (peerId != null && peerId.equals(Node.id())) throw new SelfConnection(peerName);
+        if (peerId.equals(Node.id())) throw new SelfConnection(peerName);
+        // On an accepted connection the dialler's verdict is the one that counts (see lanPeer).
+        if (inbound && theirs.has("lan")) lanPeer = theirs.optBoolean("lan", lanPeer);
+        return theirs;
     }
 
     /** The peer reached by this connection turned out to be this device. */
@@ -253,31 +365,51 @@ public final class Connection implements AutoCloseable {
         }
     }
 
-    private Connection(Config cfg, Object[] r, Context ctx, Network net) throws Exception {
+    private Connection(Config cfg, Object[] r, Context ctx, Network net, boolean inbound) throws Exception {
         this.maxFrame = cfg.maxFrame();
+        this.listenPort = cfg.port;
+        this.inbound = inbound;
+        this.network = net;
         socket = (Socket) r[0];
         via = (String) r[1];
         remote = (InetSocketAddress) socket.getRemoteSocketAddress();
+        // The right answer for a connection we opened, and a placeholder for one we accepted until
+        // its HELLO corrects it.
+        peerPort = remote.getPort();
         peerName = String.valueOf(r[2]);
         peerLabel = peerName;
         peer = peerName + " [" + remote + "]";
         lanPeer = "mdns".equals(via) || (ctx != null && OnLink.isOnLink(ctx, net, socket.getInetAddress()));
-        socket.setSoTimeout(READ_TIMEOUT_MS);
+        socket.setSoTimeout(inbound ? HANDSHAKE_TIMEOUT_MS : READ_TIMEOUT_MS);
         socket.setTcpNoDelay(true);
         socket.setKeepAlive(true);
         in = new DataInputStream(socket.getInputStream());
         out = socket.getOutputStream();
 
-        // handshake: Nc -> ; <- Ns ; keys = HKDF(psk, Nc||Ns, info)
-        byte[] nc = new byte[32];
-        Crypto.RNG.nextBytes(nc);
-        out.write(nc);
-        out.flush();
-        byte[] ns = new byte[32];
-        in.readFully(ns);
+        // handshake: Nc -> ; <- Ns ; keys = HKDF(psk, Nc||Ns, info).
+        //
+        // The labels are named for who OPENED the connection, not for who is a server — a device
+        // now both dials and accepts, so an accepted connection is the "s" side of the peer's link
+        // and must read the client nonce first. Getting this backwards does not fail at the
+        // handshake, which exchanges plaintext nonces; it fails at the first frame, as a decrypt
+        // error, which is a much more expensive way to find out.
+        byte[] mine = new byte[32], theirs = new byte[32];
+        Crypto.RNG.nextBytes(mine);
+        if (inbound) {
+            in.readFully(theirs);
+            out.write(mine);
+            out.flush();
+        } else {
+            out.write(mine);
+            out.flush();            // before the read, always: the peer is waiting for these bytes
+            in.readFully(theirs);
+        }
+        byte[] nc = inbound ? theirs : mine, ns = inbound ? mine : theirs;
         byte[] salt = ByteBuffer.allocate(64).put(nc).put(ns).array();
-        txKey = Crypto.hkdfSha256(cfg.psk, salt, "clipsync c2s".getBytes(StandardCharsets.US_ASCII), 32);
-        rxKey = Crypto.hkdfSha256(cfg.psk, salt, "clipsync s2c".getBytes(StandardCharsets.US_ASCII), 32);
+        byte[] c2s = Crypto.hkdfSha256(cfg.psk, salt, "clipsync c2s".getBytes(StandardCharsets.US_ASCII), 32);
+        byte[] s2c = Crypto.hkdfSha256(cfg.psk, salt, "clipsync s2c".getBytes(StandardCharsets.US_ASCII), 32);
+        txKey = inbound ? s2c : c2s;
+        rxKey = inbound ? c2s : s2c;
     }
 
     // connectAny() and firstToConnect() are gone with the single connection they served. They raced
@@ -286,32 +418,30 @@ public final class Connection implements AutoCloseable {
     // a device that holds several: the sockets it threw away are the other peers. What it did well
     // survives, in two pieces that each race only the things that really are alternatives to each
     // other: toPeer() resolves one name (getAllByName already tries every address that name has),
-    // and viaMdns() races the addresses of one PC.
+    // and toInstance() races the addresses of one advertised peer.
     //
     // The failover it gave for free — a listed address that is down costing nothing but its own
     // timeout, in parallel with the others — survives too, and is now structural: every target has
     // its own dialer and its own back-off, so a dead one cannot delay a live one at all rather than
     // merely not delaying it much.
 
-    private static InetSocketAddress freshMdnsCache() {
-        InetSocketAddress c = mdnsCached;
-        return c != null && System.currentTimeMillis() - mdnsCachedAt < MDNS_CACHE_MS ? c : null;
-    }
-
     /**
      * Resolve fresh every time — the address behind a name can move, which is the whole point of a
      * dynamic one — prefer IPv6, try each address. A literal is returned by getAllByName without a
      * lookup, so an address entered directly costs nothing extra here.
      */
-    private static Socket connectDirect(String host, int port) throws IOException {
-        InetAddress[] all = InetAddress.getAllByName(host);
+    private static Socket connectDirect(String host, int port, Network net) throws IOException {
+        // Resolved on the network too, when there is one: the default resolver can answer from a
+        // different interface's DNS than the one the socket will use, which on a phone with Wi-Fi
+        // and cellular both up is how a LAN name resolves to nothing.
+        InetAddress[] all = net != null ? net.getAllByName(host) : InetAddress.getAllByName(host);
         List<InetAddress> ordered = new ArrayList<>();
         for (InetAddress a : all) if (a instanceof Inet6Address) ordered.add(a);
         for (InetAddress a : all) if (!(a instanceof Inet6Address)) ordered.add(a);
         IOException last = null;
         for (InetAddress a : ordered) {
             try {
-                return connectTo(new InetSocketAddress(a, port), CONNECT_TIMEOUT_MS);
+                return connectTo(new InetSocketAddress(a, port), CONNECT_TIMEOUT_MS, net);
             } catch (IOException e) {
                 last = e;
             }
@@ -336,7 +466,7 @@ public final class Connection implements AutoCloseable {
      * Happy-Eyeballs style: start a connect to each candidate in order, {@link #RACE_STAGGER_MS}
      * apart, return the first that succeeds and close the rest. Total bound ≈ stagger·n + timeout.
      */
-    private static Won race(List<Mdns.Candidate> cands, int timeoutMs) throws IOException {
+    private static Won race(List<Mdns.Candidate> cands, int timeoutMs, Network net) throws IOException {
         CompletionService<Won> cs = new ExecutorCompletionService<>(RACE_POOL);
         List<Future<Won>> futures = new ArrayList<>();
         List<String> errors = new ArrayList<>();
@@ -350,7 +480,7 @@ public final class Connection implements AutoCloseable {
                     long d = startAt - System.currentTimeMillis();
                     if (d > 0) Thread.sleep(d);
                     if (finished.get()) throw new IOException("race already won");
-                    Socket s = connectTo(c.addr, timeoutMs);
+                    Socket s = connectTo(c.addr, timeoutMs, net);
                     if (finished.get()) {           // late winner: don't leave a half-open client on the server
                         s.close();
                         throw new IOException("race already won");
@@ -427,9 +557,14 @@ public final class Connection implements AutoCloseable {
         }
     }
 
-    private static Socket connectTo(InetSocketAddress addr, int timeoutMs) throws IOException {
+    /**
+     * @param net the network to pin this socket to, or null to use the default route. Binding must
+     *            happen before the connect, which is why it is here and not in the constructor.
+     */
+    private static Socket connectTo(InetSocketAddress addr, int timeoutMs, Network net) throws IOException {
         Socket s = new Socket();
         try {
+            if (net != null) net.bindSocket(s);
             s.connect(addr, timeoutMs);
             return s;
         } catch (IOException e) {
@@ -448,6 +583,27 @@ public final class Connection implements AutoCloseable {
             out.write(frame);
             out.flush();
         }
+    }
+
+    /**
+     * Does this end open the data connections for files on this link?
+     *
+     * <p>Exactly one of the two must, and this is the rule that decides it:
+     *
+     * <ul>
+     *   <li>if the peer <b>cannot</b> open them, we do, whoever dialled — the PC is in exactly this
+     *       position, having gained a client role for control connections and none for data ones;
+     *   <li>otherwise <b>the node that dialled</b> does. It has proved it can reach the other's
+     *       listening port, which is precisely what a data connection needs, and the far end reaches
+     *       the same verdict from the same two facts.
+     * </ul>
+     *
+     * <p>Getting this wrong in either direction is a visible failure rather than an inefficiency:
+     * both ends opening moves every file twice, and neither opening leaves a WANT unanswered
+     * forever.
+     */
+    public boolean drivesTransfer() {
+        return !peerDataOut || !inbound;
     }
 
     public void setSoTimeout(int ms) throws IOException {

@@ -81,8 +81,8 @@ public class MainActivity extends AppCompatActivity {
      */
     private static final long REFLOW_MS = 220;
 
-    /** The collapsible own-addresses group: its body and the chevron that turns. */
-    private View ownContent, ownChevron;
+    /** The collapsible own-addresses group: the card that is pressed, its body, and the chevron. */
+    private View ownCard, ownContent, ownChevron;
     /** Whether that group currently holds a bad address — see the card's click listener. */
     private boolean ownHasError;
     private Slider browse, threads;
@@ -107,7 +107,8 @@ public class MainActivity extends AppCompatActivity {
     private Chip statusChip;
     private int shownDot, shownLabel;                       // colours already on the chip
     private OnBackPressedCallback backToSettings;
-    private String peerName, peerAddr, connectionKind;      // shown in the details dialog
+    // The chip's own mirror of the peer list is gone with the single connection it described: the
+    // sheet reads the snapshot when it opens, so there is nothing to keep in step here.
     private boolean wasConnected;
     private ValueAnimator pulse;
     // action state: which of Start / Stop + Apply is shown, and what we are waiting for
@@ -229,7 +230,23 @@ public class MainActivity extends AppCompatActivity {
         pathsError = findViewById(R.id.paths_error);
         ownContent = findViewById(R.id.own_content);
         ownChevron = findViewById(R.id.own_chevron);
-        Haptics.onClick(findViewById(R.id.own_card), () -> {
+        ownCard = findViewById(R.id.own_card);
+        // What a screen reader is told about the group. Two separate things, and it needs both: the
+        // *state* ("collapsed") so it can say what it is looking at, and a *label for the click
+        // action* ("Show this device's addresses") so it can say what pressing would do. Neither is
+        // derivable from the card's text, and without them the control announces as an unlabelled
+        // clickable panel whose contents appear and disappear for no stated reason.
+        ownCard.setAccessibilityDelegate(new View.AccessibilityDelegate() {
+            @Override
+            public void onInitializeAccessibilityNodeInfo(View v, android.view.accessibility.AccessibilityNodeInfo info) {
+                super.onInitializeAccessibilityNodeInfo(v, info);
+                boolean open = ownContent.getVisibility() == View.VISIBLE;
+                info.addAction(new android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction(
+                        android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK,
+                        getString(open ? R.string.own_collapse : R.string.own_expand)));
+            }
+        });
+        Haptics.onClick(ownCard, () -> {
             boolean open = ownContent.getVisibility() != View.VISIBLE;
             // Never close over an error. The message is inside the group, and hiding it would leave
             // Apply disabled with nothing on screen to say why. Doing nothing is not a dead end
@@ -359,6 +376,10 @@ public class MainActivity extends AppCompatActivity {
      * page uses when it appears.
      */
     private void setOwnExpanded(boolean open, boolean animate) {
+        // Before the guard below, because the first call is usually a no-op — the group starts
+        // collapsed in the layout and is asked to be collapsed — and a screen reader would then
+        // never be told the state at all.
+        ownCard.setStateDescription(getString(open ? R.string.own_state_expanded : R.string.own_state_collapsed));
         // Nothing to do is not the same as doing nothing cheaply: validate() runs on every keystroke
         // and calls this whenever the group holds an error, so without this guard every character
         // typed anywhere on the page would start a transition.
@@ -372,7 +393,6 @@ public class MainActivity extends AppCompatActivity {
         float to = open ? 180f : 0f;
         if (animate) ownChevron.animate().rotation(to).setDuration(REFLOW_MS).start();
         else ownChevron.setRotation(to);
-        ownChevron.setContentDescription(getString(open ? R.string.own_collapse : R.string.own_expand));
     }
 
     /**
@@ -569,29 +589,27 @@ public class MainActivity extends AppCompatActivity {
         // the (selectable) TextView, and the scroll container then scrolls that view's *top* into
         // view — the original bug.
         //
-        // Two details here are both load-bearing, and getting either wrong lands the view partway
-        // down and then <b>keeps</b> it there. The flag is only re-armed by showLog() when the view
-        // is already at the bottom, so a single short landing is permanent: every later line pushes
-        // the end further away, which is why this failed as "scrolls to about a quarter".
+        // The scroll target is computed here rather than delegated, because this took three tries and
+        // each failure was a different way of trusting someone else's arithmetic:
         //
-        //   posted — this callback runs DURING layout, where the scroll range is computed from
-        //            dimensions that are not final yet, and a scroll clamped against a stale range
-        //            lands short;
-        //   MAX_VALUE — not log.getBottom(). NestedScrollView clamps to its true maximum, so asking
-        //            for more than exists is exactly right and cannot be short by construction,
-        //            whereas a computed target is only as good as the moment it was computed.
+        //   log.getBottom(), unposted — the callback runs DURING layout, so the range was computed
+        //       from dimensions that were not final and the scroll landed short;
+        //   Integer.MAX_VALUE — meant as "clamp me to the end". It does not: NestedScrollView's
+        //       clamp tests (viewport + n) > childHeight, and with n = MAX_VALUE that addition
+        //       OVERFLOWS to a negative number, the test is false, and the value is returned
+        //       unclamped. Every line ends up scrolled off the top — the blank screen.
+        //
+        // So: wait for layout (post), work out the maximum with the same formula the clamp uses but
+        // without the overflow, and refuse to act at all until there is a viewport to act on. A page
+        // switched from GONE has height 0 while its bottom padding does not, which makes that
+        // formula negative — the other way to end up scrolled past the end.
         log.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
             if (!logToBottom) return;
             pageLog.post(() -> {
-                if (!logToBottom) return;
-                // Scrolling a container that has no height yet overshoots into blank space, and
-                // this runs right after the page is switched from GONE, which is exactly when it
-                // has none. NestedScrollView.scrollTo clamps against
-                // (height - padding); with height 0 and a bottom padding that is not, the clamp is
-                // computed from a negative viewport and returns MORE than the content, scrolling
-                // every line off the top. Hence: skip, keep the flag, let the next layout do it.
-                if (pageLog.getVisibility() != View.VISIBLE || pageLog.getHeight() == 0) return;
-                pageLog.scrollTo(0, Integer.MAX_VALUE);
+                if (!logToBottom || pageLog.getVisibility() != View.VISIBLE) return;
+                int viewport = pageLog.getHeight() - pageLog.getPaddingTop() - pageLog.getPaddingBottom();
+                if (viewport <= 0) return;                  // not laid out yet: keep the flag, try again
+                pageLog.scrollTo(0, Math.max(0, log.getHeight() - viewport));
                 // Cleared only once it actually reached the end. The flag is re-armed by showLog()
                 // solely when the view is already at the bottom, so clearing it after a scroll that
                 // fell short used to be permanent — every later line pushed the end further away.
@@ -778,26 +796,85 @@ public class MainActivity extends AppCompatActivity {
     }
 
     /**
-     * Peer name and address in full, wrapped, each copied by tapping it.
+     * Every peer that is up, grouped by how it is reached, and every configured target that is not,
+     * with its reason.
+     *
+     * <p><b>The second group is the point.</b> Three addresses of which one is failing is invisible
+     * in {@code Connected (2)}, and finding out which one is precisely why someone opens this.
      *
      * <p>A BottomSheetDialog: supplementary content rather than a decision, and the only surface
      * here that Material gives predictive back to for free — the gesture walks the sheet back down
      * instead of previewing an exit from the app.
      */
     private void showConnectionDetails() {
-        if (peerName == null && peerAddr == null) return;              // nothing to show when stopped
+        Status.Snapshot s = Status.read(this);
         BottomSheetDialog sheet = new BottomSheetDialog(this);
         sheet.setContentView(R.layout.sheet_status);
         TextView title = sheet.findViewById(R.id.sheet_title);
-        TextView peer = sheet.findViewById(R.id.sheet_peer);
-        TextView addr = sheet.findViewById(R.id.sheet_address);
-        if (title == null || peer == null || addr == null) return;
-        title.setText(connectionKind == null ? getString(R.string.state_stopped) : connectionKind);
-        peer.setText(peerName == null ? "—" : peerName);
-        addr.setText(peerAddr == null ? "—" : peerAddr);
-        Haptics.onClick(peer, () -> copy(peerName));
-        Haptics.onClick(addr, () -> copy(peerAddr));
+        ViewGroup list = sheet.findViewById(R.id.sheet_list);
+        if (title == null || list == null) return;
+        title.setText(R.string.sheet_title);
+
+        List<Status.Peer> lan = new ArrayList<>(), wan = new ArrayList<>();
+        for (Status.Peer p : s.peers) (p.lan ? lan : wan).add(p);
+        addPeerGroup(list, R.string.sheet_on_lan, lan);
+        addPeerGroup(list, R.string.sheet_over_internet, wan);
+        if (!s.targets.isEmpty()) {
+            addHeader(list, R.string.sheet_not_connected);
+            for (Status.Target t : s.targets) {
+                // The reason is the one line in this sheet that is about something being wrong, and
+                // it was rendered in the same muted role as a healthy peer's address. colorError is
+                // the role for it, and it is also what makes the group scannable: the eye finds the
+                // failing target without reading the words.
+                addRow(list, t.target, t.error == null ? "" : t.error, t.target, true);
+            }
+        }
+        if (list.getChildCount() == 0) addRow(list, getString(R.string.sheet_none), "", null, false);
         sheet.show();
+    }
+
+    private void addPeerGroup(ViewGroup list, int headerRes, List<Status.Peer> peers) {
+        if (peers.isEmpty()) return;
+        addHeader(list, headerRes);
+        for (Status.Peer p : peers) {
+            String name = p.name == null || p.name.isEmpty() ? "?" : p.name;
+            // The id's first 8 characters, not all 36: the full one is unreadable in a list, and
+            // tapping the row copies everything anyway.
+            String addr = p.addr == null ? "?" : p.addr;
+            String detail = Node.shortId(p.id) + "  ·  " + (p.type == null ? "?" : p.type) + "  ·  " + addr;
+            // The full id here, not the short one: the list shows 8 characters because 36 are
+            // unreadable, and copying is the way to get the rest. String.valueOf, so a missing id
+            // copies as "null" rather than throwing — but never as the literal text of a bug.
+            addRow(list, name, detail, name + "\n" + (p.id == null ? "" : p.id) + "\n" + addr, false);
+        }
+    }
+
+    private void addHeader(ViewGroup list, int textRes) {
+        TextView h = (TextView) getLayoutInflater().inflate(R.layout.item_status_header, list, false);
+        h.setText(textRes);
+        // A heading, and said so: TalkBack can then jump between the groups instead of reading every
+        // peer to find where the next one starts, which in a list like this is the whole navigation.
+        h.setAccessibilityHeading(true);
+        list.addView(h);
+    }
+
+    private void addRow(ViewGroup list, String title, String detail, String copyText, boolean error) {
+        View row = getLayoutInflater().inflate(R.layout.item_status_row, list, false);
+        ((TextView) row.findViewById(R.id.row_title)).setText(title);
+        TextView d = row.findViewById(R.id.row_detail);
+        d.setText(detail);
+        d.setVisibility(detail.isEmpty() ? View.GONE : View.VISIBLE);
+        if (error) d.setTextColor(MaterialColors.getColor(d, androidx.appcompat.R.attr.colorError));
+        if (copyText != null) {
+            Haptics.onClick(row, () -> copy(copyText));
+        } else {
+            // Not just unclickable: the row layout carries a ripple and takes focus, so leaving
+            // those on gives a placeholder the feedback of a control that does nothing.
+            row.setClickable(false);
+            row.setFocusable(false);
+            row.setBackground(null);
+        }
+        list.addView(row);
     }
 
     private void copy(String text) {
@@ -855,8 +932,8 @@ public class MainActivity extends AppCompatActivity {
         Status.Snapshot s = Status.read(this);
         if (!s.alive() && !"stopped".equals(s.state)) {
             // the service process is gone without saying goodbye (killed); the watchdog restarts it
-            s = new Status.Snapshot("stopped", getString(autoStartEnabled() ? R.string.state_not_running : R.string.state_autostart_off),
-                    null, false, null, null, 0, s.suspended);
+            s = Status.stopped(getString(autoStartEnabled() ? R.string.state_not_running : R.string.state_autostart_off),
+                    s.suspended);
         }
         boolean connected = "connected".equals(s.state);
         boolean busy = "connecting".equals(s.state);
@@ -878,30 +955,23 @@ public class MainActivity extends AppCompatActivity {
             statusChip.setTextColor(label);
         }
 
-        // the chip carries the connection kind (or the state) only; peer and address go to the dialog
-        String titleText;
-        if (connected) {
-            connectionKind = "mdns".equals(s.via) ? getString(R.string.kind_mdns)
-                    : getString(R.string.kind_direct, getString(s.lan ? R.string.link_lan : R.string.link_internet));
-            titleText = connectionKind;
-            peerName = s.host;
-            peerAddr = s.addr;
-        } else {
-            titleText = getString(switch (s.state) {
-                case "connecting" -> R.string.state_connecting;
-                case "disconnected" -> R.string.state_disconnected;
-                case "no network" -> R.string.state_no_network;
-                case "idle" -> R.string.state_idle;
-                default -> R.string.state_stopped;
-            });
-            connectionKind = null;
-            peerName = null;
-            peerAddr = s.detail;                       // e.g. "retry in 5 s" — still worth showing
-        }
+        // The chip carries a count, not a connection kind: with several peers "Direct (LAN)" is a
+        // fact about one of them and the chip has no room to say which. What kind each link is now
+        // belongs beside that link, in the sheet.
+        String titleText = connected
+                ? getString(R.string.state_connected, s.count())
+                : getString(switch (s.state) {
+                    case "connecting" -> R.string.state_connecting;
+                    case "no network" -> R.string.state_no_network;
+                    case "idle" -> R.string.state_idle;
+                    default -> R.string.state_stopped;
+                });
         // this runs once a second: only touch the TextView when the text really changed, or every
         // tick would queue a layout pass for the status chip
         setTextIfChanged(statusChip, titleText);
-        statusChip.setClickable(peerName != null || peerAddr != null);
+        // Tappable whenever there is anything to list — which now includes "nothing is connected and
+        // here is why", the case the sheet is most worth opening for.
+        statusChip.setClickable(!s.peers.isEmpty() || !s.targets.isEmpty());
 
         if (connected != wasConnected) {
             wasConnected = connected;
@@ -932,7 +1002,9 @@ public class MainActivity extends AppCompatActivity {
             batteryRow.setVisibility(View.GONE);
         } else {
             batteryRow.setVisibility(View.VISIBLE);
-            batteryText.setText(exempt ? R.string.battery_still_frozen : R.string.battery_on);
+            // setTextIfChanged, like every other setter on this once-a-second path: setText always
+            // requests a layout, so an unconditional call here queues one every single tick.
+            setTextIfChanged(batteryText, getString(exempt ? R.string.battery_still_frozen : R.string.battery_on));
             batteryFix.setVisibility(exempt ? View.GONE : View.VISIBLE);
         }
     }

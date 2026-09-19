@@ -45,11 +45,18 @@
                     android:textColor="?attr/colorOnErrorContainer"
                     android:text="@string/battery_on" />
 
+                <!-- On an error container, so its label is colorOnErrorContainer. A text button's
+                     default label role is colorPrimary, which on this background is a colour from
+                     a different pair: it read as a stray accent rather than as the action belonging
+                     to the message beside it, and the contrast it happens to get is an accident of
+                     the palette rather than something M3 guarantees. -->
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/battery_fix"
                     style="?attr/borderlessButtonStyle"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
+                    android:textColor="?attr/colorOnErrorContainer"
+                    app:rippleColor="?attr/colorOnErrorContainer"
                     android:text="@string/battery_allow" />
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
@@ -182,12 +189,17 @@
                             android:text="@string/own_help" />
                     </LinearLayout>
 
+                    <!-- Not important for accessibility: the chevron draws the state, it does not
+                         own it. The card is what is focused and clicked, so the label and the
+                         expanded/collapsed state live there (MainActivity.setOwnExpanded); a
+                         contentDescription here only made TalkBack stop twice on one control and
+                         read a description of something the user cannot press. -->
                     <ImageView
                         android:id="@+id/own_chevron"
                         android:layout_width="24dp"
                         android:layout_height="24dp"
                         android:layout_marginStart="8dp"
-                        android:contentDescription="@string/own_expand"
+                        android:importantForAccessibility="no"
                         android:src="@drawable/ic_expand" />
                 </LinearLayout>
 

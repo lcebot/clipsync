@@ -2,6 +2,7 @@ package io.github.lcebot.clipsync;
 
 import android.content.Context;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.File;
@@ -9,46 +10,114 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Service state shared with the UI across processes (the service lives in ":sync"):
- * files/status.json, rewritten by the service on every change and refreshed by the pinger,
- * read by MainActivity every second.
+ * files/status.json, rewritten by the service on every change and refreshed by the heartbeat, read
+ * by MainActivity every second.
+ *
+ * <p><b>It carries a list now, not a connection.</b> The flat {@code via/lan/host/addr} tuple this
+ * replaced could only describe one peer, which stopped being a fact about the device the moment it
+ * could hold several. Two lists, because the interesting question is no longer "am I connected" but
+ * "which of the things I was told to reach am I reaching": {@link #peers} is what is up, and
+ * {@link #targets} is what is configured and is not, each with the reason.
  */
 public final class Status {
     private Status() {}
 
-    public static final class Snapshot {
-        public final String state;      // stopped | connecting | connected | disconnected | no network | idle
-        public final String detail;     // free text for non-connected states (e.g. "retry in 3 s")
-        public final String via;        // direct | mdns (connected only)
+    /** A live link, as the UI needs to show it. */
+    public static final class Peer {
+        public final String id, name, type, via, addr;
         public final boolean lan;
-        public final String host;       // the listed address that answered, or the mDNS service name
-        public final String addr;       // ip:port actually used
-        public final long ts;           // wall-clock ms of the last write
-        public final boolean suspended; // the pinger caught the process being frozen at least once
 
-        Snapshot(String state, String detail, String via, boolean lan, String host, String addr, long ts, boolean suspended) {
-            this.state = state; this.detail = detail; this.via = via; this.lan = lan;
-            this.host = host; this.addr = addr; this.ts = ts; this.suspended = suspended;
+        Peer(String id, String name, String type, String via, String addr, boolean lan) {
+            this.id = id; this.name = name; this.type = type; this.via = via; this.addr = addr; this.lan = lan;
+        }
+    }
+
+    /** A configured target that is not connected, and why. */
+    public static final class Target {
+        public final String target, error;
+
+        Target(String target, String error) {
+            this.target = target; this.error = error;
+        }
+    }
+
+    public static final class Snapshot {
+        /** stopped | no network | idle | connecting | connected. See docs/p2p-plan.md §11. */
+        public final String state;
+        /** Free text for the states that have somewhere to go but nowhere to be. */
+        public final String detail;
+        public final long ts;           // wall-clock ms of the last write
+        // the heartbeat caught the process being frozen at least once WHILE THE DEVICE WAS AWAKE.
+        // Being suspended along with the device is the intended outcome, not a fault — the service
+        // drops its links and idles with the screen off on purpose — so counting that would advise
+        // the user against a power saving that is working.
+        public final boolean suspended;
+        public final List<Peer> peers;
+        public final List<Target> targets;
+
+        Snapshot(String state, String detail, long ts, boolean suspended, List<Peer> peers, List<Target> targets) {
+            this.state = state; this.detail = detail; this.ts = ts; this.suspended = suspended;
+            this.peers = peers; this.targets = targets;
         }
 
         /** The service process wrote recently and is not stopped. */
         public boolean alive() {
             return !"stopped".equals(state) && System.currentTimeMillis() - ts < 120_000;
         }
+
+        public int count() {
+            return peers.size();
+        }
+    }
+
+    /** The snapshot the UI substitutes when the service process has died without saying so. */
+    public static Snapshot stopped(String detail, boolean suspended) {
+        return new Snapshot("stopped", detail, 0, suspended, new ArrayList<>(), new ArrayList<>());
+    }
+
+    // Factories rather than public constructors: the service builds these, the UI only reads them.
+    public static Peer peer(String id, String name, String type, String via, String addr, boolean lan) {
+        return new Peer(id, name, type, via, addr, lan);
+    }
+
+    public static Target target(String target, String error) {
+        return new Target(target, error);
     }
 
     private static File file(Context ctx) {
         return new File(ctx.getApplicationContext().getFilesDir(), "status.json");
     }
 
-    public static void write(Context ctx, String state, String detail, String via, boolean lan, String host, String addr, boolean suspended) {
+    /**
+     * Synchronized, because the number of writers grew with the number of connections.
+     *
+     * <p>One temporary file, one rename. With two writers that was survivable; there are now one per
+     * dialer plus the heartbeat plus the main thread, and two of them truncating the same tmp file
+     * interleave their bytes. The reader's catch-all then yields the "stopped" snapshot — so the
+     * chip blinks *Stopped*, the button blinks *Start*, and pressing it in that window starts the
+     * service instead of reloading it. A per-thread tmp name would also work; serialising is
+     * cheaper to be sure of.
+     */
+    public static synchronized void write(Context ctx, String state, String detail, boolean suspended,
+                                          List<Peer> peers, List<Target> targets) {
         try {
-            String s = new JSONObject().put("state", state).put("detail", detail == null ? JSONObject.NULL : detail)
-                    .put("via", via == null ? JSONObject.NULL : via).put("lan", lan)
-                    .put("host", host == null ? JSONObject.NULL : host).put("addr", addr == null ? JSONObject.NULL : addr)
-                    .put("ts", System.currentTimeMillis()).put("suspended", suspended).toString();
+            JSONArray ps = new JSONArray();
+            for (Peer p : peers) {
+                ps.put(new JSONObject().put("id", str(p.id)).put("name", str(p.name)).put("type", str(p.type))
+                        .put("via", str(p.via)).put("addr", str(p.addr)).put("lan", p.lan));
+            }
+            JSONArray ts = new JSONArray();
+            for (Target t : targets) {
+                ts.put(new JSONObject().put("target", str(t.target)).put("error", str(t.error)));
+            }
+            String s = new JSONObject().put("state", state).put("detail", str(detail))
+                    .put("ts", System.currentTimeMillis()).put("suspended", suspended)
+                    .put("peers", ps).put("targets", ts).toString();
             File f = file(ctx), tmp = new File(f.getPath() + ".tmp");
             try (FileOutputStream out = new FileOutputStream(tmp)) {
                 out.write(s.getBytes(StandardCharsets.UTF_8));
@@ -59,15 +128,36 @@ public final class Status {
         }
     }
 
+    private static Object str(String s) {
+        return s == null ? JSONObject.NULL : s;
+    }
+
+    private static String get(JSONObject o, String k) {
+        return o.isNull(k) ? null : o.optString(k);
+    }
+
     public static Snapshot read(Context ctx) {
         try (InputStream in = new FileInputStream(file(ctx))) {
             JSONObject o = new JSONObject(new String(in.readAllBytes(), StandardCharsets.UTF_8));
-            return new Snapshot(o.optString("state", "stopped"), o.isNull("detail") ? null : o.optString("detail"),
-                    o.isNull("via") ? null : o.optString("via"), o.optBoolean("lan"),
-                    o.isNull("host") ? null : o.optString("host"), o.isNull("addr") ? null : o.optString("addr"),
-                    o.optLong("ts", 0), o.optBoolean("suspended"));
+            List<Peer> peers = new ArrayList<>();
+            JSONArray ps = o.optJSONArray("peers");
+            for (int i = 0; ps != null && i < ps.length(); i++) {
+                JSONObject p = ps.optJSONObject(i);
+                if (p == null) continue;
+                peers.add(new Peer(get(p, "id"), get(p, "name"), get(p, "type"),
+                        get(p, "via"), get(p, "addr"), p.optBoolean("lan")));
+            }
+            List<Target> targets = new ArrayList<>();
+            JSONArray ts = o.optJSONArray("targets");
+            for (int i = 0; ts != null && i < ts.length(); i++) {
+                JSONObject t = ts.optJSONObject(i);
+                if (t == null) continue;
+                targets.add(new Target(get(t, "target"), get(t, "error")));
+            }
+            return new Snapshot(o.optString("state", "stopped"), get(o, "detail"),
+                    o.optLong("ts", 0), o.optBoolean("suspended"), peers, targets);
         } catch (Exception e) {
-            return new Snapshot("stopped", null, null, false, null, null, 0, false);
+            return new Snapshot("stopped", null, 0, false, new ArrayList<>(), new ArrayList<>());
         }
     }
 }

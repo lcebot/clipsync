@@ -81,5 +81,8 @@
         <item name="android:layout_marginBottom">6dp</item>
         <item name="android:textAppearance">?attr/textAppearanceTitleSmall</item>
         <item name="android:textColor">?attr/colorPrimary</item>
+        <!-- A heading, and said so. Without it a screen reader has to walk every field of a section
+             to reach the next one; with it the sections are navigable the way they look. -->
+        <item name="android:accessibilityHeading">true</item>
     </style>
 </resources>

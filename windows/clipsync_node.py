@@ -47,6 +47,16 @@ def declaration(cfg=None) -> dict:
     `persistent` is a declaration of capability, not an inference from type — and a PC on mains
     power that is running this service can always hold a connection while idle, so it is simply
     true here. It is the Android side where the distinction earns its keep.
+
+    `data_out` is the other capability, and it is why this is a declaration rather than something
+    either end infers.  A file's bytes move over separate data connections, and exactly one of the
+    two nodes must open them — both opening means the file is transferred twice, neither means it
+    is not transferred at all.  This PC can only *accept* them, so it says so, and the peer takes
+    the job.  When both ends can, the rule is "the node that dialled opens them"; it is only
+    because this end cannot that a rule is needed at all.
+
+    `port` is where this node listens, which an accepted connection cannot work out for itself:
+    the source port it sees is ephemeral and reaches nothing.
     """
     return {
         "id": NODE_ID,
@@ -56,4 +66,6 @@ def declaration(cfg=None) -> dict:
         "type": "pc",
         "persistent": True,
         "battery": "mains",
+        "data_out": False,
+        **({"port": cfg.port} if cfg is not None else {}),
     }

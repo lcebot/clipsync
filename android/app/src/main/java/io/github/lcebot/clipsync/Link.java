@@ -82,21 +82,52 @@ final class Link implements AutoCloseable {
      */
     private volatile String sentHash;
 
-    /** Opens the socket and completes the handshake, or throws having closed whatever it opened. */
-    private Link(SyncService service, Owner owner, String target, Connection c) throws Exception {
+    private Link(Owner owner, String target, Connection c) {
         this.owner = owner;
         this.target = target;
         this.conn = c;
+    }
+
+    /** Completes the dialler's handshake, or throws having closed the socket it was given. */
+    private static Link dialled(SyncService s, Owner o, String target, Connection c) throws Exception {
         try {
-            c.hello(service, owner.lastSeq(target));
+            c.hello(s, o.lastSeq(target));
         } catch (Exception e) {
             c.close();                     // the socket is ours from the moment we were handed it
             throw e;
         }
+        return new Link(o, target, c);
     }
 
     static Link toPeer(SyncService s, Owner o, String peer, Network net) throws Exception {
-        return new Link(s, o, peer, Connection.toPeer(s, o.config(), peer, net));
+        return dialled(s, o, peer, Connection.toPeer(s, o.config(), peer, net));
+    }
+
+    /**
+     * A peer dialled us and has already declared itself — {@link Server} reads the HELLO because it
+     * has to, in order to tell a control connection from a data one. All that is left here is the
+     * answer.
+     *
+     * <p>The reverse order of {@link #dialled}, and it buys something. A dialler has to send its
+     * sequence cursor before it knows who it is talking to, so the cursor is keyed by the only name
+     * it has — the target it dialled. Here the peer names itself first, so the cursor is keyed by
+     * <b>what the peer calls itself</b>, which is also what the sheet and the log should show for a
+     * link nobody chose an address for.
+     *
+     * <p>That does mean an outbound link to a peer and an inbound one from the same peer keep two
+     * cursors. The cost is one redundant catch-up offer on the second route, which the far end
+     * answers with HAVE; the alternative — keying by node id — would put a UUID in front of the user
+     * wherever the target appears.
+     */
+    static Link accepted(SyncService s, Owner o, Connection c) throws Exception {
+        String target = c.peerLabel;
+        try {
+            c.sendHello(s, o.lastSeq(target));
+        } catch (Exception e) {
+            c.close();
+            throw e;
+        }
+        return new Link(o, target, c);
     }
 
     /**
@@ -106,9 +137,10 @@ final class Link implements AutoCloseable {
      *               advertises — so renaming the PC silently reset the LAN path's cursor. The
      *               advertised name is still what the UI shows; it reaches it through the peer's
      *               HELLO ({@code Connection.peerLabel}), which is where a display name belongs.
+     * @param inst   the advertisement this dialer was created for, with every address it named
      */
-    static Link viaMdns(SyncService s, Owner o, String target, Network net) throws Exception {
-        return new Link(s, o, target, Connection.viaMdns(s, o.config(), net));
+    static Link viaMdns(SyncService s, Owner o, String target, Mdns.Instance inst, Network net) throws Exception {
+        return dialled(s, o, target, Connection.toInstance(s, o.config(), inst, net));
     }
 
     Connection connection() {
@@ -169,11 +201,13 @@ final class Link implements AutoCloseable {
         if (clip == null) return;
         String h = clip instanceof Files.Ref ? ((Files.Ref) clip).sha256 : Crypto.sha256Hex((String) clip);
         if (h.equals(sentHash)) return;
-        // Marked before the send, not after: a send that throws has still put the clip on the wire
-        // as far as we can tell, and retrying it on the next tick would be a duplicate. The link is
-        // about to be torn down anyway, and the next one starts with a clean sentHash.
-        sentHash = h;
+        // Marked after the send, not before. Marking first left a link claiming delivery it had not
+        // made when the send threw — and, worse, skipped `delivered`, so the clip was never released
+        // and went on justifying a reconnect every burst interval for the whole five-minute window.
+        // The cost of this order is a possible duplicate if the send half-succeeded, which the peer
+        // discards by hash; the cost of the other was a phone that would not settle.
         owner.send(this, clip);
+        sentHash = h;
         owner.delivered(this, h);
     }
 
@@ -192,6 +226,24 @@ final class Link implements AutoCloseable {
     }
 
     private volatile boolean bye;
+
+    /**
+     * True once <em>this</em> end closed the link as a duplicate.
+     *
+     * <p>The mirror of {@link #saidBye()}, and needed for the same reason from the other side. A
+     * link closed from another thread leaves its owner seeing nothing but a dead socket, which is
+     * indistinguishable from the peer going away — and a dialler that cannot tell those apart
+     * redials immediately into the link it has just lost.
+     */
+    boolean superseded() {
+        return superseded;
+    }
+
+    void markSuperseded() {
+        superseded = true;
+    }
+
+    private volatile boolean superseded;
 
     /**
      * Run the session to its end. Returns when the peer goes away, the screen-off burst finishes, or

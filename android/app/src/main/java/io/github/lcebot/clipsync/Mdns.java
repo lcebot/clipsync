@@ -23,11 +23,14 @@ import java.util.concurrent.TimeUnit;
  * platform NsdManager (no extra permissions, works from a background service).
  * Uses the API 34+ {@code registerServiceInfoCallback} resolution path (minSdk 35).
  *
- * <p>Not a fallback: this races the listed addresses and whichever connects first wins (see
- * {@link Connection}). It is also the only path when no address is listed at all. A PC that owns one
- * of the listed names stops advertising (see clipsync.py owns_a_listed_name), so normally exactly one
- * service is found; every candidate is tried anyway and the PSK handshake decides — a rogue
- * advertiser only costs one failed connect.
+ * <p>Both halves live here: {@link #discover} finds peers on the LAN, and {@link #advertise} makes
+ * this device one of the peers that can be found. The second is what a phone and a tablet need from
+ * each other, neither of them having an address the other could be configured with.
+ *
+ * <p>Several services is the normal case now, not a conflict to arbitrate. The probe that used to
+ * decide which PC was <em>the</em> server is gone with the hub it served (docs/p2p-plan.md §4), and
+ * what a service advertises is only a label: who a peer is comes from the node id in its HELLO, so a
+ * rogue advertiser costs one failed handshake and nothing else.
  */
 public final class Mdns {
     static final String SERVICE_TYPE = "_clipsync._tcp.";
@@ -39,7 +42,71 @@ public final class Mdns {
 
     private Mdns() {}
 
-    /** A resolved server: where to connect and what it calls itself. */
+    /**
+     * Advertise this device on the LAN, so peers that cannot be configured with an address for it
+     * can still find it.
+     *
+     * <p>Which is every phone and tablet: they have no stable name, and a user cannot type one into
+     * the other's peer list. Only one of two devices has to find the other for both to be
+     * connected — this is the half that makes the finding possible.
+     *
+     * <p>Failures are logged and swallowed. A device that cannot advertise can still be reached at a
+     * listed address and can still dial out; it is a degradation, not a fault worth stopping for.
+     *
+     * @return a handle to unregister with, or null if registration could not even be attempted
+     */
+    public static Advert advertise(Context ctx, String name, int port) {
+        NsdManager nsd = ctx.getSystemService(NsdManager.class);
+        if (nsd == null) return null;
+        NsdServiceInfo si = new NsdServiceInfo();
+        si.setServiceName(name);
+        si.setServiceType(SERVICE_TYPE);
+        si.setPort(port);
+        Advert a = new Advert(nsd);
+        try {
+            nsd.registerService(si, NsdManager.PROTOCOL_DNS_SD, SHARED_EXECUTOR, a);
+            return a;
+        } catch (Exception e) {
+            Logger.w("mdns advertise failed: " + e);
+            return null;
+        }
+    }
+
+    /**
+     * One live registration.
+     *
+     * <p>Note that the name may come back changed: mDNS resolves a collision by suffixing, so two
+     * devices that call themselves the same thing both keep advertising. That is the right outcome
+     * and the reason the advertised name is only ever a label — who a peer <em>is</em> comes from
+     * the node id in its HELLO, never from what it advertises. (docs/p2p-plan.md §1)
+     */
+    public static final class Advert implements NsdManager.RegistrationListener, AutoCloseable {
+        private final NsdManager nsd;
+
+        Advert(NsdManager nsd) { this.nsd = nsd; }
+
+        @Override public void onServiceRegistered(NsdServiceInfo si) {
+            // The name, as registered: mDNS may have suffixed it to resolve a collision.
+            Logger.i("advertising as \"" + si.getServiceName() + "\" " + SERVICE_TYPE);
+        }
+
+        @Override public void onRegistrationFailed(NsdServiceInfo si, int err) {
+            Logger.w("mdns advertise failed (" + err + "): this device can dial out but will not be discovered");
+        }
+
+        @Override public void onServiceUnregistered(NsdServiceInfo si) { }
+
+        @Override public void onUnregistrationFailed(NsdServiceInfo si, int err) { }
+
+        @Override public void close() {
+            // Attempted whether or not registration was confirmed: a registration still in flight
+            // has no callback yet and would otherwise outlive the service that asked for it. An
+            // unregister of something never registered throws, and that is the harmless half.
+            try { nsd.unregisterService(this); } catch (Exception ignored) { }
+        }
+    }
+
+    /** One address of one advertised service. */
     public static final class Candidate {
         public final InetSocketAddress addr;
         public final String name;
@@ -51,11 +118,41 @@ public final class Mdns {
     }
 
     /**
-     * Browse for up to {@code timeoutMs} and return candidates, best first.
-     * Returns as soon as one service has been resolved. Blocking; call from the network
-     * thread only.
+     * One advertised service: a peer, and every address it can be reached at.
+     *
+     * <p>The unit of discovery is the <b>instance</b> and not the address, which is the shape the
+     * flat address list could not express. A machine typically advertises every adapter it has, so a
+     * list of addresses conflates "several ways to one peer" with "several peers" — and those are
+     * exactly the two cases that have to be told apart now that there can be more than one peer on
+     * the LAN. Racing the addresses of one instance is choosing a route; racing instances would be
+     * choosing which peer to have, which is not a choice anyone wants made for them.
      */
-    public static List<Candidate> discover(Context ctx, Network net, long timeoutMs) {
+    public static final class Instance {
+        public final String name;
+        public final List<InetSocketAddress> addrs;
+        /** When this was last seen advertising, so a peer that goes quiet can be forgotten. */
+        public final long foundAt = System.currentTimeMillis();
+
+        Instance(String name, List<InetSocketAddress> addrs) {
+            this.name = name;
+            this.addrs = addrs;
+        }
+
+        @Override public String toString() { return name + " " + addrs; }
+    }
+
+    /**
+     * Browse for the whole of {@code timeoutMs} and return every service found.
+     *
+     * <p>The whole window, where this used to return the moment one service resolved. That was
+     * right while there was one peer to find and is wrong now: returning early means returning
+     * whichever peer answered first and never learning about the rest, and multicast replies from
+     * several devices do not arrive together. The window is the user's own setting, so its cost is
+     * visible and adjustable where the latency of a missed peer would not be.
+     *
+     * <p>Blocking; call from a background thread only.
+     */
+    public static List<Instance> discover(Context ctx, Network net, long timeoutMs) {
         NsdManager nsd = ctx.getSystemService(NsdManager.class);
         if (nsd == null) return new ArrayList<>();
         Session s = new Session(nsd);
@@ -68,10 +165,10 @@ public final class Mdns {
         } finally {
             s.close();
         }
-        List<Candidate> out = new ArrayList<>();
+        List<Instance> out = new ArrayList<>();
         synchronized (s.found) {
-            for (Map.Entry<InetSocketAddress, String> e : s.found.entrySet())
-                out.add(new Candidate(e.getKey(), e.getValue()));
+            for (Map.Entry<String, List<InetSocketAddress>> e : s.found.entrySet())
+                if (!e.getValue().isEmpty()) out.add(new Instance(e.getKey(), new ArrayList<>(e.getValue())));
         }
         return out;
     }
@@ -83,10 +180,20 @@ public final class Mdns {
         // onServiceInfoCallbackUnregistered after close(), and a rejected execute() would throw
         // on the system callback thread
         final ExecutorService executor = SHARED_EXECUTOR;
-        /** address -> advertised service name ("ClipSync on HOSTNAME"), insertion-ordered */
-        final Map<InetSocketAddress, String> found = new LinkedHashMap<>();
+        /** advertised service name -> every address it resolved to, insertion-ordered */
+        final Map<String, List<InetSocketAddress>> found = new LinkedHashMap<>();
+        /** Counted down only when the browse cannot start: otherwise the full window is the point. */
         final CountDownLatch done = new CountDownLatch(1);
         private final List<NsdManager.ServiceInfoCallback> callbacks = new ArrayList<>();
+        /**
+         * Set by {@link #close()}, and checked before registering another resolution callback.
+         *
+         * <p>NsdManager delivers {@code onServiceFound} on its own thread and does not stop at
+         * {@code stopServiceDiscovery}, so one arriving after close used to register a callback that
+         * nothing would ever unregister — a leak inside the system service, once per late discovery,
+         * for the life of the process.
+         */
+        private boolean closed;
 
         Session(NsdManager nsd) {
             this.nsd = nsd;
@@ -113,16 +220,19 @@ public final class Mdns {
                         List<InetSocketAddress> addrs = addressesOf(i);
                         if (addrs.isEmpty()) return;        // SRV arrived before A/AAAA; wait for the next update
                         synchronized (found) {
-                            for (InetSocketAddress a : addrs) found.putIfAbsent(a, i.getServiceName());
+                            List<InetSocketAddress> have = found.computeIfAbsent(i.getServiceName(), k -> new ArrayList<>());
+                            for (InetSocketAddress a : addrs) if (!have.contains(a)) have.add(a);
                         }
                         Logger.i("mdns found " + i.getServiceName() + " " + addrs);
-                        done.countDown();
                     }
 
                     @Override public void onServiceLost() { }
                     @Override public void onServiceInfoCallbackUnregistered() { }
                 };
-                synchronized (callbacks) { callbacks.add(cb); }
+                synchronized (callbacks) {
+                    if (closed) return;         // the browse is over; nothing would unregister this
+                    callbacks.add(cb);
+                }
                 try {
                     nsd.registerServiceInfoCallback(si, executor, cb);
                 } catch (Exception e) {
@@ -133,6 +243,7 @@ public final class Mdns {
 
         void close() {
             synchronized (callbacks) {
+                closed = true;
                 for (NsdManager.ServiceInfoCallback cb : callbacks) {
                     try { nsd.unregisterServiceInfoCallback(cb); } catch (Exception ignored) {}
                 }

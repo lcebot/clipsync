@@ -81,10 +81,20 @@ from clipsync_node import declaration, node_id, node_name, short_id   # noqa: E4
 
 (T_HELLO, T_CLIP, T_PING, T_PONG, T_FILE, T_OFFER, T_WANT, T_HAVE, T_SKIP, T_DATA, T_END,
  T_ABORT, T_CHUNK, T_PULL) = 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14
+# "I am closing this connection, and here is why" - {reason}.  15, not one of the retired numbers
+# (5 FILE, 10 DATA): reusing one would make an old log impossible to read, and numbers are not
+# scarce.  A close without one becomes a loop -- the far side sees only a disconnect, reconnects,
+# and rebuilds the link that was just discarded.  See docs/p2p-plan.md §5.
+T_BYE = 15
 # 2: HELLO is exchanged in both directions and carries the node id, type, persistence and battery
 # bucket (docs/p2p-plan.md §2). A clean break, by §9 — a version 1 peer is refused rather than
 # tolerated, because a peer that cannot name itself cannot be deduplicated or recognised as self.
-PROTOCOL_VERSION = 2
+# 3: HELLO also carries `port` and `data_out`, and every device listens.  The bump is not
+# bookkeeping: both new fields have defaults, so a version-2 peer would connect and work, and then
+# open its own data connections for a file at the same moment as the other end opens its, because
+# the rule that stops that is the field it does not send.  Every file would move twice.  A version
+# check turns that into one refused connection with a plain message.
+PROTOCOL_VERSION = 3
 READ_TIMEOUT = 90          # seconds without any frame -> drop client
 MAP_SAVE_EVERY = 8         # persist the received-chunk bitmap every N chunks
 WANT_RETRIES = 3           # how often the receiver re-asks for missing chunks in one session
@@ -194,6 +204,11 @@ class SecureChannel:
         self.battery = "medium"
         self.lan = False
         self.limit = 0                 # file size limit for this client (set after HELLO)
+        self.opened = time.monotonic()  # which of two links to one peer is the older (§5 rule 3)
+        # Set when this link lost a duplicate tiebreak and was closed from another thread. The owning
+        # thread sees only a closed socket, which is indistinguishable from the peer going away —
+        # and a dialler that cannot tell those apart redials into the link it just lost.
+        self.superseded = False
         self.send_lock = threading.Lock()
         mine = os.urandom(32)
         if initiator:
@@ -256,6 +271,26 @@ class SecureChannel:
 
     def send_json(self, typ: int, obj: dict):
         self.send(typ, json.dumps(obj, ensure_ascii=False).encode("utf-8"))
+
+    def bye(self, reason: str):
+        """
+        Close deliberately, telling the peer why first.
+
+        The BYE is the whole point: a close without one becomes a loop. The far side would see only
+        a disconnect, reconnect, and rebuild exactly the link that was discarded. (§5)
+
+        Closing the socket is what ends the link — the owning thread is blocked in `recv()` and
+        unwinds through its own `finally`, so this is safe to call from another thread and needs no
+        co-operation from the one that owns the channel.
+        """
+        try:
+            self.send_json(T_BYE, {"reason": reason})
+        except Exception:
+            pass                       # it is going away regardless; the peer still sees the close
+        try:
+            self.sock.close()
+        except OSError:
+            pass
 
 
 def nchunks(size: int) -> int:
@@ -909,12 +944,87 @@ class SyncState:
         self.cache = cache
         self.lock = threading.Lock()
         self.clients: set[SecureChannel] = set()
+        # The live links, keyed by the peer's node id. Keyed by id and not by address because that
+        # is what makes a duplicate visible: two names can be two names for one machine, and the
+        # only moment that becomes knowable is when a second handshake returns an id already held.
+        self.by_peer: dict[str, SecureChannel] = {}
         self.seq = 0                 # server-side sequence
         self.latest = None           # (Item, seq) of the latest content, for catch-up
         self.last_remote_hash = None # hash of content we last wrote into the local clipboard
         self.last_sent_hash = None
         self.last_set_path = None    # file we last put on the clipboard (cheap loop check)
         self.aborted = {}            # sha -> time of the last ABORT (pull loops check it)
+
+    # -- link registry (docs/p2p-plan.md §5) --
+    @staticmethod
+    def _duplicate_loser(old: "SecureChannel", new: "SecureChannel") -> "SecureChannel":
+        """
+        Which of two links to one peer has to go.
+
+        Both ends compute this from the same three facts — whether each link is on-link, which node
+        opened it, and which is older — so they reach the same verdict independently. That is the
+        property the rules exist for: a tiebreak the two ends can disagree about closes *both*
+        links and disconnects the pair. It is also why `lan` is the term here and not `via`: only a
+        dialler knows whether it found the peer by mDNS or by name, so `via` is not a shared fact.
+        """
+        if old.lan != new.lan:
+            return old if new.lan else new                 # 1. keep the one that is on-link
+        if old.initiator != new.initiator:
+            # 2. opened by different nodes: the link opened by the *larger* id goes. `initiator` is
+            # true for the links this PC opened, so this picks a side, not a link we happen to own.
+            #
+            # The plan phrases the close as the larger node's job. Performing it from whichever end
+            # notices first is the same close of the same socket — both ends name the same loser —
+            # and it does not depend on the larger node having both links registered yet.
+            loser_is_ours = node_id() > str(new.node_id or "")
+            return old if old.initiator == loser_is_ours else new
+        # 3. same opener — two names for one machine. Keep the older: it is the one already carrying
+        # traffic, and `new` is the newer by construction, having registered second.
+        return new
+
+    def register(self, ch: "SecureChannel"):
+        """
+        Claim the peer behind `ch`, or arbitrate against the link that already holds it.
+
+        :return: None when `ch` is now the link for its peer, or the reason it must be closed with.
+                 When the incumbent loses instead it is closed from here and `ch` takes its place.
+        """
+        if not ch.node_id:
+            # Protocol 2 requires one, and without it none of the rules above can be applied: an
+            # anonymous peer cannot be recognised as a duplicate, or as this PC.
+            return "no node id"
+        with self.lock:
+            other = self.by_peer.get(ch.node_id)
+            if other is None or other is ch:
+                self.clients.add(ch)
+                self.by_peer[ch.node_id] = ch
+                return None
+            if self._duplicate_loser(other, ch) is ch:
+                return "duplicate"
+            self.clients.discard(other)
+            self.clients.add(ch)
+            self.by_peer[ch.node_id] = ch
+        log.info("two links to %s [%s] — closing the %s one", other.device,
+                 short_id(other.node_id), "outbound" if other.initiator else "inbound")
+        other.superseded = True
+        other.bye("duplicate")
+        return None
+
+    def unregister(self, ch: "SecureChannel"):
+        """Conditional on still being the registered link: a replacement may already have taken it."""
+        with self.lock:
+            self.clients.discard(ch)
+            if ch.node_id and self.by_peer.get(ch.node_id) is ch:
+                del self.by_peer[ch.node_id]
+
+    def holds(self, node: str) -> bool:
+        """Is some link to that node still up?  Dial-time duplicate suppression asks this."""
+        with self.lock:
+            return node in self.by_peer
+
+    def online(self) -> int:
+        with self.lock:
+            return len(self.clients)
 
     # -- abort helpers --
     def is_aborted(self, sha: str) -> bool:
@@ -1034,6 +1144,15 @@ class SyncState:
         pt.origin = origin
         pt.retries = 0
         missing = pt.missing()
+        if not missing:
+            # Already complete on disk from an earlier attempt. An empty range list means
+            # *everything* to the peer, so sending one would re-stream the whole file to be
+            # discarded chunk by chunk — and the one case this happens in is a resume, which is
+            # exactly the case where the file is large.
+            self._finalize(pt, origin)
+            origin.send_json(T_HAVE, {"sha256": sha})
+            log.info("offer from %s: %s -> already complete on disk", origin.device, name)
+            return
         origin.send_json(T_WANT, {"sha256": sha, "ranges": missing})
         log.info("offer from %s: %s (%d bytes) -> want %s", origin.device, name, size,
                  "all" if len(pt.have) == 0 else f"{sum(b - a for a, b in missing)}/{pt.n} chunks (resume)")
@@ -1070,20 +1189,28 @@ class SyncState:
         if pt.finalized:
             return
         if pt.complete():
-            try:
-                path = pt.finalize()
-            except ValueError as e:
-                log.warning("transfer from %s rejected: %s", ch.device, e)
-                self.cache.partials.pop(pt.sha, None)
-                return
-            self.cache.partials.pop(pt.sha, None)
-            self.cache.put(pt.sha, path)
-            log.info("saved %s", path)
-            self._apply_remote(Item.from_path(path, pt.mime, pt.sha), pt.origin or ch)
+            self._finalize(pt, ch)
         elif last and not self.is_aborted(pt.sha):
             pt.keep()
             # debounce: give the phone a moment to open its remaining streams before re-asking
-            threading.Timer(2.0, self._reask, args=(pt,)).start()
+            # daemon: a two-second debounce must not be a reason the process refuses to exit
+            t = threading.Timer(2.0, self._reask, args=(pt,))
+            t.daemon = True
+            t.start()
+
+    def _finalize(self, pt: Partial, ch: SecureChannel):
+        """Verify, publish and apply a complete file. Called from a stream ending and from an offer
+        of something already on disk — which is why it is not inline in on_push_close any more."""
+        try:
+            path = pt.finalize()
+        except ValueError as e:
+            log.warning("transfer from %s rejected: %s", ch.device, e)
+            self.cache.partials.pop(pt.sha, None)
+            return
+        self.cache.partials.pop(pt.sha, None)
+        self.cache.put(pt.sha, path)
+        log.info("saved %s", path)
+        self._apply_remote(Item.from_path(path, pt.mime, pt.sha), pt.origin or ch)
 
     def _reask(self, pt: Partial):
         with pt.lock:
@@ -1175,11 +1302,17 @@ def serve(ch: SecureChannel, cfg: Cfg, state: SyncState):
 
     Extracted so the client role reuses it rather than growing a second copy. Nothing in here ever
     needed to know which side dialled — that is settled by the time the first frame arrives, and a
-    peer is a peer from then on. Returns when the peer closes or the read times out; the caller owns
-    registration and cleanup.
+    peer is a peer from then on. The caller owns registration and cleanup.
+
+    :return: the reason the peer gave in BYE, or None if it simply went away. A dialler must not
+             redial a peer that said goodbye on purpose: that is the loop BYE exists to prevent.
     """
     while True:
         typ, payload = ch.recv()
+        if typ == T_BYE:
+            reason = str(json.loads(payload.decode("utf-8")).get("reason", "")) or "no reason given"
+            log.info("%s said goodbye: %s", ch.device, reason)
+            return reason
         if typ == T_PING:
             ch.send(T_PONG)
         elif typ == T_CLIP:
@@ -1228,21 +1361,24 @@ def client_thread(sock: socket.socket, addr, cfg: Cfg, state: SyncState):
         # "I have nothing of yours", which makes the dialler catch us up exactly as we catch up an
         # inbound client. Symmetry here is the point — an outbound link that never received the
         # peer's current clipboard would look like a link that works only in one direction.
-        ch.send_json(T_HELLO, {"v": PROTOCOL_VERSION, "last_seq": 0, **declaration()})
-        with state.lock:
-            state.clients.add(ch)
-            n = len(state.clients)
+        ch.send_json(T_HELLO, {"v": PROTOCOL_VERSION, "last_seq": 0, **declaration(cfg)})
+        refusal = state.register(ch)
+        if refusal is not None:
+            # Announced, not just dropped: the peer dialled us, and a silent close is the thing its
+            # redial logic cannot tell from a network fault. (§5)
+            log.info("client %s (%s) refused: %s", addr[0], ch.device, refusal)
+            ch.bye(refusal)
+            return
         log.info("client %s connected (%s %s, %s link, file limit %d MB), %d online", addr[0],
                  ch.device, short_id(ch.node_id), "lan" if ch.lan else "internet",
-                 ch.limit // (1024 * 1024), n)
+                 ch.limit // (1024 * 1024), state.online())
         state.catch_up(ch, int(hello.get("last_seq", 0)))
         serve(ch, cfg, state)
     except Exception as e:
         log.info("client %s (%s) dropped: %s", addr[0], ch.device if ch else "?", e)
     finally:
         if ch:
-            with state.lock:
-                state.clients.discard(ch)
+            state.unregister(ch)
         try:
             sock.close()
         except OSError:
@@ -1317,13 +1453,22 @@ def server_thread(cfg: Cfg, state: SyncState):
     srv.listen(8)
     log.info("listening on [::]:%d", cfg.port)
     while True:
-        sock, addr = srv.accept()
+        try:
+            sock, addr = srv.accept()
+        except OSError as e:
+            # A transient accept failure — out of descriptors, a connection reset between the SYN
+            # and the accept — used to kill this thread, and with it every future inbound
+            # connection, silently. The service went on running and answering nothing.
+            log.warning("accept failed: %s", e)
+            time.sleep(1)
+            continue
         threading.Thread(target=client_thread, args=(sock, addr, cfg, state), daemon=True).start()
 
 
 # ----------------------------------------------------------------------------- client role
 DIAL_RETRY_MIN = 5         # seconds before re-dialling a peer that would not answer
 DIAL_RETRY_MAX = 300       # ... doubling to here, per peer, so one dead name does not slow the rest
+DIAL_DEFER_POLL = 5        # how often a deferred target checks whether the route that beat it is up
 
 
 def on_lan(sock: socket.socket) -> bool:
@@ -1355,8 +1500,8 @@ def dial_thread(peer: str, cfg: Cfg, state: SyncState):
     This is the client role the PC did not have: it only ever accepted before, which is why a PC
     could not reach a phone and two PCs could not find each other at all. One thread per peer, with
     its own back-off, because a peer that is switched off must not slow down the redial of one that
-    is merely rebooting — a single shared back-off is the mistake the Android side still has to undo
-    in phase 4.
+    is merely rebooting. Android arrived at the same shape from the other direction, having had one
+    shared back-off that any single dead target could hold everything else behind.
 
     A connection that comes up is an ordinary client of `state`, indistinguishable from an inbound
     one from there on: the same SecureChannel, the same registry, the same broadcast. Only the
@@ -1369,6 +1514,7 @@ def dial_thread(peer: str, cfg: Cfg, state: SyncState):
     backoff = DIAL_RETRY_MIN
     while True:
         ch = None
+        defer = None
         try:
             sock = socket.create_connection((peer, cfg.port), timeout=10)
             sock.settimeout(READ_TIMEOUT)
@@ -1377,41 +1523,72 @@ def dial_thread(peer: str, cfg: Cfg, state: SyncState):
             ch = SecureChannel(sock, cfg.psk, cfg.max_frame, initiator=True)
             # The dialler declares first and the accepter answers — the same order as before, now
             # with the PC on the other end of it.
-            ch.send_json(T_HELLO, {"v": PROTOCOL_VERSION, "lan": lan, "last_seq": 0, **declaration()})
+            ch.send_json(T_HELLO, {"v": PROTOCOL_VERSION, "lan": lan, "last_seq": 0, **declaration(cfg)})
             reply = ch.read_hello()
             if ch.node_id and ch.node_id == node_id():
                 log.info("%s is this PC; not dialling it again", peer)
                 return
             ch.lan = lan
             ch.limit = cfg.max_file_bytes_local if lan else cfg.max_file_bytes
-            with state.lock:
-                state.clients.add(ch)
-                n = len(state.clients)
-            log.info("dialled %s (%s %s, %s link, file limit %d MB), %d online", peer, ch.device,
-                     short_id(ch.node_id), "lan" if lan else "internet",
-                     ch.limit // (1024 * 1024), n)
-            backoff = DIAL_RETRY_MIN
-            # Symmetric with the inbound path: tell the peer whatever it is behind on. Without this
-            # an outbound link delivers nothing until the next local copy, which reads as a link
-            # that works in one direction only.
-            state.catch_up(ch, int(reply.get("last_seq", 0)))
-            serve(ch, cfg, state)
+            refusal = state.register(ch)
+            if refusal is not None:
+                # This name reaches a peer another route already holds. Say so and defer below,
+                # rather than connecting and handshaking every back-off interval to re-learn it.
+                log.info("%s is %s [%s] by another name — closing this link", peer, ch.device,
+                         short_id(ch.node_id))
+                ch.bye(refusal)
+                defer = ch.node_id
+            else:
+                log.info("dialled %s (%s %s, %s link, file limit %d MB), %d online", peer, ch.device,
+                         short_id(ch.node_id), "lan" if lan else "internet",
+                         ch.limit // (1024 * 1024), state.online())
+                backoff = DIAL_RETRY_MIN
+                # Symmetric with the inbound path: tell the peer whatever it is behind on. Without
+                # this an outbound link delivers nothing until the next local copy, which reads as a
+                # link that works in one direction only.
+                state.catch_up(ch, int(reply.get("last_seq", 0)))
+                if serve(ch, cfg, state) is not None:
+                    # It closed us deliberately — a duplicate link, most often, because it reached
+                    # us by another route as well. Redialling would rebuild exactly what it just
+                    # discarded.
+                    defer = ch.node_id
         except Exception as e:
             log.info("dial %s: %s", peer, e)
         finally:
             if ch is not None:
-                with state.lock:
-                    state.clients.discard(ch)
+                state.unregister(ch)
                 try:
                     ch.sock.close()
                 except OSError:
                     pass
+        if ch is not None and ch.superseded:
+            defer = ch.node_id          # closed from the accept side as the duplicate; see above
+        if defer:
+            # A deferral, not a surrender (§5). This target reaches a peer that is already connected
+            # by another route, so stop dialling it — but only while that route is up. Returning
+            # here instead, as this used to, meant a name that lost the tiebreak once was never
+            # dialled again, and the peer became unreachable the moment the winning route died.
+            log.info("%s: deferring while %s is connected another way", peer, short_id(defer))
+            # Sleep first, so a winner that dies in the same instant cannot turn this into a spin.
+            while True:
+                time.sleep(DIAL_DEFER_POLL)
+                if not state.holds(defer):
+                    break
+            log.info("%s: that route is gone, dialling again", peer)
+            backoff = DIAL_RETRY_MIN
+            continue
         time.sleep(backoff)
         backoff = min(backoff * 2, DIAL_RETRY_MAX)
 
 
 def client_role_thread(cfg: Cfg, state: SyncState):
-    """One dialler per listed peer. Discovery-found peers join in phase 4, when the PC browses."""
+    """
+    One dialler per listed peer.
+
+    Still only the *listed* ones: this PC advertises but does not browse, so it finds a phone on the
+    LAN by being found rather than by looking. That is enough for the pair to connect — only one of
+    two nodes has to do the finding — and it is the remaining asymmetry between the two platforms.
+    """
     for peer in cfg.peers:
         threading.Thread(target=dial_thread, args=(peer, cfg, state), daemon=True,
                          name="clipsync-dial-%s" % peer).start()
@@ -1617,12 +1794,14 @@ def main():
     # writing this PC's clipboard, so the listener window has to exist first. The network side
     # needs no delay of its own — the listening socket is a wildcard bind and serves interfaces
     # that appear later anyway, and the mDNS advertiser waits for the address list to settle.
-    # start_delay remains for the one case that still wants it: several PCs sharing one
-    # config.json, where starting before the DNS record has been published makes the PC that does
-    # not own the name advertise for one probe interval before withdrawing.
+    # start_delay remains for the one case that still wants it: a PC whose DDNS record is published
+    # by something else at boot, where dialling before the record exists costs a full back-off
+    # ladder of failures before the first success.
     if cfg.start_delay > 0:
         log.info("network start delayed by %ds", cfg.start_delay)
-        threading.Timer(cfg.start_delay, start_network).start()
+        t = threading.Timer(cfg.start_delay, start_network)
+        t.daemon = True     # a pending delay is not a reason the service cannot be stopped
+        t.start()
     else:
         start_network()
 

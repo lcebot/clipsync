@@ -51,8 +51,12 @@
     <string name="section_own">This device\'s addresses</string>
     <!-- No full stop: nothing else on this page ends a supporting line with one. -->
     <string name="own_help">Used to recognise itself and avoid a network loop</string>
+    <!-- Labels for the card's click action, so a screen reader can say what pressing would do. -->
     <string name="own_expand">Show this device\'s addresses</string>
     <string name="own_collapse">Hide this device\'s addresses</string>
+    <!-- And the state it is in now, which is a different question from what the press would do. -->
+    <string name="own_state_expanded">Expanded</string>
+    <string name="own_state_collapsed">Collapsed</string>
     <string name="browse_label">mDNS browse timeout: %1$d ms</string>
     <!-- Both switches off leaves no way to reach anything. Shown under the pair, because it is about
          the pair; neither switch on its own is wrong. -->
@@ -76,23 +80,33 @@
     <string name="log_copy">Copy</string>
     <string name="log_clear">Clear</string>
 
-    <!-- status chip in the app bar -->
+    <!-- Status chip in the app bar. Five states, distinct because the answer to "what do I do now"
+         differs for each: Stopped needs a button, No network needs the network fixed, Idle needs
+         nothing. Disconnected is gone — with several peers it carried no information the sheet does
+         not carry better. See docs/p2p-plan.md §11. -->
     <string name="state_stopped">Stopped</string>
     <string name="state_connecting">Connecting…</string>
-    <string name="state_disconnected">Disconnected</string>
     <string name="state_no_network">No network</string>
     <string name="state_idle">Idle</string>
+    <string name="state_connected">Connected (%1$d)</string>
     <string name="state_not_running">not running — restarting</string>
     <string name="state_autostart_off">auto-start off</string>
-    <string name="kind_mdns">mDNS</string>
-    <string name="kind_direct">Direct (%1$s)</string>
-    <string name="link_lan">LAN</string>
-    <string name="link_internet">Internet</string>
+    <string name="target_discovery">Local network</string>
+    <!-- Shown against "Local network" in the sheet while discovery is on and has found nothing. It
+         says what was looked for rather than just "nothing", because the three ordinary causes —
+         the other device asleep, mDNS blocked by the access point, client isolation — are all
+         invisible from here and none of them is a fault of this device. -->
+    <string name="discovery_none">No other devices are advertising on this network</string>
 
-    <!-- connection details dialog -->
-    <string name="dialog_peer">Peer</string>
-    <string name="dialog_address">Address</string>
-    <string name="dialog_tap_to_copy">Tap a value to copy it.</string>
+    <!-- connection sheet -->
+    <string name="sheet_title">Peers</string>
+    <string name="sheet_on_lan">On this network</string>
+    <string name="sheet_over_internet">Over the internet</string>
+    <string name="sheet_not_connected">Not connected</string>
+    <string name="sheet_none">No peers connected</string>
+    <string name="peer_same_as">Same device as %1$s</string>
+    <string name="peer_disconnected">Disconnected</string>
+    <string name="dialog_tap_to_copy">Tap a row to copy it.</string>
 
     <!-- snackbars -->
     <string name="snack_copied">Copied</string>

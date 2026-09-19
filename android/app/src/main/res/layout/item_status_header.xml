@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A group heading in the peer sheet: "On this network", "Over the internet", "Not connected".
+     Same treatment as a Settings section title, so the two surfaces read as one app — which means
+     the same type role as well, titleSmall. It was labelMedium, which is the role for the text
+     *on* a component, and it made the sheet's headings a size smaller than the ones the page uses
+     for the same job. -->
+<TextView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:paddingHorizontal="24dp"
+    android:paddingTop="16dp"
+    android:paddingBottom="4dp"
+    android:accessibilityHeading="true"
+    android:textAppearance="?attr/textAppearanceTitleSmall"
+    android:textColor="?attr/colorPrimary" />
