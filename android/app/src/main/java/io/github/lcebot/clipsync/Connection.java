@@ -97,6 +97,10 @@ public final class Connection implements AutoCloseable {
      * {@code refused} (final: opted out, over the size limit, or battery too low).
      */
     public static final int T_RELAY_ASK = 17, T_RELAY_OK = 18, T_RELAY_NO = 19;
+
+    // Peer roster exchange (docs/p2p-plan.md §18): a node tells each direct peer about its other
+    // direct peers, so every node knows the 2-hop neighbourhood and can build a complete OFFER `to`.
+    public static final int T_PEERS = 20;
     /**
      * 2: HELLO is exchanged in both directions and carries the node id, type, persistence and
      * battery bucket (docs/p2p-plan.md §2). A clean break, by §9 — a version 1 peer is refused

@@ -31,6 +31,7 @@ __all__ = [
     "T_OFFER", "T_WANT", "T_HAVE", "T_SKIP", "T_CHUNK", "T_PULL", "T_END", "T_ABORT",
     "T_PAIR_ASK", "T_PAIR_KEY",
     "T_RELAY_ASK", "T_RELAY_OK", "T_RELAY_NO",
+    "T_PEERS",
     "BYE_IDLE", "PROTOCOL_VERSION", "READ_TIMEOUT", "hkdf_sha256", "SecureChannel",
 ]
 
@@ -67,6 +68,9 @@ T_PAIR_ASK, T_PAIR_KEY = 15, 16
 # Relay coordination (docs/p2p-plan.md §7): the waiter asks a higher-priority LAN peer to relay a
 # file, the relay accepts or declines, and on acceptance it sends a normal OFFER when it has the data.
 T_RELAY_ASK, T_RELAY_OK, T_RELAY_NO = 17, 18, 19
+# Peer roster exchange (docs/p2p-plan.md §18): a node tells each direct peer about its other direct
+# peers, so every node knows the 2-hop neighbourhood and can build a complete OFFER `to` list.
+T_PEERS = 20
 # 2: HELLO is exchanged in both directions and carries the node id, type, persistence and battery
 # bucket (docs/p2p-plan.md §2). A clean break, by §9 — a version 1 peer is refused rather than
 # tolerated, because a peer that cannot name itself cannot be deduplicated or recognised as self.

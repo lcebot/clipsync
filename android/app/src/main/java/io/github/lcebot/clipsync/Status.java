@@ -83,6 +83,15 @@ public final class Status {
         }
     }
 
+    /** A peer this device knows about through T_PEERS but is not directly connected to (§18). */
+    public static final class IndirectPeer {
+        public final String id, name, type, via;
+
+        IndirectPeer(String id, String name, String type, String via) {
+            this.id = id; this.name = name; this.type = type; this.via = via;
+        }
+    }
+
     /** A configured target that is not connected, and why. */
     public static final class Target {
         public final String target, reason;
@@ -105,13 +114,15 @@ public final class Status {
         // the user against a power saving that is working.
         public final boolean suspended;
         public final List<Peer> peers;
+        public final List<IndirectPeer> indirectPeers;
         public final List<Target> targets;
         /** Number of files this device is currently relaying for others (docs/p2p-plan.md §8). */
         public final int relayCount;
 
-        Snapshot(String state, String detail, long ts, boolean suspended, List<Peer> peers, List<Target> targets, int relayCount) {
+        Snapshot(String state, String detail, long ts, boolean suspended, List<Peer> peers,
+                 List<IndirectPeer> indirectPeers, List<Target> targets, int relayCount) {
             this.state = state; this.detail = detail; this.ts = ts; this.suspended = suspended;
-            this.peers = peers; this.targets = targets; this.relayCount = relayCount;
+            this.peers = peers; this.indirectPeers = indirectPeers; this.targets = targets; this.relayCount = relayCount;
         }
 
         /** The service process wrote recently and is not stopped. */
@@ -122,16 +133,25 @@ public final class Status {
         public int count() {
             return peers.size();
         }
+
+        /** Total devices visible: direct + indirect (for the status chip). */
+        public int totalCount() {
+            return peers.size() + indirectPeers.size();
+        }
     }
 
     /** The snapshot the UI substitutes when the service process has died without saying so. */
     public static Snapshot stopped(String detail, boolean suspended) {
-        return new Snapshot("stopped", detail, 0, suspended, new ArrayList<>(), new ArrayList<>(), 0);
+        return new Snapshot("stopped", detail, 0, suspended, new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), 0);
     }
 
     // Factories rather than public constructors: the service builds these, the UI only reads them.
     public static Peer peer(String id, String name, String type, String via, String addr, boolean lan) {
         return new Peer(id, name, type, via, addr, lan);
+    }
+
+    public static IndirectPeer indirectPeer(String id, String name, String type, String via) {
+        return new IndirectPeer(id, name, type, via);
     }
 
     public static Target target(String target, String reason, Why why) {
@@ -182,12 +202,18 @@ public final class Status {
      * cheaper to be sure of.
      */
     public static synchronized void write(Context ctx, String state, String detail, boolean suspended,
-                                          List<Peer> peers, List<Target> targets, int relayCount) {
+                                          List<Peer> peers, List<IndirectPeer> indirectPeers,
+                                          List<Target> targets, int relayCount) {
         try {
             JSONArray ps = new JSONArray();
             for (Peer p : peers) {
                 ps.put(new JSONObject().put("id", str(p.id)).put("name", str(p.name)).put("type", str(p.type))
                         .put("via", str(p.via)).put("addr", str(p.addr)).put("lan", p.lan));
+            }
+            JSONArray ips = new JSONArray();
+            for (IndirectPeer ip : indirectPeers) {
+                ips.put(new JSONObject().put("id", str(ip.id)).put("name", str(ip.name))
+                        .put("type", str(ip.type)).put("via", str(ip.via)));
             }
             JSONArray ts = new JSONArray();
             for (Target t : targets) {
@@ -196,7 +222,8 @@ public final class Status {
             }
             String s = new JSONObject().put("state", state).put("detail", str(detail))
                     .put("ts", System.currentTimeMillis()).put("suspended", suspended)
-                    .put("peers", ps).put("targets", ts).put("relay_count", relayCount).toString();
+                    .put("peers", ps).put("indirect_peers", ips)
+                    .put("targets", ts).put("relay_count", relayCount).toString();
             File f = file(ctx), tmp = new File(f.getPath() + ".tmp");
             try (FileOutputStream out = new FileOutputStream(tmp)) {
                 out.write(s.getBytes(StandardCharsets.UTF_8));
@@ -226,6 +253,14 @@ public final class Status {
                 peers.add(new Peer(get(p, "id"), get(p, "name"), get(p, "type"),
                         get(p, "via"), get(p, "addr"), p.optBoolean("lan")));
             }
+            List<IndirectPeer> indirectPeers = new ArrayList<>();
+            JSONArray ips = o.optJSONArray("indirect_peers");
+            for (int i = 0; ips != null && i < ips.length(); i++) {
+                JSONObject ip = ips.optJSONObject(i);
+                if (ip == null) continue;
+                indirectPeers.add(new IndirectPeer(get(ip, "id"), get(ip, "name"),
+                        get(ip, "type"), get(ip, "via")));
+            }
             List<Target> targets = new ArrayList<>();
             JSONArray ts = o.optJSONArray("targets");
             for (int i = 0; ts != null && i < ts.length(); i++) {
@@ -234,9 +269,10 @@ public final class Status {
                 targets.add(new Target(get(t, "target"), get(t, "reason"), Why.of(t.optString("why"))));
             }
             return new Snapshot(o.optString("state", "stopped"), get(o, "detail"),
-                    o.optLong("ts", 0), o.optBoolean("suspended"), peers, targets, o.optInt("relay_count", 0));
+                    o.optLong("ts", 0), o.optBoolean("suspended"), peers, indirectPeers, targets,
+                    o.optInt("relay_count", 0));
         } catch (Exception e) {
-            return new Snapshot("stopped", null, 0, false, new ArrayList<>(), new ArrayList<>(), 0);
+            return new Snapshot("stopped", null, 0, false, new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), 0);
         }
     }
 }

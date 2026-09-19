@@ -128,6 +128,31 @@ public class SyncService extends Service {
             peers.add(Status.peer(c.peerId, c.peerLabel, c.peerType, c.via,
                     String.valueOf(c.remote).replaceFirst("^[^/]*/", ""), c.lanPeer));
         }
+        // Indirect peers (§18): visible through T_PEERS but not directly connected.
+        // Exclude any id that is already a direct peer or is this device itself.
+        java.util.Set<String> directIds = new java.util.HashSet<>();
+        for (Link l : byPeer.values()) {
+            if (l.isOpen() && l.peerId() != null) directIds.add(l.peerId());
+        }
+        List<Status.IndirectPeer> indirectPeers = new ArrayList<>();
+        java.util.Set<String> seenIndirect = new java.util.HashSet<>();
+        for (java.util.Map.Entry<String, org.json.JSONArray> e : indirect.entrySet()) {
+            String reporterId = e.getKey();
+            // Find reporter's name for the "via" field.
+            Link reporter = byPeer.get(reporterId);
+            String reporterName = reporter != null && reporter.isOpen()
+                    ? reporter.connection().peerLabel : Node.shortId(reporterId);
+            org.json.JSONArray entries = e.getValue();
+            for (int i = 0; i < entries.length(); i++) {
+                JSONObject entry = entries.optJSONObject(i);
+                if (entry == null) continue;
+                String pid = entry.optString("id", "");
+                if (pid.isEmpty() || directIds.contains(pid) || pid.equals(Node.id())) continue;
+                if (!seenIndirect.add(pid)) continue;   // dedup across reporters
+                indirectPeers.add(Status.indirectPeer(pid, entry.optString("name", "?"),
+                        entry.optString("type", "?"), reporterName));
+            }
+        }
         // Everything configured that is not up, with its last reason. Three addresses of which one
         // is failing is invisible in "Connected (2)", and that is exactly the thing someone opens
         // the sheet to find out.
@@ -163,7 +188,7 @@ public class SyncService extends Service {
         if (searching != null) {
             targets.add(Status.target(getString(R.string.target_discovery), searching, Status.Why.WAITING));
         }
-        Status.write(this, lastState, lastDetail, suspendedOnce, peers, targets, relayAccepted.size());
+        Status.write(this, lastState, lastDetail, suspendedOnce, peers, indirectPeers, targets, relayAccepted.size());
     }
 
     private volatile Config cfg;
@@ -713,9 +738,7 @@ public class SyncService extends Service {
             j.put("ts", clipTs);
             j.put("from", Node.id());
             org.json.JSONArray to = new org.json.JSONArray();
-            for (Link peer : byPeer.values()) {
-                if (peer.isOpen() && peer.peerId() != null) to.put(peer.peerId());
-            }
+            for (String id : knownPeerIds()) to.put(id);
             j.put("to", to);
             j.put("forwarded", false);
             j.put("mime", "text/plain");
@@ -869,6 +892,8 @@ public class SyncService extends Service {
     private final java.util.Map<String, RelayWait> relayWaits = new java.util.concurrent.ConcurrentHashMap<>();
     /** Relay requests we accepted: sha → set of waiter Links that will receive the OFFER. */
     private final java.util.Map<String, java.util.Set<Link>> relayAccepted = new java.util.concurrent.ConcurrentHashMap<>();
+    /** Peer roster (§18): indirect[sender_id] → reported peer entries (full snapshot, replaced on each T_PEERS). */
+    private final java.util.Map<String, org.json.JSONArray> indirect = new java.util.concurrent.ConcurrentHashMap<>();
     /** Timeout for a single step of the relay fallback walk (generous — it is a backstop, not a scheduler). */
     private static final long RELAY_ASK_TIMEOUT_MS = 30_000;
 
@@ -881,9 +906,7 @@ public class SyncService extends Service {
         hdr.put("sha256", f.sha256);
         hdr.put("from", Node.id());
         JSONArray to = new JSONArray();
-        for (Link peer : byPeer.values()) {
-            if (peer.isOpen() && peer.peerId() != null) to.put(peer.peerId());
-        }
+        for (String id : knownPeerIds()) to.put(id);
         hdr.put("to", to);
         return hdr;
     }
@@ -1629,6 +1652,7 @@ public class SyncService extends Service {
             case Connection.T_RELAY_ASK -> onRelayAsk(l, new JSONObject(new String(f.payload, StandardCharsets.UTF_8)));
             case Connection.T_RELAY_OK -> onRelayOk(l, new JSONObject(new String(f.payload, StandardCharsets.UTF_8)));
             case Connection.T_RELAY_NO -> onRelayNo(l, new JSONObject(new String(f.payload, StandardCharsets.UTF_8)));
+            case Connection.T_PEERS -> onPeers(l, new JSONObject(new String(f.payload, StandardCharsets.UTF_8)));
             default -> { }
         }
     }
@@ -1684,6 +1708,77 @@ public class SyncService extends Service {
             // outcome of the tie-break if there was one.
             announceKeys();
         }
+    }
+
+    // ------------------------------------------------------------------ peer roster (§18)
+
+    /** Direct peers ∪ indirect peers — the full `to` set for OFFER and CLIP. */
+    private java.util.Set<String> knownPeerIds() {
+        java.util.Set<String> result = new java.util.HashSet<>();
+        for (Link peer : byPeer.values()) {
+            if (peer.isOpen() && peer.peerId() != null) result.add(peer.peerId());
+        }
+        for (org.json.JSONArray entries : indirect.values()) {
+            for (int i = 0, n = entries.length(); i < n; i++) {
+                String pid = entries.optJSONObject(i) != null ? entries.optJSONObject(i).optString("id", "") : "";
+                if (!pid.isEmpty()) result.add(pid);
+            }
+        }
+        return result;
+    }
+
+    /** Send this node's direct-peer roster to one peer, excluding that peer (§18). */
+    private void sendPeers(Connection c) {
+        if (c.peerId == null) return;
+        try {
+            org.json.JSONArray arr = new org.json.JSONArray();
+            for (Link peer : byPeer.values()) {
+                Connection pc = peer.connection();
+                if (peer.isOpen() && pc.peerId != null && !pc.peerId.equals(c.peerId)) {
+                    JSONObject entry = new JSONObject();
+                    entry.put("id", pc.peerId);
+                    entry.put("name", pc.peerLabel);
+                    entry.put("type", pc.peerType);
+                    entry.put("persistent", pc.peerPersistent);
+                    entry.put("battery", pc.peerBattery);
+                    arr.put(entry);
+                }
+            }
+            JSONObject msg = new JSONObject();
+            msg.put("peers", arr);
+            c.sendJson(Connection.T_PEERS, msg);
+            StringBuilder names = new StringBuilder();
+            for (int i = 0; i < arr.length(); i++) {
+                if (i > 0) names.append(", ");
+                names.append(arr.optJSONObject(i) != null ? arr.optJSONObject(i).optString("name", "?") : "?");
+            }
+            Logger.i("sent roster to " + c.peerLabel + ": " + arr.length() + " peer(s) [" + (arr.length() > 0 ? names : "empty") + "]");
+        } catch (Exception e) {
+            Logger.i("could not send peers to " + c.peerLabel + ": " + e);
+        }
+    }
+
+    /** Send an updated T_PEERS to every connected peer (§18). */
+    private void broadcastPeers() {
+        for (Link l : byPeer.values()) {
+            if (l.isOpen()) sendPeers(l.connection());
+        }
+    }
+
+    /** A peer reported its direct-peer roster.  Replace our record for that sender (§18). */
+    private void onPeers(Link l, JSONObject msg) {
+        Connection c = l.connection();
+        if (c.peerId == null) return;
+        org.json.JSONArray entries = msg.optJSONArray("peers");
+        if (entries == null) entries = new org.json.JSONArray();
+        indirect.put(c.peerId, entries);
+        StringBuilder names = new StringBuilder();
+        for (int i = 0; i < entries.length(); i++) {
+            if (i > 0) names.append(", ");
+            JSONObject e = entries.optJSONObject(i);
+            names.append(e != null ? e.optString("name", "?") : "?");
+        }
+        Logger.i("roster from " + c.peerLabel + ": " + entries.length() + " peer(s) [" + (entries.length() > 0 ? names : "none") + "]");
     }
 
     /**
@@ -1987,6 +2082,7 @@ public class SyncService extends Service {
             // say — which is whenever a successor exists, because that is news the peer needs
             // whether or not it is rotating itself.
             sendKeys(c);
+            broadcastPeers();
             refreshStatus();
         }
 
@@ -2476,6 +2572,11 @@ public class SyncService extends Service {
             if (!u.isAborted()) unanswered = u.ref;
             u.abort();
             upload.compareAndSet(u, null);
+        }
+        // Drop what this peer told us about its peers, and tell remaining peers it is gone (§18).
+        if (c.peerId != null) {
+            indirect.remove(c.peerId);
+            broadcastPeers();
         }
         // Relay cleanup (§7): if a relay we were waiting on disconnected, walk to the next candidate.
         if (c.peerId != null) {

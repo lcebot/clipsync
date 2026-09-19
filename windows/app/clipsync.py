@@ -21,6 +21,7 @@ Protocol (must match the Android side, see Connection.java / SyncService.java):
              13 END {sha256}          14 ABORT {sha256,reason}
              15 PAIR_ASK  16 PAIR_KEY {psk,port,device,type}
              17 RELAY_ASK {sha256}  18 RELAY_OK {sha256}  19 RELAY_NO {sha256,reason}
+             20 PEERS {peers: [{id,name,type,persistent,battery}]}
 
 Text goes as CLIP (JSON, <= max_bytes).  Files: OFFER -> HAVE | SKIP | WANT {ranges of missing
 chunks}; the bytes then move over up to N parallel data connections the phone opens (HELLO
@@ -877,6 +878,9 @@ class SyncState:
         # Relay coordination (§7).
         self.relay_waits = {}        # sha -> RelayWait
         self.relay_accepted = {}     # sha -> set of SecureChannel (waiters we accepted)
+        # Peer roster (§18): indirect[sender_id] → list of reported peer entries.
+        # A full snapshot, replaced entirely on each T_PEERS; dropped when the sender disconnects.
+        self.indirect: dict[str, list[dict]] = {}
         # Key rotation state, mirroring SyncService.java's cfg.keys / cfg.rotate.
         self.schedule = cfg.keys
         self.rotate = cfg.rotate
@@ -950,6 +954,12 @@ class SyncState:
             self.clients.discard(ch)
             if ch.node_id and self.by_peer.get(ch.node_id) is ch:
                 del self.by_peer[ch.node_id]
+            # Drop what this peer told us about its peers (§18).
+            if ch.node_id:
+                self.indirect.pop(ch.node_id, None)
+        # Roster update: remaining peers need to know this one is gone (§18).
+        if ch.node_id:
+            broadcast_peers(self)
         # Relay cleanup (§7): if a relay we were waiting on disconnected, walk to next candidate.
         if ch.node_id:
             for rw in list(self.relay_waits.values()):
@@ -966,6 +976,17 @@ class SyncState:
         """Is some link to that node still up?  Dial-time duplicate suppression asks this."""
         with self.lock:
             return node in self.by_peer
+
+    def known_peer_ids(self) -> set:
+        """Direct peers ∪ indirect peers (§18).  The full `to` set for OFFER and CLIP."""
+        with self.lock:
+            result = {c.node_id for c in self.clients if c.node_id}
+            for entries in self.indirect.values():
+                for entry in entries:
+                    pid = entry.get("id")
+                    if pid:
+                        result.add(pid)
+        return result
 
     def online(self) -> int:
         with self.lock:
@@ -1003,15 +1024,14 @@ class SyncState:
 
     # -- frames --
     def header(self, item: Item) -> dict:
-        with self.lock:
-            peer_ids = [c.node_id for c in self.clients if c.node_id]
+        peer_ids = list(self.known_peer_ids())
         return {"seq": int(time.time() * 1000), "name": item.name, "mime": item.mime,
                 "size": item.size, "sha256": item.sha256,
                 "from": node_id(), "to": peer_ids}
 
     def announce(self, item: Item, targets, *, ts=0, from_id="", forwarded=False, extra_to=None):
         """Push text (with version fields §6), or offer a file."""
-        all_ids = set(c.node_id for c in targets if c.node_id)
+        all_ids = self.known_peer_ids()
         if extra_to:
             all_ids |= extra_to
         for c in targets:
@@ -1598,6 +1618,46 @@ def announce_keys(state: SyncState):
         send_keys(c, state)
 
 
+def send_peers(ch: SecureChannel, state: SyncState):
+    """Send this node's direct-peer roster to one peer, excluding that peer (§18)."""
+    with state.lock:
+        entries = []
+        for c in state.clients:
+            if c.node_id and c.node_id != ch.node_id:
+                entries.append({
+                    "id": c.node_id, "name": c.device,
+                    "type": c.node_type, "persistent": c.persistent,
+                    "battery": c.battery,
+                })
+    try:
+        ch.send_json(T_PEERS, {"peers": entries})
+        names = ", ".join(e.get("name", "?") for e in entries) if entries else "(empty)"
+        log.info("sent roster to %s: %d peer(s) [%s]", ch.device, len(entries), names)
+    except Exception as e:
+        log.info("could not send peers to %s: %s", ch.device, e)
+
+
+def broadcast_peers(state: SyncState):
+    """Send an updated T_PEERS to every connected peer (§18)."""
+    with state.lock:
+        targets = list(state.clients)
+    for c in targets:
+        send_peers(c, state)
+
+
+def on_peers(ch: SecureChannel, msg: dict, state: SyncState):
+    """A peer reported its direct-peer roster. Replace our record for that sender (§18)."""
+    if not ch.node_id:
+        return
+    entries = msg.get("peers", [])
+    if not isinstance(entries, list):
+        return
+    with state.lock:
+        state.indirect[ch.node_id] = entries
+    names = ", ".join(e.get("name", "?") for e in entries) if entries else "(none)"
+    log.info("roster from %s: %d peer(s) [%s]", ch.device, len(entries), names)
+
+
 def on_keys(ch: SecureChannel, msg: dict, state: SyncState):
     """A peer reported its key schedule. Reconcile, persist if changed, and reply with ours."""
     their_psk = str(msg.get("psk", "")).strip().lower()
@@ -1667,6 +1727,8 @@ def serve(ch: SecureChannel, cfg: Cfg, state: SyncState):
             state.on_relay_ok(json.loads(payload.decode("utf-8")), ch)
         elif typ == T_RELAY_NO:
             state.on_relay_no(json.loads(payload.decode("utf-8")), ch)
+        elif typ == T_PEERS:
+            on_peers(ch, json.loads(payload.decode("utf-8")), state)
         elif typ == T_PONG:
             t4 = int(time.time() * 1000)
             pong = json.loads(payload.decode("utf-8")) if payload else {}
@@ -1718,6 +1780,7 @@ def client_thread(sock: socket.socket, addr, cfg: Cfg, state: SyncState):
                  ch.device, short_id(ch.node_id), "lan" if ch.lan else "internet",
                  ch.limit // (1024 * 1024), state.online())
         send_keys(ch, state)
+        broadcast_peers(state)
         state.catch_up(ch, int(hello.get("clip_ts", 0)), str(hello.get("clip_sha", "")))
         serve(ch, cfg, state)
     except Exception as e:
@@ -1902,6 +1965,7 @@ def dial_thread(peer: str, cfg: Cfg, state: SyncState):
                          ch.limit // (1024 * 1024), state.online())
                 backoff = DIAL_RETRY_MIN
                 send_keys(ch, state)
+                broadcast_peers(state)
                 # Symmetric with the inbound path: tell the peer whatever it is behind on. Without
                 # this an outbound link delivers nothing until the next local copy, which reads as a
                 # link that works in one direction only.

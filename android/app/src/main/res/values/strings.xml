@@ -114,6 +114,7 @@
     <string name="sheet_title">Peers</string>
     <string name="sheet_on_lan">On this network</string>
     <string name="sheet_over_internet">Over the internet</string>
+    <string name="sheet_indirect">Indirect devices</string>
     <string name="sheet_not_connected">Not connected</string>
     <string name="sheet_none">No peers connected</string>
     <!-- §8: shown in the status sheet while this device is actively relaying files for others. -->
@@ -135,6 +136,7 @@
     <string name="field_id">ID</string>
     <string name="field_type">Type</string>
     <string name="field_address">Address</string>
+    <string name="field_via">Via</string>
     <string name="field_reason">Reason</string>
 
     <!-- pairing (docs/p2p-plan.md §12). "Pair" throughout, matching _clipsync-pair._tcp and

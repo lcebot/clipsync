@@ -989,10 +989,11 @@ public class MainActivity extends AppCompatActivity {
         final String key;                 // identity across a refresh, not a label
         final int header;                 // a string resource, or 0
         final Status.Peer peer;
+        final Status.IndirectPeer indirect;
         final Status.Target target;
 
-        Row(String key, int header, Status.Peer peer, Status.Target target) {
-            this.key = key; this.header = header; this.peer = peer; this.target = target;
+        Row(String key, int header, Status.Peer peer, Status.IndirectPeer indirect, Status.Target target) {
+            this.key = key; this.header = header; this.peer = peer; this.indirect = indirect; this.target = target;
         }
     }
 
@@ -1009,27 +1010,32 @@ public class MainActivity extends AppCompatActivity {
         // Relay status (§8): shown at the top when this device is relaying for others, so it
         // explains why the device is staying awake.
         if (s.relayCount > 0) {
-            rows.add(new Row("h:relay", R.string.sheet_relaying, null, null));
+            rows.add(new Row("h:relay", R.string.sheet_relaying, null, null, null));
         }
         List<Status.Peer> lan = new ArrayList<>(), wan = new ArrayList<>();
         for (Status.Peer p : s.peers) (p.lan ? lan : wan).add(p);
         group(rows, R.string.sheet_on_lan, lan);
         group(rows, R.string.sheet_over_internet, wan);
-        if (!s.targets.isEmpty()) {
-            rows.add(new Row("h:down", R.string.sheet_not_connected, null, null));
-            for (Status.Target t : s.targets) rows.add(new Row("t:" + t.target, 0, null, t));
+        if (!s.indirectPeers.isEmpty()) {
+            rows.add(new Row("h:indirect", R.string.sheet_indirect, null, null, null));
+            for (Status.IndirectPeer ip : s.indirectPeers)
+                rows.add(new Row("i:" + ip.id, 0, null, ip, null));
         }
-        if (rows.isEmpty()) rows.add(new Row("none", 0, null, null));
+        if (!s.targets.isEmpty()) {
+            rows.add(new Row("h:down", R.string.sheet_not_connected, null, null, null));
+            for (Status.Target t : s.targets) rows.add(new Row("t:" + t.target, 0, null, null, t));
+        }
+        if (rows.isEmpty()) rows.add(new Row("none", 0, null, null, null));
         return rows;
     }
 
     private void group(List<Row> rows, int headerRes, List<Status.Peer> peers) {
         if (peers.isEmpty()) return;      // no members, no heading: see renderSheet
-        rows.add(new Row("h:" + headerRes, headerRes, null, null));
+        rows.add(new Row("h:" + headerRes, headerRes, null, null, null));
         // The id, not the name or the address: a peer that moves from Wi-Fi to cellular keeps its
         // card and slides between the two sections instead of vanishing from one and appearing in
         // the other as a different device.
-        for (Status.Peer p : peers) rows.add(new Row("p:" + p.id, 0, p, null));
+        for (Status.Peer p : peers) rows.add(new Row("p:" + p.id, 0, p, null, null));
     }
 
     /**
@@ -1124,6 +1130,10 @@ public class MainActivity extends AppCompatActivity {
             field(card, R.string.field_id).setTypeface(android.graphics.Typeface.MONOSPACE);
             field(card, R.string.field_type);
             field(card, R.string.field_address).setTypeface(android.graphics.Typeface.MONOSPACE);
+        } else if (r.indirect != null) {
+            field(card, R.string.field_id).setTypeface(android.graphics.Typeface.MONOSPACE);
+            field(card, R.string.field_type);
+            field(card, R.string.field_via);
         } else if (r.target != null) {
             field(card, R.string.field_reason);
         }
@@ -1145,6 +1155,14 @@ public class MainActivity extends AppCompatActivity {
             // The card shows the id's first 8 characters because 36 are unreadable at a glance, and
             // copying is how you get the rest — so the two must not be the same string.
             clickToCopy(card, name + "\n" + (p.id == null ? "" : p.id) + "\n" + addr);
+        } else if (r.indirect != null) {
+            Status.IndirectPeer ip = r.indirect;
+            String name = ip.name == null || ip.name.isEmpty() ? "?" : ip.name;
+            setTextIfChanged(card.findViewById(R.id.card_name), name);
+            value(card, 0, Node.shortId(ip.id), Status.Why.WAITING);
+            value(card, 1, ip.type == null ? "?" : ip.type, Status.Why.WAITING);
+            value(card, 2, ip.via == null ? "?" : ip.via, Status.Why.WAITING);
+            clickToCopy(card, name + "\n" + (ip.id == null ? "" : ip.id));
         } else if (r.target != null) {
             setTextIfChanged(card.findViewById(R.id.card_name), r.target.target);
             value(card, 0, r.target.reason, r.target.why);
@@ -1329,7 +1347,7 @@ public class MainActivity extends AppCompatActivity {
         setTextIfChanged(statusChip, titleText);
         // Tappable whenever there is anything to list — which now includes "nothing is connected and
         // here is why", the case the sheet is most worth opening for.
-        statusChip.setClickable(!s.peers.isEmpty() || !s.targets.isEmpty());
+        statusChip.setClickable(!s.peers.isEmpty() || !s.indirectPeers.isEmpty() || !s.targets.isEmpty());
         // The same snapshot the chip was just built from, rather than a second read: two reads a
         // second of a file another process rewrites can disagree, and the chip saying Connected (2)
         // above a sheet listing one peer is the kind of contradiction nobody can explain.
