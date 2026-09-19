@@ -123,6 +123,33 @@
                      marginTop is 4dp, not 8dp: the button's background is drawn 4dp inside its view
                      box (containerInsetTop), so 4dp of margin reads as the same 8dp gap the fields
                      leave between each other. -->
+                <!-- Directly under the field it governs, above the buttons: it is a property of the
+                     key, where the three buttons below are ways of getting one. A switch and not a
+                     checkbox because every other on/off on this page is a MaterialSwitch, and one
+                     checkbox among them would read as a different kind of setting. -->
+                <com.google.android.material.materialswitch.MaterialSwitch
+                    android:id="@+id/psk_rotate"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:minHeight="48dp"
+                    android:text="@string/psk_rotate" />
+
+                <!-- Only while it is on. An explanation of a feature nobody has enabled is a
+                     paragraph between the user and the button they were reaching for; once enabled
+                     it is the only place that says what the device will now do on its own. -->
+                <TextView
+                    android:id="@+id/psk_rotate_help"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:layout_marginBottom="4dp"
+                    android:lineSpacingExtra="2dp"
+                    android:textAppearance="?attr/textAppearanceBodySmall"
+                    android:textColor="?attr/colorOnSurfaceVariant"
+                    android:text="@string/psk_rotate_help"
+                    android:visibility="gone" />
+
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/psk_random"
                     style="@style/ClipSync.SettingsButton"

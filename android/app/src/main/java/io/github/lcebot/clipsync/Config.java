@@ -58,6 +58,16 @@ public final class Config {
     public final int threads;           // parallel data connections per file transfer (1,2,4,8,16)
     public final String filesDir;       // absolute path on internal storage where received files go
     public final String relativePath;   // the same as a MediaStore RELATIVE_PATH ("Download/ClipSync")
+    /** Whether this device replaces its key on a schedule at all (docs/p2p-plan.md §17). */
+    public final boolean rotate;
+    /**
+     * The key's life: successor, superseded ring, and the deadlines.
+     *
+     * <p>Read whether or not {@link #rotate} is on, because the <b>ring still applies</b>: a device
+     * that rotated and then had rotation turned off must go on accepting the keys it has already
+     * superseded, or it would lock out the peers it rotated away from.
+     */
+    public final Keys.Schedule keys;
 
     private Config(Properties p) {
         direct = bool(p.getProperty("direct", "true"));
@@ -68,6 +78,8 @@ public final class Config {
         port = Integer.parseInt(p.getProperty("port").trim());
         pskHex = p.getProperty("psk").trim().toLowerCase();
         psk = hex(pskHex);
+        rotate = bool(p.getProperty("psk_rotate", "false"));
+        keys = schedule(p);
         maxBytes = Integer.parseInt(p.getProperty("max_bytes").trim());
         maxFileBytes = Long.parseLong(p.getProperty("max_file_bytes").trim());
         maxFileBytesLocal = Long.parseLong(p.getProperty("max_file_bytes_local").trim());
@@ -81,6 +93,64 @@ public final class Config {
 
     public long maxFileAny() {
         return Math.max(maxFileBytes, maxFileBytesLocal);
+    }
+
+    /**
+     * Read the key schedule, treating a missing activation time as <b>now</b>.
+     *
+     * <p>Not as zero, which is what a missing number would otherwise mean and which would make every
+     * key in every configuration written before rotation existed 55 years old — pre-retired on the
+     * first read, and rotated out from under a household that had not asked for any of this. "I do
+     * not know when this key started" has exactly one safe reading, and it is the generous one.
+     */
+    private static Keys.Schedule schedule(Properties p) {
+        long since = longOr(p, "psk_since", 0);
+        return new Keys.Schedule(
+                p.getProperty("psk", "").trim().toLowerCase(),
+                p.getProperty("psk_next", "").trim().toLowerCase(),
+                peerList(p.getProperty("psk_old", "")),
+                since > 0 ? since : System.currentTimeMillis(),
+                longOr(p, "psk_retire", 0),
+                longOr(p, "psk_agreed", 0));
+    }
+
+    private static long longOr(Properties p, String key, long dflt) {
+        try {
+            return Long.parseLong(p.getProperty(key, "").trim());
+        } catch (NumberFormatException e) {
+            return dflt;
+        }
+    }
+
+    /**
+     * Record a key as newly in service: its clock starts now, and any schedule around the old one
+     * is cleared.
+     *
+     * <p>Every way a key arrives goes through here — typed, generated, or taken from a peer while
+     * pairing — because {@link #save} merges over what is stored, so a caller that sets only
+     * {@code psk} inherits the *previous* key's activation time and successor. The key would then be
+     * pre-retired on the strength of how long the one it replaced had been in use, which for a key
+     * two days old is within minutes of being written.
+     */
+    public static void freshKey(Properties v, String pskHex) {
+        v.setProperty("psk", pskHex);
+        v.setProperty("psk_since", String.valueOf(System.currentTimeMillis()));
+        v.setProperty("psk_next", "");
+        v.setProperty("psk_retire", "0");
+        v.setProperty("psk_agreed", "0");
+    }
+
+    /** The schedule as the fields a configuration file holds, for {@link #save}. */
+    public static Properties store(Keys.Schedule s, boolean rotate) {
+        Properties v = new Properties();
+        v.setProperty("psk", s.psk);
+        v.setProperty("psk_next", s.next);
+        v.setProperty("psk_old", String.join(",", s.old));
+        v.setProperty("psk_since", String.valueOf(s.since));
+        v.setProperty("psk_retire", String.valueOf(s.retireAt));
+        v.setProperty("psk_agreed", String.valueOf(s.agreedAt));
+        v.setProperty("psk_rotate", String.valueOf(rotate));
+        return v;
     }
 
     /** Largest frame we accept: a CHUNK, or a CLIP whose JSON escaping doubled the text. */
@@ -124,6 +194,20 @@ public final class Config {
         p.setProperty("discovery", "true");    // works with no configuration at all
         p.setProperty("port", "47521");
         p.setProperty("psk", "");
+        // Key rotation (docs/p2p-plan.md §17). Off by default: it silently changes the one setting
+        // every device has to agree on, and a user who has not asked for that should not get it.
+        p.setProperty("psk_rotate", "false");
+        // When the current key became active. Absent means "unknown", and unknown is read as NOW
+        // rather than as the epoch — the conservative direction, because the alternative is a first
+        // launch that finds a key 55 years old and rotates it before the user has finished setting
+        // up the second device.
+        p.setProperty("psk_since", "0");
+        p.setProperty("psk_next", "");
+        p.setProperty("psk_retire", "0");
+        p.setProperty("psk_agreed", "0");
+        // Superseded keys, newest first, still accepted. A comma list like `peers`, for the same
+        // reason: Properties holds strings, and this is the shape the file already uses for one.
+        p.setProperty("psk_old", "");
         p.setProperty("mdns_timeout_ms", "4000");
         p.setProperty("threads", "8");
         p.setProperty("max_bytes", "1048576");

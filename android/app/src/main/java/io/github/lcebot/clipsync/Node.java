@@ -47,6 +47,11 @@ final class Node {
         return id == null ? "?" : id.substring(0, Math.min(8, id.length()));
     }
 
+    /** The first 8 hex characters of a key, for logs that must not print the whole thing. */
+    static String shortKey(String hex) {
+        return hex == null || hex.isEmpty() ? "(none)" : hex.substring(0, Math.min(8, hex.length())) + "…";
+    }
+
     /** The name a peer shows for this device. */
     static String name() {
         return Build.MODEL;

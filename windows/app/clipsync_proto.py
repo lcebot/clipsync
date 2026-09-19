@@ -27,28 +27,41 @@ import time
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 
 __all__ = [
-    "T_HELLO", "T_CLIP", "T_PING", "T_PONG", "T_FILE", "T_OFFER", "T_WANT", "T_HAVE", "T_SKIP",
-    "T_DATA", "T_END", "T_ABORT", "T_CHUNK", "T_PULL", "T_BYE", "T_PAIR_ASK", "T_PAIR_KEY",
+    "T_HELLO", "T_BYE", "T_PING", "T_PONG", "T_KEYS", "T_CLIP",
+    "T_OFFER", "T_WANT", "T_HAVE", "T_SKIP", "T_CHUNK", "T_PULL", "T_END", "T_ABORT",
+    "T_PAIR_ASK", "T_PAIR_KEY",
     "BYE_IDLE", "PROTOCOL_VERSION", "READ_TIMEOUT", "hkdf_sha256", "SecureChannel",
 ]
 
 log = logging.getLogger("clipsync")
 
-(T_HELLO, T_CLIP, T_PING, T_PONG, T_FILE, T_OFFER, T_WANT, T_HAVE, T_SKIP, T_DATA, T_END,
- T_ABORT, T_CHUNK, T_PULL) = 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14
-# "I am closing this connection, and here is why" - {reason}.  15, not one of the retired numbers
-# (5 FILE, 10 DATA): reusing one would make an old log impossible to read, and numbers are not
-# scarce.  A close without one becomes a loop -- the far side sees only a disconnect, reconnects,
-# and rebuilds the link that was just discarded.  See docs/p2p-plan.md §5.
-T_BYE = 15
-# Pairing (docs/p2p-plan.md §12): ask for the key, and here it is.  Ordinary frames on an ordinary
-# channel, reached after an ordinary handshake and an ordinary HELLO -- only the key differs, which
-# is what keeps the rule that nothing is parsed before the channel is authenticated.
-T_PAIR_ASK, T_PAIR_KEY = 16, 17
+# Frame types, grouped by purpose and renumbered for the draft protocol.  No external release has
+# ever shipped, so nothing reads the old numbers.
+
+# Session lifecycle.
+T_HELLO = 1
+# "I am closing this connection, and here is why" - {reason}.  A close without one becomes a loop:
+# the far side sees only a disconnect, reconnects, and rebuilds the link that was discarded (§5).
+T_BYE = 2
+T_PING, T_PONG = 3, 4
 # The reason a device sends as it goes to sleep, and the one BYE that does not mean "this link was
 # redundant".  A device that says it is idle will dial out again when its screen comes on, so the
 # right answer is to stop dialling it, not to look for another route to it.  (docs/p2p-plan.md §5)
 BYE_IDLE = "idle"
+
+# Key rotation (docs/p2p-plan.md §17).  Sent after HELLO, carrying {psk, since, next}.
+T_KEYS = 5
+
+# Clipboard.
+T_CLIP = 6
+
+# File transfer.
+T_OFFER, T_WANT, T_HAVE, T_SKIP = 7, 8, 9, 10
+T_CHUNK, T_PULL, T_END, T_ABORT = 11, 12, 13, 14
+
+# Pairing (docs/p2p-plan.md §12): ask for the key, and here it is.  Ordinary frames on an ordinary
+# channel, reached after an ordinary handshake and an ordinary HELLO -- only the key differs.
+T_PAIR_ASK, T_PAIR_KEY = 15, 16
 # 2: HELLO is exchanged in both directions and carries the node id, type, persistence and battery
 # bucket (docs/p2p-plan.md §2). A clean break, by §9 — a version 1 peer is refused rather than
 # tolerated, because a peer that cannot name itself cannot be deduplicated or recognised as self.
@@ -86,9 +99,14 @@ class SecureChannel:
     the per-direction keys, the AEAD, the replay resistance — comes along unchanged.  That is the
     whole of what makes pairing possible without new machinery, and a caller without the code fails
     here in exactly the way a wrong PSK does.  (docs/p2p-plan.md §12)
+
+    Multi-key accept: `psk` may be a list of secrets.  All are candidates for the first `recv()`;
+    the one that decrypts it wins, and the channel commits to it.  `matched_secret` holds the
+    winner so the caller can tell whether the peer is on the current key, the successor, or an old
+    one.
     """
 
-    def __init__(self, sock: socket.socket, psk: bytes, max_frame: int, initiator: bool = False):
+    def __init__(self, sock: socket.socket, psk, max_frame: int, initiator: bool = False):
         self.sock = sock
         self.max_frame = max_frame
         self.initiator = initiator
@@ -104,6 +122,7 @@ class SecureChannel:
         # thread sees only a closed socket, which is indistinguishable from the peer going away —
         # and a dialler that cannot tell those apart redials into the link it just lost.
         self.superseded = False
+        self.matched_secret = None     # the secret that authenticated (set on first recv)
         self.send_lock = threading.Lock()
         mine = os.urandom(32)
         if initiator:
@@ -114,9 +133,25 @@ class SecureChannel:
             theirs = self._recv_exact(32)
             sock.sendall(mine)
             salt = theirs + mine
-        c2s = ChaCha20Poly1305(hkdf_sha256(psk, salt, b"clipsync c2s"))
-        s2c = ChaCha20Poly1305(hkdf_sha256(psk, salt, b"clipsync s2c"))
-        self.tx, self.rx = (c2s, s2c) if initiator else (s2c, c2s)
+
+        secrets = psk if isinstance(psk, list) else [psk]
+        if len(secrets) == 1:
+            c2s = ChaCha20Poly1305(hkdf_sha256(secrets[0], salt, b"clipsync c2s"))
+            s2c = ChaCha20Poly1305(hkdf_sha256(secrets[0], salt, b"clipsync s2c"))
+            self.tx, self.rx = (c2s, s2c) if initiator else (s2c, c2s)
+            self.matched_secret = secrets[0]
+            self._candidates = None
+        else:
+            # Derive key pairs for every candidate; the first recv() picks the winner.
+            cands = []
+            for s in secrets:
+                c2s = ChaCha20Poly1305(hkdf_sha256(s, salt, b"clipsync c2s"))
+                s2c = ChaCha20Poly1305(hkdf_sha256(s, salt, b"clipsync s2c"))
+                tx, rx = (s2c, c2s) if not initiator else (c2s, s2c)
+                cands.append((tx, rx, s))
+            self._candidates = cands
+            self.tx = None
+            self.rx = None
         self.rx_ctr = 0
         self.tx_ctr = 0
 
@@ -154,6 +189,21 @@ class SecureChannel:
         if length > self.max_frame:
             raise ConnectionError(f"frame too large ({length} bytes)")
         ct = self._recv_exact(length)
+
+        if self._candidates is not None:
+            # Trial-decrypt with each candidate; the first that succeeds wins.
+            for tx, rx, secret in self._candidates:
+                try:
+                    pt = rx.decrypt(self._nonce(self.rx_ctr), ct, None)
+                    self.tx, self.rx = tx, rx
+                    self.matched_secret = secret
+                    self._candidates = None
+                    self.rx_ctr += 1
+                    return pt[0], pt[1:]
+                except Exception:
+                    pass
+            raise ConnectionError("no accepted key could authenticate this peer")
+
         pt = self.rx.decrypt(self._nonce(self.rx_ctr), ct, None)
         self.rx_ctr += 1
         return pt[0], pt[1:]

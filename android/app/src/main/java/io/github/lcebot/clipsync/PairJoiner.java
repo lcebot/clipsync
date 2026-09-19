@@ -38,12 +38,14 @@ final class PairJoiner {
         return cm != null ? cm.getActiveNetwork() : null;
     }
 
-    /** The key, and who gave it, for the screen that says pairing worked. */
+    /** The key, the port it is used on, and who gave them. */
     static final class Result {
         final String pskHex, device, type;
+        /** The provider's service port, or 0 if it did not say — then ours is left alone. */
+        final int port;
 
-        Result(String pskHex, String device, String type) {
-            this.pskHex = pskHex; this.device = device; this.type = type;
+        Result(String pskHex, int port, String device, String type) {
+            this.pskHex = pskHex; this.port = port; this.device = device; this.type = type;
         }
     }
 
@@ -95,8 +97,14 @@ final class PairJoiner {
                 String psk = m.optString("psk", "");
                 String bad = Config.checkPsk(psk);
                 if (bad != null) throw new IOException("the key it sent is not usable: " + bad);
-                Logger.i("pairing: got the key from " + m.optString("device", "?"));
-                return new Result(psk, m.optString("device", "?"), m.optString("type", "?"));
+                // Taken only if it is a port at all: a provider that sends nonsense should not be
+                // able to point this device at a port nothing is listening on, and leaving ours
+                // alone is the failure that is easy to see and easy to fix.
+                int port = m.optInt("port", 0);
+                if (Config.checkPort(String.valueOf(port)) != null) port = 0;
+                Logger.i("pairing: got the key from " + m.optString("device", "?")
+                        + (port > 0 ? " (port " + port + ")" : ""));
+                return new Result(psk, port, m.optString("device", "?"), m.optString("type", "?"));
             } catch (Exception e) {
                 // Not split by exception type any more, and that was the bug: a provider that cannot
                 // decrypt closes the socket, so a wrong code surfaces here as an EOFException —
@@ -122,10 +130,14 @@ final class PairJoiner {
      * <p>Goes through {@link Config#save}, so the whole configuration is validated before a byte is
      * written — a key that cannot be parsed never reaches the file.
      */
-    static void apply(Context ctx, String pskHex) throws IOException {
+    static void apply(Context ctx, Result r) throws IOException {
         Properties v = new Properties();
-        v.setProperty("psk", pskHex);
+        v.setProperty("psk", r.pskHex);
         v.setProperty("discovery", "true");
+        // Only when the provider named one. Writing a 0 would be worse than writing nothing: the
+        // port is the one setting a joiner cannot discover, and overwriting a working value with a
+        // guess turns a pairing into a device that is configured and unreachable.
+        if (r.port > 0) v.setProperty("port", String.valueOf(r.port));
         Config.save(ctx, v);
     }
 }

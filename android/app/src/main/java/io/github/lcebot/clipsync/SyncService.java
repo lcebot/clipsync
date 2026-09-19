@@ -131,24 +131,22 @@ public class SyncService extends Service {
             Link l = d.live;
             if (l != null && l.isOpen()) continue;
             String name = isMdns(d.target) ? instanceOf(d.target) : d.target;
-            // Asked of the live map, not of what this dialler last wrote down.
+            // Not listed at all when its peer is connected by another route — which is what happens
+            // every time a phone wakes up and dials us, leaving the dialler that used to reach it
+            // with nothing to do.
             //
-            // A dialler knows only about its own link, and since this device started accepting there
-            // is a second way for its peer to be connected: the peer dials *us*. A phone that went
-            // idle and then woke does exactly that — so it appears under "on this network" while the
-            // dialler that used to reach it is still holding the words "Idle — screen off", and goes
-            // on holding them until it next wakes, dials, loses the dedup and rewrites itself. Up to
-            // a minute of the sheet saying a device is both connected and not.
+            // This section means "configured targets that are not connected", and a target whose
+            // device is connected is, in the only sense anyone opens this for, working. It had a
+            // *Same device as …* row for a while, on the grounds that "this address is not the one
+            // in use" is a fact. It is, and it is one the log already records — while in the sheet it
+            // sat directly under the same device's card in the group above, which reads as the sheet
+            // contradicting itself rather than as a footnote.
             //
-            // This is the same rule the state string already follows and this list did not: derive
-            // it, never remember it. The peer map is the truth about who is connected; a dialler's
-            // memory is only the truth about its own last attempt.
+            // Asked of the live map either way, never of what the dialler last wrote down: the peer
+            // map is the truth about who is connected, and a dialler knows only about its own last
+            // attempt. Deriving it is the same rule the state string follows.
             Link byOther = d.lastPeerId == null ? null : byPeer.get(d.lastPeerId);
-            if (byOther != null && byOther.isOpen()) {
-                targets.add(Status.target(name, getString(R.string.peer_same_as, byOther.target),
-                        Status.Why.NOTED));
-                continue;
-            }
+            if (byOther != null && byOther.isOpen()) continue;
             targets.add(Status.target(name, d.lastError, d.lastWhy));
         }
         // Discovery itself, when it is on and has nothing to show for it. Without this the sheet is
@@ -1104,6 +1102,7 @@ public class SyncService extends Service {
             case Connection.T_HAVE -> onHave(new JSONObject(new String(f.payload, StandardCharsets.UTF_8)));
             case Connection.T_SKIP -> onSkip(new JSONObject(new String(f.payload, StandardCharsets.UTF_8)));
             case Connection.T_ABORT -> onAbort(new JSONObject(new String(f.payload, StandardCharsets.UTF_8)));
+            case Connection.T_KEYS -> onKeys(l, new JSONObject(new String(f.payload, StandardCharsets.UTF_8)));
             case Connection.T_PING -> c.send(Connection.T_PONG);
             case Connection.T_BYE -> {
                 String why = new JSONObject(new String(f.payload, StandardCharsets.UTF_8)).optString("reason", "");
@@ -1119,6 +1118,117 @@ public class SyncService extends Service {
                 l.close();
             }
             default -> { }
+        }
+    }
+
+    // ------------------------------------------------------------------ key rotation (§17)
+
+    /**
+     * Send this device's key schedule to one peer.
+     *
+     * <p>Sent right after HELLO on every control connection (both sides), and whenever the schedule
+     * changes (successor generated, promoted, or reconciled). The frame is cheap and harmless if the
+     * peer ignores it, so it is sent whether or not rotation is on — a device with rotation off
+     * still has a {@link Keys.Schedule} with a possibly non-empty ring, and a peer needs to hear
+     * that to align its own.
+     */
+    private void sendKeys(Connection c) {
+        Keys.Schedule s = cfg.keys;
+        if (s.psk.isEmpty()) return;       // no key yet — nothing to tell
+        try {
+            JSONObject msg = new JSONObject();
+            msg.put("psk", s.psk);
+            msg.put("since", s.since);
+            msg.put("next", s.next);
+            c.sendJson(Connection.T_KEYS, msg);
+        } catch (Exception e) {
+            Logger.i("could not send key schedule: " + e);
+        }
+    }
+
+    /** Send T_KEYS to every connected peer. */
+    private void announceKeys() {
+        for (Link l : byPeer.values()) {
+            if (l.isOpen()) sendKeys(l.connection());
+        }
+    }
+
+    /**
+     * A peer reported its key schedule. Reconcile, persist if anything changed, and reply with ours
+     * so the peer can do the same.
+     */
+    private void onKeys(Link l, JSONObject msg) {
+        String theirPsk = msg.optString("psk", "").trim().toLowerCase();
+        String theirNext = msg.optString("next", "").trim().toLowerCase();
+        if (theirPsk.isEmpty()) return;
+        Keys.Schedule before = cfg.keys;
+        Keys.Schedule after = before.reconcile(theirPsk, theirNext, System.currentTimeMillis());
+        if (after != before) {
+            Logger.i("key schedule reconciled with " + l.connection().peerLabel
+                    + ": psk=" + Node.shortKey(after.psk)
+                    + (after.next.isEmpty() ? "" : " next=" + Node.shortKey(after.next)));
+            persistSchedule(after);
+            // Tell every peer the result — including the one that triggered this, so it hears the
+            // outcome of the tie-break if there was one.
+            announceKeys();
+        }
+    }
+
+    /**
+     * Persist a new key schedule to the configuration file and reload.
+     *
+     * <p>Uses {@link Config#save}, which merges and validates, so all other settings survive and
+     * the PSK field changes when a promotion swaps the key.
+     */
+    private void persistSchedule(Keys.Schedule sched) {
+        try {
+            Properties update = Config.store(sched, cfg.rotate);
+            cfg = Config.save(this, update);
+        } catch (Exception e) {
+            Logger.w("rotation: could not save schedule: " + e);
+        }
+    }
+
+    /**
+     * The rotation clock, called from the heartbeat every ~30 s.
+     *
+     * <p>Pure phase-based: at each tick it asks "what phase is the key in?" and does the one thing
+     * that phase calls for, or nothing if no action is due. The design is intentionally incremental
+     * — generate now, announce on the next heartbeat (or sooner via onConnected), promote later —
+     * so a process that dies between ticks loses nothing.
+     */
+    private void checkRotation() {
+        if (!cfg.rotate) return;
+        Keys.Schedule s = cfg.keys;
+        if (s.psk.isEmpty()) return;
+        long now = System.currentTimeMillis();
+        Keys.Phase phase = s.phase(now);
+        Keys.Schedule next = null;
+        switch (phase) {
+            case PRE_RETIRED:
+                if (s.next.isEmpty()) {
+                    String successor = Crypto.randomPskHex();
+                    next = s.withNext(successor);
+                    Logger.i("rotation: generated successor " + Node.shortKey(successor)
+                            + ", announcing to peers");
+                }
+                break;
+            case DUE:
+                next = s.promoted(now);
+                Logger.i("rotation: promoted successor to current key "
+                        + Node.shortKey(next.psk));
+                break;
+            case STRANDED:
+                next = s.extended();
+                Logger.i("rotation: no peer agreed, extending deadline by "
+                        + Keys.EXTEND_MS / 3600_000L + " h");
+                break;
+            default:
+                break;
+        }
+        if (next != null) {
+            persistSchedule(next);
+            announceKeys();
         }
     }
 
@@ -1361,6 +1471,12 @@ public class SyncService extends Service {
                                     : "internet link, file limit " + cfg.maxFileBytes / (1024 * 1024) + " MB";
             Logger.i("connected via " + c.via + " to " + c.peer + " ["
                     + Node.shortId(c.peerId) + "] (" + what + ")");
+            // Tell the peer our key schedule, so it can align its successor with ours. Both ends
+            // send one if rotation is on; the frame is harmless either way (a peer without rotation
+            // simply ignores it), so it goes out unconditionally when the schedule has anything to
+            // say — which is whenever a successor exists, because that is news the peer needs
+            // whether or not it is rotating itself.
+            sendKeys(c);
             refreshStatus();
         }
 
@@ -2011,6 +2127,7 @@ public class SyncService extends Service {
             // itself, and it notices within one interval — in practice on the first tick after the
             // phone wakes, which is when someone is there to read the log.
             reportStalePending();
+            checkRotation();
             touchStatus();
             for (java.util.Map.Entry<String, Link> e : byPeer.entrySet()) {
                 Link l = e.getValue();

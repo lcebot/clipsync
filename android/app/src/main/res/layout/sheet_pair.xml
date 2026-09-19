@@ -43,11 +43,11 @@
          together are six digits typed wrong. Monospace so every digit takes the same width and the
          eye can group them without the text reflowing as they change.
 
-         It starts as six dashes rather than empty, and that is what stops the sheet jumping open.
-         The code cannot exist yet when this is laid out — deriving it is 200 000 PBKDF2 rounds on a
-         worker — so an empty view meant the sheet measured itself without a line of display type
-         and then grew by exactly that much a moment later. A placeholder of the same length in the
-         same font reserves the space it will need. -->
+         It starts as six greyed digits rather than empty, and that is what stops the sheet jumping
+         open. The code cannot exist yet when this is laid out — deriving it is 200 000 PBKDF2 rounds
+         on a worker — so an empty view meant the sheet measured itself without a line of display
+         type and then grew by exactly that much a moment later. Digits and not dashes because the
+         two do not draw to the same height: a row of dashes reserved the width but not the line. -->
     <TextView
         android:id="@+id/pair_code"
         android:layout_width="match_parent"

@@ -23,6 +23,12 @@
     <string name="section_connection">Connection</string>
     <string name="hint_port">Port</string>
     <string name="hint_psk">PSK key (64 hex)</string>
+    <string name="psk_rotate">Replace the key automatically</string>
+    <!-- Shown only while the switch is on. Says the three things the user cannot see happening: how
+         often, that devices left off for a while are still let in, and what the one bad outcome is
+         and how to recover from it. The hours are the real constants; if Keys.java changes, this
+         changes with it. -->
+    <string name="psk_rotate_help">Every two days this device makes a new key and passes it to the others, so a key that leaks is only useful for a few days. Devices that were switched off still connect — the last few keys keep working for about a week. A device left off longer than that has to be paired again.</string>
     <string name="psk_generate">Generate random PSK key</string>
     <string name="psk_replace_title">Replace the key?</string>
     <string name="psk_replace_body">Every other device is using the current key and will stop connecting until you set the new one there too.</string>
@@ -137,13 +143,14 @@
 
     <!-- offering: this device has the key -->
     <string name="pair_offer_title">Pair new devices</string>
-    <string name="pair_offer_opening">Opening…</string>
     <!-- Says where to type it, because the code is useless on the device displaying it and that is
          not obvious the first time. Plural, and "each": the window does not close on the first one. -->
     <string name="pair_offer_body">On each new device, choose “I have another ClipSync device” and enter this code</string>
-    <!-- Six dashes, the same length and font as the code that replaces them. Holds the height while
-         the key is being derived; see sheet_pair.xml. -->
-    <string name="pair_code_placeholder">------</string>
+    <!-- Six DIGITS, not six dashes, and greyed rather than in the code's own colour. Digits because
+         a dash and a digit do not draw to the same height, so a row of dashes still left the line to
+         grow when the real code replaced it — the one thing the placeholder exists to prevent. Grey
+         because six plausible digits in the code's colour are six digits somebody will try to type. -->
+    <string name="pair_code_placeholder">114514</string>
     <string name="pair_opening">Starting</string>
     <!-- The countdown is the only "waiting" wording: a plain one would be replaced within a frame
          by this, and two strings for one moment is one too many. -->

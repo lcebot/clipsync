@@ -55,6 +55,15 @@ final class PairProvider implements Closeable {
 
     private final Context ctx;
     private final String pskHex;
+    /**
+     * The port the <em>service</em> listens on — not the pairing port, which is ephemeral.
+     *
+     * <p>Handed over with the key because it is the other half of being able to connect at all: two
+     * devices that agree on the key and disagree on the port never meet. Everything else a peer
+     * needs it can discover or negotiate; this one is a setting, and a setting the joiner has no way
+     * to guess if the provider is not on the default.
+     */
+    private final int port;
     private final Listener listener;
     private final ServerSocket socket;
     private final byte[] key;
@@ -79,9 +88,10 @@ final class PairProvider implements Closeable {
      *
      * @param pskHex the key to give away, as the configuration stores it
      */
-    PairProvider(Context ctx, String pskHex, Listener listener) throws Exception {
+    PairProvider(Context ctx, String pskHex, int port, Listener listener) throws Exception {
         this.ctx = ctx;
         this.pskHex = pskHex;
+        this.port = port;
         this.listener = listener;
         this.code = Pairing.newCode();
         byte[] salt = Pairing.newSalt();
@@ -93,9 +103,6 @@ final class PairProvider implements Closeable {
         socket = new ServerSocket();
         socket.setReuseAddress(true);
         socket.bind(new InetSocketAddress(0), 4);
-        // The whole window on one timeout: accept() then returns by itself when the time is up, and
-        // the alternative is a timer thread whose only job is to close a socket.
-        socket.setSoTimeout((int) Pairing.WINDOW_MS);
 
         advert = Mdns.advertise(ctx, Pairing.SERVICE_TYPE, Node.name(), socket.getLocalPort(),
                 Map.of(Pairing.TXT_VERSION, String.valueOf(Connection.PROTOCOL_VERSION),
@@ -116,11 +123,20 @@ final class PairProvider implements Closeable {
         int paired = 0;
         try {
             while (!closed) {
+                // The REMAINING window, recomputed every round. A timeout set once and left alone
+                // silently restarts the clock on every connection: accept() returns, the loop comes
+                // back, and the next accept() waits another full two minutes from *that* moment. So
+                // one probe at 1:50 bought the window another two minutes, the countdown reached
+                // zero with the code still live, and nothing arrived to say it had expired — because
+                // it had not. The advertised lifetime has to be the real one.
+                long left = closesAt - System.currentTimeMillis();
+                if (left <= 0) break;
+                socket.setSoTimeout((int) Math.min(left, Integer.MAX_VALUE));
                 Socket s;
                 try {
                     s = socket.accept();
                 } catch (SocketTimeoutException e) {
-                    break;                      // the window simply ran out
+                    break;                      // the window ran out
                 }
                 // Serially, one caller at a time. Pairing is a thing a person does with devices in
                 // front of them, so there is no concurrency to serve — and refusing to spawn a
@@ -167,6 +183,7 @@ final class PairProvider implements Closeable {
 
             c.sendJson(Connection.T_PAIR_KEY, new JSONObject()
                     .put("psk", pskHex)
+                    .put("port", port)
                     .put("device", Node.name())
                     .put("type", Node.type(ctx)));
             Logger.i("pairing: key given to " + c.peerLabel + " (" + c.peerType + ")");

@@ -219,6 +219,7 @@ class Provider:
             raise RuntimeError("mDNS needs the 'zeroconf' package (pip install zeroconf)")
 
         self._psk = psk_hex
+        self._port = base_port          # the SERVICE port, handed over with the key
         self._device = device
         self._on_paired = on_paired
         self._on_closed = on_closed
@@ -324,7 +325,11 @@ class Provider:
             typ, _ = ch.recv()
             if typ != T_PAIR_ASK:
                 raise ConnectionError("expected PAIR_ASK, got %d" % typ)
-            ch.send_json(T_PAIR_KEY, {"psk": self._psk, "device": self._device, "type": "pc"})
+            # The port goes with the key: it is the other half of being able to connect at all, and
+            # the one setting a joiner cannot discover or negotiate.  Two devices that agree on the
+            # key and disagree on the port never meet.
+            ch.send_json(T_PAIR_KEY, {"psk": self._psk, "port": self._port,
+                                      "device": self._device, "type": "pc"})
             self._on_paired(ch.device, ch.node_type)
             return True
         except Exception:

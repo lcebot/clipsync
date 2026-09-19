@@ -13,12 +13,12 @@ Protocol (must match the Android side, see Connection.java / SyncService.java):
   keys      : HKDF-SHA256(ikm=PSK, salt=Nc||Ns, info="clipsync c2s"/"clipsync s2c") -> 32B each
   nonce     : 12B = 4 zero bytes || u64 big-endian counter, per direction, starts at 0
   frame     : u32 BE len || ChaCha20-Poly1305(type(1B) || payload)
-  types     : 1 HELLO {v,device,last_seq,lan[,role=data,sha256]}   2 CLIP {seq,mime,sha256,data}
-              3 PING   4 PONG
-              6 OFFER {seq,name,mime,size,sha256}   7 WANT {sha256,ranges}   8 HAVE {sha256}
-              9 SKIP {sha256,reason}   12 ABORT {sha256,reason}
-             13 CHUNK u32 index || bytes (CHUNK = 512 KiB, last one shorter)   14 PULL {sha256,ranges}
-             11 END {sha256}          (5 FILE / 10 DATA are no longer used)
+  types     : 1 HELLO   2 BYE {reason}   3 PING   4 PONG   5 KEYS {psk,since,next}
+              6 CLIP {seq,mime,sha256,data}
+              7 OFFER {seq,name,mime,size,sha256}   8 WANT {sha256,ranges}   9 HAVE {sha256}
+             10 SKIP {sha256,reason}  11 CHUNK u32 index||bytes  12 PULL {sha256,ranges}
+             13 END {sha256}          14 ABORT {sha256,reason}
+             15 PAIR_ASK  16 PAIR_KEY {psk,port,device,type}
 
 Text goes as CLIP (JSON, <= max_bytes).  Files: OFFER -> HAVE | SKIP | WANT {ranges of missing
 chunks}; the bytes then move over up to N parallel data connections the phone opens (HELLO
@@ -76,7 +76,9 @@ except ImportError:                    # pragma: no cover
 # can import the rules instead of restating them. That module is deliberately free of side effects;
 # this one is not (it configures logging and registers a clipboard format below), which is why the
 # dependency only runs one way.
-from clipsync_config import CHUNK, LOG_PATH, Cfg, is_self   # noqa: E402
+from clipsync_config import (CHUNK, LOG_PATH, Cfg, is_self, Schedule, schedule_from_raw,  # noqa: E402
+                             schedule_to_raw, save_schedule, read_config, random_psk_hex,
+                             short_key, as_bool, EXTEND_MS)
 from clipsync_node import declaration, node_id, node_name, short_id   # noqa: E402
 # Frame types, the key schedule and SecureChannel, so that clipsync_pair.py can speak the protocol
 # without importing this module and its side effects.  A star import, unusually, because these are
@@ -821,6 +823,17 @@ class SyncState:
         self.last_sent_hash = None
         self.last_set_path = None    # file we last put on the clipboard (cheap loop check)
         self.aborted = {}            # sha -> time of the last ABORT (pull loops check it)
+        # Key rotation state, mirroring SyncService.java's cfg.keys / cfg.rotate.
+        self.schedule = cfg.keys
+        self.rotate = cfg.rotate
+
+    def persist_schedule(self, sched: Schedule):
+        """Persist a new key schedule to config.json and update in-memory state."""
+        try:
+            save_schedule(sched, self.rotate)
+            self.schedule = sched
+        except Exception as e:
+            log.warning("rotation: could not save schedule: %s", e)
 
     # -- link registry (docs/p2p-plan.md §5) --
     @staticmethod
@@ -1163,6 +1176,42 @@ def parse_clip(payload: bytes, cfg: Cfg):
 
 
 # ----------------------------------------------------------------------------- server
+def send_keys(ch: SecureChannel, state: SyncState):
+    """Send this device's key schedule to a peer."""
+    s = state.schedule
+    if not s.psk:
+        return
+    try:
+        ch.send_json(T_KEYS, {"psk": s.psk, "since": s.since, "next": s.next})
+    except Exception as e:
+        log.info("could not send key schedule: %s", e)
+
+
+def announce_keys(state: SyncState):
+    """Send T_KEYS to every connected peer."""
+    with state.lock:
+        targets = list(state.clients)
+    for c in targets:
+        send_keys(c, state)
+
+
+def on_keys(ch: SecureChannel, msg: dict, state: SyncState):
+    """A peer reported its key schedule. Reconcile, persist if changed, and reply with ours."""
+    their_psk = str(msg.get("psk", "")).strip().lower()
+    their_next = str(msg.get("next", "")).strip().lower()
+    if not their_psk:
+        return
+    before = state.schedule
+    now = int(time.time() * 1000)
+    after = before.reconcile(their_psk, their_next, now)
+    if after != before:
+        log.info("key schedule reconciled with %s: psk=%s%s", ch.device,
+                 short_key(after.psk),
+                 ("" if not after.next else " next=" + short_key(after.next)))
+        state.persist_schedule(after)
+        announce_keys(state)
+
+
 def serve(ch: SecureChannel, cfg: Cfg, state: SyncState):
     """
     The frame loop of one control connection, whichever end opened it.
@@ -1182,6 +1231,8 @@ def serve(ch: SecureChannel, cfg: Cfg, state: SyncState):
             return reason
         if typ == T_PING:
             ch.send(T_PONG)
+        elif typ == T_KEYS:
+            on_keys(ch, json.loads(payload.decode("utf-8")), state)
         elif typ == T_CLIP:
             item = parse_clip(payload, cfg)
             if item:
@@ -1209,7 +1260,11 @@ def client_thread(sock: socket.socket, addr, cfg: Cfg, state: SyncState):
     sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     ch = None
     try:
-        ch = SecureChannel(sock, cfg.psk, cfg.max_frame)
+        # Multi-key accept: try every key in the schedule's accepted() list so a peer on the
+        # current key, the successor, or any key still in the ring is let in.
+        accepted = cfg.keys.accepted()
+        secrets = [bytes.fromhex(h) for h in accepted] if len(accepted) > 1 else cfg.psk
+        ch = SecureChannel(sock, secrets, cfg.max_frame)
         hello = ch.read_hello()
         if hello.get("role") == "data":
             data_thread(ch, hello, state)
@@ -1239,6 +1294,7 @@ def client_thread(sock: socket.socket, addr, cfg: Cfg, state: SyncState):
         log.info("client %s connected (%s %s, %s link, file limit %d MB), %d online", addr[0],
                  ch.device, short_id(ch.node_id), "lan" if ch.lan else "internet",
                  ch.limit // (1024 * 1024), state.online())
+        send_keys(ch, state)
         state.catch_up(ch, int(hello.get("last_seq", 0)))
         serve(ch, cfg, state)
     except Exception as e:
@@ -1387,6 +1443,8 @@ def dial_thread(peer: str, cfg: Cfg, state: SyncState):
             sock.settimeout(READ_TIMEOUT)
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             lan = on_lan(sock)
+            # Outbound: use the current PSK. The accepter does multi-key trial decryption, so
+            # even if we are behind by a rotation, it will still let us in.
             ch = SecureChannel(sock, cfg.psk, cfg.max_frame, initiator=True)
             # The dialler declares first and the accepter answers — the same order as before, now
             # with the PC on the other end of it.
@@ -1410,6 +1468,7 @@ def dial_thread(peer: str, cfg: Cfg, state: SyncState):
                          short_id(ch.node_id), "lan" if lan else "internet",
                          ch.limit // (1024 * 1024), state.online())
                 backoff = DIAL_RETRY_MIN
+                send_keys(ch, state)
                 # Symmetric with the inbound path: tell the peer whatever it is behind on. Without
                 # this an outbound link delivers nothing until the next local copy, which reads as a
                 # link that works in one direction only.
@@ -1609,6 +1668,47 @@ def mdns_thread(cfg: Cfg):
         time.sleep(MDNS_SCAN)
 
 
+# ----------------------------------------------------------------------------- key rotation scheduler
+ROTATION_CHECK_INTERVAL = 30   # seconds — same cadence as Android's heartbeat
+
+
+def check_rotation(state: SyncState):
+    """The rotation clock, called every ~30 s. Mirrors SyncService.checkRotation()."""
+    if not state.rotate:
+        return
+    s = state.schedule
+    if not s.psk:
+        return
+    now = int(time.time() * 1000)
+    phase = s.phase(now)
+    nxt = None
+    if phase == "pre_retired":
+        if not s.next:
+            successor = random_psk_hex()
+            nxt = s.with_next(successor)
+            log.info("rotation: generated successor %s, announcing to peers", short_key(successor))
+    elif phase == "due":
+        nxt = s.promoted(now)
+        log.info("rotation: promoted successor to current key %s", short_key(nxt.psk))
+    elif phase == "stranded":
+        nxt = s.extended()
+        log.info("rotation: no peer agreed, extending deadline by %dh",
+                 EXTEND_MS // 3600_000)
+    if nxt is not None:
+        state.persist_schedule(nxt)
+        announce_keys(state)
+
+
+def rotation_thread(state: SyncState):
+    """A daemon thread that periodically checks whether a rotation action is due."""
+    while True:
+        try:
+            check_rotation(state)
+        except Exception as e:
+            log.warning("rotation check failed: %s", e)
+        time.sleep(ROTATION_CHECK_INTERVAL)
+
+
 # ----------------------------------------------------------------------------- main
 def main():
     cfg = Cfg()
@@ -1619,6 +1719,9 @@ def main():
     log.info("ClipSync %s, node %s (protocol %d)", node_name(), short_id(node_id()), PROTOCOL_VERSION)
     if Image is None:
         log.info("Pillow not installed: images are still exchanged as files; install 'pillow' to paste them as pictures")
+
+    # The rotation thread runs unconditionally — the check inside is what skips when rotate is off.
+    threading.Thread(target=rotation_thread, args=(state,), daemon=True, name="clipsync-rotation").start()
 
     def start_network():
         threading.Thread(target=server_thread, args=(cfg, state), daemon=True).start()

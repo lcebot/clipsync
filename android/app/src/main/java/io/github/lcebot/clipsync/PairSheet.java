@@ -104,7 +104,8 @@ final class PairSheet {
     // ------------------------------------------------------------------ entry points
     /** The device that holds the key offers it. Reached from *Pair new devices*. */
     static void offer(Activity a, Host host) {
-        String psk = Config.raw(a).getProperty("psk", "");
+        Properties p = Config.raw(a);
+        String psk = p.getProperty("psk", "");
         PairSheet sheet = new PairSheet(a, host);
         if (Config.checkPsk(psk) != null) {
             // Nothing to give away yet. Said in the sheet rather than as a snackbar: the user pressed
@@ -113,7 +114,15 @@ final class PairSheet {
             sheet.finish(a.getString(R.string.pair_no_key));
             return;
         }
-        sheet.startOffering(psk);
+        // From the saved configuration, not the form: this is the port the service is actually
+        // listening on, and handing a joiner a number that has only been typed would point it at a
+        // port nothing answers until somebody presses Apply.
+        int port = 0;
+        try {
+            port = Integer.parseInt(p.getProperty("port", "").trim());
+        } catch (NumberFormatException ignored) {
+        }
+        sheet.startOffering(psk, port);
     }
 
     /** The device that wants the key goes looking. */
@@ -141,7 +150,49 @@ final class PairSheet {
         codeLayout = sheet.findViewById(R.id.pair_code_layout);
         action = sheet.findViewById(R.id.pair_action);
         sheet.setOnDismissListener(d -> shut());
+        followKeyboard(sheet.findViewById(R.id.pair_root));
         sheet.show();
+    }
+
+    /**
+     * Move the sheet's contents with the keyboard, in step with it.
+     *
+     * <p>Two faults, and they look like one. The <b>gap</b> is a double inset: the sheet already
+     * pads itself clear of the navigation bar, and the keyboard covers the navigation bar, so adding
+     * both left exactly a navigation bar of empty space under the field. It is
+     * {@code max(ime, navigation)} that is wanted, never a sum — only one of the two is ever in
+     * front of the sheet.
+     *
+     * <p>The <b>jump</b> is a timing fault. Insets are dispatched once, up front, with the value the
+     * keyboard will have when it has finished arriving — so padding applied there is applied whole,
+     * a frame before the keyboard has moved at all. {@code DISPATCH_MODE_STOP} holds that dispatch
+     * back until the animation is over and hands us {@code onProgress} instead, which is the
+     * keyboard's real position on every frame. Applying it there is what makes the sheet travel with
+     * the keyboard rather than beat it to the top.
+     */
+    private void followKeyboard(View content) {
+        if (content == null) return;
+        final int base = content.getPaddingBottom();
+        content.setOnApplyWindowInsetsListener((v, insets) -> {
+            padBelow(v, insets, base);
+            return insets;
+        });
+        content.setWindowInsetsAnimationCallback(
+                new android.view.WindowInsetsAnimation.Callback(
+                        android.view.WindowInsetsAnimation.Callback.DISPATCH_MODE_STOP) {
+                    @Override
+                    public WindowInsets onProgress(WindowInsets insets,
+                                                   java.util.List<android.view.WindowInsetsAnimation> running) {
+                        padBelow(content, insets, base);
+                        return insets;
+                    }
+                });
+    }
+
+    private static void padBelow(View v, WindowInsets insets, int base) {
+        int ime = insets.getInsets(WindowInsets.Type.ime()).bottom;
+        int nav = insets.getInsets(WindowInsets.Type.navigationBars()).bottom;
+        v.setPadding(v.getPaddingLeft(), v.getPaddingTop(), v.getPaddingRight(), base + Math.max(ime, nav));
     }
 
     /**
@@ -168,17 +219,20 @@ final class PairSheet {
     }
 
     // ------------------------------------------------------------------ offering
-    private void startOffering(String pskHex) {
-        // The code is shown from the start, as a placeholder: it cannot be computed yet, and a
-        // sheet that opens without a line of display type and grows into one a moment later is the
-        // height jump. See the layout.
+    private void startOffering(String pskHex, int port) {
+        // Everything that will ever be on this sheet is on it from the first frame, at its final
+        // size: the code as a greyed placeholder of the same six digits, and the instruction in its
+        // final wording rather than a short "Opening…" that is replaced by three lines a moment
+        // later. That swap was most of the height jump — the code line was only ever one of two.
         state(true, true, false, false, false);
         title.setText(R.string.pair_offer_title);
-        text.setText(R.string.pair_offer_opening);
+        text.setText(R.string.pair_offer_body);
+        code.setText(R.string.pair_code_placeholder);
+        code.setTextColor(MaterialColors.getColor(code, com.google.android.material.R.attr.colorOutline));
         progressText.setText(R.string.pair_opening);
         worker.execute(() -> {
             try {
-                PairProvider p = new PairProvider(a, pskHex, new PairProvider.Listener() {
+                PairProvider p = new PairProvider(a, pskHex, port, new PairProvider.Listener() {
                     @Override public void onPaired(String device, String type) {
                         post(() -> gave(device));
                     }
@@ -212,15 +266,29 @@ final class PairSheet {
         line.setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodyMedium);
         line.setTextColor(MaterialColors.getColor(line, androidx.appcompat.R.attr.colorPrimary));
         line.setPadding(gutter(), 0, gutter(), dp(4));
+
+        // Its own transition, not state(): state() only starts one when a VISIBILITY changes, so the
+        // first device animated (the list appeared) and every one after it did not — the list was
+        // already visible, nothing it watches had changed, and the sheet grew in a single frame.
+        // What is actually arriving is the line, so the line is what is named.
+        //
+        // Built before the transition begins and while still detached, like every other appearing
+        // view here: a view that is not in the start scene is one that enters.
+        View[] fading = list.getVisibility() == View.VISIBLE ? new View[]{line} : new View[]{line, list};
+        if (root != null) {
+            TransitionManager.beginDelayedTransition(root, MainActivity.visibilityMotion(fading));
+        }
         list.addView(line);
-        state(true, true, true, false, false);
+        list.setVisibility(View.VISIBLE);
+        settled = true;
     }
 
     private void offering(PairProvider p) {
         provider = p;
-        state(true, true, false, false, false);
-        text.setText(R.string.pair_offer_body);
+        // Only the six characters and their colour change: same view, same font, same length as the
+        // placeholder, so nothing reflows.
         code.setText(p.code);
+        code.setTextColor(MaterialColors.getColor(code, androidx.appcompat.R.attr.colorPrimary));
         countdown = new Runnable() {
             @Override public void run() {
                 long left = Math.max(0, p.closesAt - System.currentTimeMillis());
@@ -319,7 +387,7 @@ final class PairSheet {
         worker.execute(() -> {
             try {
                 PairJoiner.Result r = PairJoiner.join(a, device, typed);
-                PairJoiner.apply(a, r.pskHex);
+                PairJoiner.apply(a, r);
                 post(() -> {
                     paired++;
                     // Whatever is behind the sheet is showing the key that was there a moment ago.

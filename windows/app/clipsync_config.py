@@ -26,6 +26,7 @@ import ipaddress
 import json
 import os
 import re
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(HERE, "config.json")
@@ -41,6 +42,15 @@ CHUNK = 512 * 1024
 DEFAULTS = {
     "port": 47521,
     "psk": "",
+    # Key rotation (docs/p2p-plan.md §17). Read whether or not rotate is on, because the ring still
+    # applies: a device that rotated and then had rotation turned off must go on accepting the keys
+    # it has already superseded.
+    "psk_rotate": False,
+    "psk_since": 0,
+    "psk_next": "",
+    "psk_old": [],
+    "psk_retire": 0,
+    "psk_agreed": 0,
     "max_bytes": 1024 * 1024,
     "max_file_bytes": 10 * 1024 * 1024,
     "max_file_bytes_local": 100 * 1024 * 1024,
@@ -66,6 +76,13 @@ KEY_ORDER = list(DEFAULTS)
 TRUE_WORDS = ("1", "true", "yes", "on")
 
 
+def as_hex_list(v) -> list:
+    """The old-key ring: a JSON array of hex strings, or a comma-joined string."""
+    if isinstance(v, (list, tuple)):
+        return [str(x).strip().lower() for x in v if str(x).strip()]
+    return [p.strip().lower() for p in str(v).split(",") if p.strip()]
+
+
 def as_bool(v) -> bool:
     """Tolerant on purpose: the value is a real bool in config.json, but a hand-edit can hand this a
     string, and "0" is not falsey."""
@@ -80,6 +97,147 @@ def as_list(v) -> list:
     if isinstance(v, (list, tuple)):
         return [str(x).strip() for x in v if str(x).strip()]
     return [p.strip() for p in str(v).split(",") if p.strip()]
+
+
+# ----------------------------------------------------------------------------- key rotation
+# Mirrors Keys.java on the Android side — same constants, same logic, same field names in the file.
+
+PRE_RETIRE_MS = 48 * 3600_000
+RETIRE_MS = 72 * 3600_000
+EXTEND_MS = 24 * 3600_000
+KEYRING = 3
+
+
+class Schedule:
+    """One device's view of its own key schedule. Immutable — every mutation returns a new one."""
+
+    __slots__ = ("psk", "next", "old", "since", "retire_at", "agreed_at")
+
+    def __init__(self, psk="", nxt="", old=None, since=0, retire_at=0, agreed_at=0):
+        self.psk = (psk or "").strip().lower()
+        self.next = (nxt or "").strip().lower()
+        self.old = list(old) if old else []
+        self.since = int(since)
+        self.retire_at = int(retire_at)
+        self.agreed_at = int(agreed_at)
+
+    def accepted(self) -> list:
+        """Every key that may authenticate an inbound connection, current first."""
+        keys = []
+        if self.psk:
+            keys.append(self.psk)
+        if self.next:
+            keys.append(self.next)
+        keys.extend(self.old)
+        return keys
+
+    def phase(self, now: int) -> str:
+        if not self.psk:
+            return "active"
+        if now - self.since < PRE_RETIRE_MS:
+            return "active"
+        if not self.next:
+            return "pre_retired"
+        if self.retire_at == 0 or now < self.retire_at:
+            return "pre_retired"
+        return "due" if self.agreed_at > self.since else "stranded"
+
+    def with_next(self, successor: str) -> "Schedule":
+        return Schedule(self.psk, successor, self.old, self.since, self.since + RETIRE_MS, self.agreed_at)
+
+    def agreed(self, now: int) -> "Schedule":
+        return Schedule(self.psk, self.next, self.old, self.since, self.retire_at, now)
+
+    def extended(self) -> "Schedule":
+        return Schedule(self.psk, self.next, self.old, self.since, self.retire_at + EXTEND_MS, self.agreed_at)
+
+    def promoted(self, now: int) -> "Schedule":
+        ring = [self.psk] + self.old
+        return Schedule(self.next, "", ring[:KEYRING], now, 0, 0)
+
+    def adopt(self, key: str, now: int) -> "Schedule":
+        if key == self.psk:
+            return self
+        ring = ([self.psk] if self.psk else []) + [k for k in self.old if k != key]
+        return Schedule(key, "", ring[:KEYRING], now, 0, 0)
+
+    def reconcile(self, their_psk: str, their_next: str, now: int) -> "Schedule":
+        s = self
+        if s.next and their_psk == s.next:
+            s = s.agreed(now)
+            if s.phase(now) == "due":
+                s = s.promoted(now)
+        elif their_psk != s.psk and their_psk not in s.old:
+            s = s.adopt(their_psk, now)
+        if their_psk == s.psk and their_next:
+            if not s.next:
+                s = s.with_next(their_next)
+            elif s.next != their_next:
+                winner = better_next(s.next, their_next)
+                if winner != s.next:
+                    s = s.with_next(winner)
+            if s.next == their_next:
+                s = s.agreed(now)
+        return s
+
+    def __eq__(self, other):
+        if not isinstance(other, Schedule):
+            return NotImplemented
+        return (self.psk == other.psk and self.next == other.next and self.old == other.old
+                and self.since == other.since and self.retire_at == other.retire_at
+                and self.agreed_at == other.agreed_at)
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
+
+def better_next(ours: str, theirs: str) -> str:
+    if not ours:
+        return theirs or ""
+    if not theirs:
+        return ours
+    return ours if ours >= theirs else theirs
+
+
+def schedule_from_raw(raw: dict) -> Schedule:
+    """Build a Schedule from config.json fields.
+
+    A missing activation time is treated as **now**, matching Config.schedule() on Android.
+    Otherwise an existing key looks 55 years old and triggers immediate pre-retirement the
+    moment rotation is enabled.
+    """
+    since = int(raw.get("psk_since", 0) or 0)
+    return Schedule(
+        psk=str(raw.get("psk", "")).strip().lower(),
+        nxt=str(raw.get("psk_next", "")).strip().lower(),
+        old=as_hex_list(raw.get("psk_old", [])),
+        since=since if since else int(time.time() * 1000),
+        retire_at=int(raw.get("psk_retire", 0) or 0),
+        agreed_at=int(raw.get("psk_agreed", 0) or 0),
+    )
+
+
+def schedule_to_raw(s: Schedule, rotate: bool) -> dict:
+    """The schedule as the fields config.json holds."""
+    return {
+        "psk": s.psk,
+        "psk_rotate": rotate,
+        "psk_next": s.next,
+        "psk_old": s.old,
+        "psk_since": s.since,
+        "psk_retire": s.retire_at,
+        "psk_agreed": s.agreed_at,
+    }
+
+
+def random_psk_hex() -> str:
+    return os.urandom(32).hex()
+
+
+def short_key(hex_key: str) -> str:
+    if not hex_key:
+        return "(none)"
+    return hex_key[:8] + "…"
 
 
 # ----------------------------------------------------------------------------- reading / writing
@@ -115,6 +273,18 @@ def read_config(path: str = CONFIG_PATH) -> dict:
 # off, which check_all refuses -- so a configuration that worked became a service that exits at
 # start-up. Migration code is a second, rarely exercised way to be wrong about a file, and the cost
 # of carrying it is permanent while the reconfiguration it saves takes a minute once.
+
+
+def save_schedule(sched: Schedule, rotate: bool, path: str = CONFIG_PATH) -> None:
+    """Merge a new key schedule into the existing config and write it back.
+
+    This is the equivalent of Config.save() on Android: it reads, overlays the schedule fields,
+    and writes the whole file. The PSK field itself changes when a promotion swaps the key, so
+    it is included. Does NOT raise on a missing file — every field has a default.
+    """
+    raw = read_config(path)
+    raw.update(schedule_to_raw(sched, rotate))
+    write_config(raw, path)
 
 
 def write_config(values: dict, path: str = CONFIG_PATH) -> None:
@@ -354,6 +524,9 @@ class Cfg:
             raise SystemExit("{}: {}: {}".format(os.path.basename(path), first, problems[first]))
 
         self.psk = bytes.fromhex(str(raw["psk"]).strip())
+        self.psk_hex = str(raw["psk"]).strip().lower()
+        self.rotate = as_bool(raw.get("psk_rotate", False))
+        self.keys = schedule_from_raw(raw)
         self.port = int(raw["port"])
         self.max_bytes = int(raw["max_bytes"])
         self.max_file_bytes = int(raw["max_file_bytes"])

@@ -67,7 +67,9 @@ public class MainActivity extends AppCompatActivity {
     // fields
     private TextInputLayout portL, pskL, textKbL, fileMbL, fileMbLocalL, pathL, keepHoursL, keepMbL;
     private TextInputEditText port, psk, textKb, fileMb, fileMbLocal, path, keepHours, keepMb;
-    private MaterialSwitch discovery, direct;
+    private MaterialSwitch discovery, direct, pskRotate;
+    /** The paragraph under {@link #pskRotate}, shown only while it is on. */
+    private View pskRotateHelp;
     /** The Direct connections list, and this device's own addresses — one class, twice (§4a). */
     private AddressList peerList, ownList;
     private MaterialButton pskRandom;
@@ -255,6 +257,8 @@ public class MainActivity extends AppCompatActivity {
         ownList = new AddressList(this, findViewById(R.id.own_box), findViewById(R.id.own_add),
                 R.string.hint_peer, true, listHost);
         pskRandom = findViewById(R.id.psk_random);
+        pskRotate = findViewById(R.id.psk_rotate);
+        pskRotateHelp = findViewById(R.id.psk_rotate_help);
         portL = findViewById(R.id.port_layout);       port = findViewById(R.id.port);
         pskL = findViewById(R.id.psk_layout);         psk = findViewById(R.id.psk);
         textKbL = findViewById(R.id.text_kb_layout);  textKb = findViewById(R.id.text_kb);
@@ -343,6 +347,8 @@ public class MainActivity extends AppCompatActivity {
         setOwnExpanded(!ownList.values().isEmpty(), false);
         port.setText(p.getProperty("port", "47521"));
         psk.setText(p.getProperty("psk", ""));
+        pskRotate.setChecked(bool(p.getProperty("psk_rotate", "false")));
+        showRotateHelp(pskRotate.isChecked(), false);
         textKb.setText(String.valueOf(longOf(p, "max_bytes", 1048576) / 1024));
         fileMb.setText(String.valueOf(longOf(p, "max_file_bytes", 10485760) / (1024 * 1024)));
         fileMbLocal.setText(String.valueOf(longOf(p, "max_file_bytes_local", 104857600) / (1024 * 1024)));
@@ -438,6 +444,21 @@ public class MainActivity extends AppCompatActivity {
     }
 
     /**
+     * The rotation explanation, faded in and out with everything below it sliding to follow.
+     *
+     * <p>Same motion as the settings groups, same reason it is one call: the paragraph is the only
+     * view whose visibility changes, so it is the only one named, and everything else in the card
+     * has to stay inside ChangeBounds' reach or it will not move when the gap opens under it.
+     */
+    private void showRotateHelp(boolean shown, boolean animate) {
+        int want = shown ? View.VISIBLE : View.GONE;
+        if (pskRotateHelp.getVisibility() == want) return;
+        if (animate) TransitionManager.beginDelayedTransition(
+                settingsRoot, visibilityMotion(pskRotateHelp));
+        pskRotateHelp.setVisibility(want);
+    }
+
+    /**
      * The view if it is about to change visibility, otherwise null.
      *
      * <p>Only the views that actually turn over may be handed to {@link #visibilityMotion(View...)},
@@ -523,6 +544,19 @@ public class MainActivity extends AppCompatActivity {
         v.setProperty("own_addresses", Config.storePeers(ownList.values()));
         v.setProperty("port", text(port));
         v.setProperty("psk", text(psk));
+        v.setProperty("psk_rotate", String.valueOf(pskRotate.isChecked()));
+        // A key typed or generated here is a NEW key, so its clock starts now. Without this, Apply
+        // would write a fresh key over an old activation time — and rotation would pre-retire it
+        // within minutes, on the strength of how long the one it replaced had been in use.
+        //
+        // Only when it changed: pressing Apply after editing a limit must not keep resetting the age
+        // of a key that has been in service for a day.
+        if (!text(psk).equalsIgnoreCase(Config.raw(this).getProperty("psk", "").trim())) {
+            v.setProperty("psk_since", String.valueOf(System.currentTimeMillis()));
+            v.setProperty("psk_next", "");
+            v.setProperty("psk_retire", "0");
+            v.setProperty("psk_agreed", "0");
+        }
         v.setProperty("mdns_timeout_ms", String.valueOf(browseValue()));
         v.setProperty("threads", String.valueOf(threadsValue()));
         v.setProperty("max_bytes", kb(text(textKb)));
@@ -589,6 +623,9 @@ public class MainActivity extends AppCompatActivity {
             e.addTextChangedListener(revalidate);
         discovery.setOnCheckedChangeListener((b, checked) -> { applySwitches(true); validate(); });
         direct.setOnCheckedChangeListener((b, checked) -> { applySwitches(true); validate(); });
+        // Its own listener, not applySwitches(): that one governs whole cards and excludes them from
+        // ChangeBounds by name, and this is one paragraph inside a card that has to keep moving.
+        pskRotate.setOnCheckedChangeListener((b, checked) -> showRotateHelp(checked, true));
         Haptics.onClick(pskRandom, this::newPsk);
         threads.setLabelFormatter(v -> String.valueOf(Config.THREAD_STEPS[Math.max(0, Math.min(4, Math.round(v)))]));
         Haptics.bind(threads, (s, v, u) -> threadsLabel.setText(getString(R.string.threads_label, threadsValue())));

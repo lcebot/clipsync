@@ -319,6 +319,22 @@ class App:
         self.psk_shown = tk.BooleanVar(value=False)
         ttk.Checkbutton(psk_bar, text="Show", variable=self.psk_shown,
                         command=self._toggle_psk).pack(side="left", padx=(PAD, 0))
+
+        # Key rotation (§17)
+        self.psk_rotate = tk.BooleanVar(value=False)
+        ttk.Checkbutton(conn, text="Rotate key automatically",
+                        variable=self.psk_rotate, command=self._rotate_toggled
+                        ).grid(row=5, column=1, sticky="w", padx=PAD, pady=(0, 0))
+        self.rotate_help = ttk.Label(
+            conn, wraplength=460, foreground="#49454f",
+            text="When enabled, this key is replaced every 48 hours. A successor is generated "
+                 "and shared with connected devices; after 72 hours, if at least one device has "
+                 "acknowledged the new key, it takes over. If no device has been reached by then, "
+                 "the deadline is extended 24 hours at a time until one connects. Old keys stay "
+                 "accepted for 3 rotations (~6 days), so a device left off for a few days will "
+                 "still reconnect.")
+        self.rotate_help.grid(row=6, column=1, sticky="w", padx=PAD, pady=(0, PAD))
+        self.rotate_help.grid_remove()
         section_row += 1
 
         # --- This PC's own addresses (§4a)
@@ -421,6 +437,12 @@ class App:
     def _toggle_psk(self):
         self.psk.entry.configure(show="" if self.psk_shown.get() else "•")
 
+    def _rotate_toggled(self):
+        if self.psk_rotate.get():
+            self.rotate_help.grid()
+        else:
+            self.rotate_help.grid_remove()
+
     def _direct_toggled(self):
         self.peer_list.set_enabled(self.direct.get())
         self.revalidate()
@@ -440,6 +462,8 @@ class App:
 
         self.port.set(raw["port"])
         self.psk.set(raw["psk"])
+        self.psk_rotate.set(cfgmod.as_bool(raw.get("psk_rotate", False)))
+        self._rotate_toggled()
         self.mdns_name.set(raw["mdns_name"])
         self.discovery.set(cfgmod.as_bool(raw["discovery"]))
         self.direct.set(cfgmod.as_bool(raw["direct"]))
@@ -469,9 +493,10 @@ class App:
         string the user typed rather than coerced or dropped: check_all is what reports them, in its
         own words, and a field cannot be fixed if Apply has already silently replaced it with 0.
         """
-        return {
+        d = {
             "port": _int(self.port.get()),
             "psk": self.psk.get().lower(),
+            "psk_rotate": bool(self.psk_rotate.get()),
             "max_bytes": _int(_from_unit(self.max_bytes.get(), 1024)),
             "max_file_bytes": _int(_from_unit(self.max_file.get(), 1024 * 1024)),
             "max_file_bytes_local": _int(_from_unit(self.max_file_local.get(), 1024 * 1024)),
@@ -485,6 +510,20 @@ class App:
             "own_addresses": self.own_list.values(),
             "start_delay": _int(self.start_delay.get()),
         }
+        # A key typed or generated here is a NEW key, so its clock starts now. Without this,
+        # Apply would write a fresh key over an old activation time — and rotation would
+        # pre-retire it within minutes. Only when the key actually changed.
+        try:
+            old_raw = cfgmod.read_config()
+            old_psk = str(old_raw.get("psk", "")).strip().lower()
+        except (ValueError, OSError):
+            old_psk = ""
+        if d["psk"] != old_psk:
+            d["psk_since"] = int(time.time() * 1000)
+            d["psk_next"] = ""
+            d["psk_retire"] = 0
+            d["psk_agreed"] = 0
+        return d
 
     def revalidate(self, *_):
         raw = self.collect()
@@ -591,13 +630,19 @@ class App:
         if bad is not None:
             messagebox.showerror("Pairing failed", "The key it sent is not usable: %s" % bad, parent=self.root)
             return
-        # Into the field, not straight to disk: Apply is what writes, everywhere else in this window,
-        # and pairing is a configuration change like any other.  It also leaves the user one visible
-        # step from undoing it.
+        # Into the fields, not straight to disk: Apply is what writes, everywhere else in this
+        # window, and pairing is a configuration change like any other.  It also leaves the user one
+        # visible step from undoing it.
         self.psk.set(answer["psk"])
         self.psk_shown.set(True)
         self._toggle_psk()
         self.discovery.set(True)
+        # The port comes with the key, and is taken only if it is one: a provider that sends nonsense
+        # must not be able to point this PC at a port nothing is listening on, and leaving the
+        # current value alone is the failure that is easy to see and easy to fix.
+        shared = str(answer.get("port", "")).strip()
+        if shared and cfgmod.check_port(shared) is None:
+            self.port.set(shared)
         self.revalidate()
         messagebox.showinfo(
             "Paired",
@@ -635,10 +680,11 @@ class App:
                                            "device”, pick this PC, and enter this code.").grid(
             row=0, column=0, sticky="w", padx=PAD, pady=(PAD, 0))
         # Big and monospaced: it is read across a room and typed on a phone in the other hand, and
-        # six digits that run together are six digits typed wrong.  Six dashes to start, the same
-        # length in the same font, so the window does not resize when the real code arrives -- the
-        # key derivation is 200 000 PBKDF2 rounds and cannot have finished by now.
-        code_label = ttk.Label(win, text="------", font=("Consolas", 28))
+        # six digits that run together are six digits typed wrong.  Six greyed DIGITS to start, not
+        # dashes: the same length in the same font, so the window does not resize when the real code
+        # arrives -- the key derivation is 200 000 PBKDF2 rounds and cannot have finished by now --
+        # and digits because a dash and a digit do not draw to the same height.
+        code_label = ttk.Label(win, text="114514", font=("Consolas", 28), foreground="#79747e")
         code_label.grid(row=1, column=0, padx=PAD, pady=(PAD, 0))
         status = ttk.Label(win, text="Starting…", foreground="#49454f")
         status.grid(row=2, column=0, sticky="w", padx=PAD, pady=(0, PAD))
@@ -696,7 +742,7 @@ class App:
             finish("Could not open a pairing window: %s" % e)
             return
         state["provider"] = p
-        code_label.config(text=p.code)
+        code_label.config(text=p.code, foreground="#1d192b")   # real now, and no longer greyed
 
         def tick():
             left = max(0.0, p.closes_at - time.monotonic())
