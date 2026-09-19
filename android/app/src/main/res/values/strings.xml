@@ -200,7 +200,7 @@
          says why), so anything that fits in two leaves the sheet exactly where it was — and this is
          a dead end with a button under it, which is the last moment to be moving the surface the
          user is reading. Both checks survive the cut because both are things the user can act on. -->
-    <string name="pair_none_found">Nothing is offering to pair. Check the other device's window, and that both are on one Wi-Fi.</string>
+    <string name="pair_none_found">Nothing is offering to pair. Check the other device\'s window, and that both are on one Wi-Fi.</string>
     <string name="pair_search_again">Look again</string>
     <string name="pair_pick">Found these. Pick the one showing a code.</string>
     <string name="pair_enter_code">Enter the code shown on %1$s</string>
