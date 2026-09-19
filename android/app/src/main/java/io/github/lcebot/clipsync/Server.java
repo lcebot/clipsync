@@ -155,7 +155,7 @@ final class Server implements Closeable {
             // about to die is the whole fix, and it keeps the self-check where it belongs: with
             // whichever end is reading an id.
             try {
-                if (c != null) c.sendHello(ctx, 0);
+                if (c != null) c.sendHello(ctx, 0, "");
             } catch (Exception ignored) {
                 // it is closing regardless; the dialler falls back to its own timeout
             }

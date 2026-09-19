@@ -408,26 +408,6 @@
             android:visibility="gone"
             tools:visibility="visible" />
 
-        <!-- Relay opt-out (docs/p2p-plan.md §8). Its own card, like the discovery and direct switches,
-             because it governs a behaviour rather than a field. Placed after the connection switches
-             and before the limits: it is about how this device participates, not about data volumes.
-             8dp margin matches the inter-group spacing of the two switches above. -->
-        <com.google.android.material.card.MaterialCardView
-            style="?attr/materialCardViewFilledStyle"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp">
-
-            <com.google.android.material.materialswitch.MaterialSwitch
-                android:id="@+id/relay_opt_out"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginHorizontal="12dp"
-                android:gravity="center_vertical|start"
-                android:text="@string/switch_relay_opt_out"
-                android:textAppearance="?attr/textAppearanceBodyLarge" />
-        </com.google.android.material.card.MaterialCardView>
-
         <!-- ===== Transfer limits ===== -->
         <TextView style="@style/ClipSync.SectionTitle" android:text="@string/section_limits" />
 
@@ -512,6 +492,25 @@
                     app:labelBehavior="floating"
                     app:tickVisible="true" />
             </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <!-- Relay opt-out (docs/p2p-plan.md §8). Its own card at the bottom of Transfer limits:
+             relaying is bounded by the same size limits and costs the same bandwidth, so it belongs
+             with the controls that govern how much data this device handles. -->
+        <com.google.android.material.card.MaterialCardView
+            style="?attr/materialCardViewFilledStyle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp">
+
+            <com.google.android.material.materialswitch.MaterialSwitch
+                android:id="@+id/relay_opt_out"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="12dp"
+                android:gravity="center_vertical|start"
+                android:text="@string/switch_relay_opt_out"
+                android:textAppearance="?attr/textAppearanceBodyLarge" />
         </com.google.android.material.card.MaterialCardView>
 
         <!-- ===== Received files ===== -->
