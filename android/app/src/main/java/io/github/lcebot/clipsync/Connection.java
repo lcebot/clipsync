@@ -307,10 +307,13 @@ public final class Connection implements AutoCloseable {
      * nothing else, so the cap is a bound on what an unauthenticated caller can make this end
      * allocate before the handshake proves anything.
      */
-    public static Connection pairTo(InetSocketAddress addr, byte[] key) throws Exception {
+    public static Connection pairTo(InetSocketAddress addr, byte[] key, Network net) throws Exception {
+        // Bound to the network the browse ran on, like every other connect here: the address came
+        // from a LAN advertisement, and a phone whose default route is cellular would otherwise send
+        // a private address out of the modem and wait for the timeout.
         return new Connection(key, PAIR_MAX_FRAME, 0,
-                new Object[]{connectTo(addr, MDNS_CONNECT_TIMEOUT_MS, null), "pair", String.valueOf(addr)},
-                null, null, false);
+                new Object[]{connectTo(addr, MDNS_CONNECT_TIMEOUT_MS, net), "pair", String.valueOf(addr)},
+                null, net, false);
     }
 
     public static Connection pairAccept(Socket s, byte[] key) throws Exception {

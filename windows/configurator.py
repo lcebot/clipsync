@@ -304,6 +304,10 @@ class App:
         psk_bar = ttk.Frame(conn)
         psk_bar.grid(row=4, column=1, sticky="w", padx=PAD, pady=(0, PAD))
         ttk.Button(psk_bar, text="Generate random PSK key", command=self.new_psk).pack(side="left")
+        # Beside Generate, because they are the two ways to end up with a key and the choice between
+        # them is the one the user is making at this field: make one here and hand it out, or take
+        # the one a device already has.  (docs/p2p-plan.md §12 -- the PC only ever joins.)
+        ttk.Button(psk_bar, text="Pair with a device…", command=self.pair).pack(side="left", padx=(PAD, 0))
         self.psk_shown = tk.BooleanVar(value=False)
         ttk.Checkbutton(psk_bar, text="Show", variable=self.psk_shown,
                         command=self._toggle_psk).pack(side="left", padx=(PAD, 0))
@@ -519,6 +523,145 @@ class App:
         self.psk.set(os.urandom(32).hex())
         self.psk_shown.set(True)
         self._toggle_psk()
+
+    def pair(self):
+        """
+        Take the key from a device that already has it (docs/p2p-plan.md §12).
+
+        Browsing and the key derivation both block for seconds, and tkinter has one thread, so the
+        window is left disabled with a note in it rather than frozen with nothing.  A progress bar
+        would need a second thread to drive it and would still be indeterminate; saying what is
+        happening and why it takes a moment is worth more than an animation.
+        """
+        if cfgmod.check_psk(self.psk.get()) is None and not messagebox.askokcancel(
+                "Replace the key?",
+                "This PC already has a key. Pairing replaces it, and this PC will stop connecting "
+                "to anything still using the old one.", icon="warning", parent=self.root):
+            return
+        try:
+            import clipsync_pair
+        except ImportError as e:                    # pragma: no cover - a broken install
+            messagebox.showerror("Cannot pair", str(e), parent=self.root)
+            return
+
+        self.root.config(cursor="watch")
+        self.root.update()
+        try:
+            found = clipsync_pair.find()
+        except RuntimeError as e:
+            messagebox.showerror("Cannot pair", str(e), parent=self.root)
+            return
+        finally:
+            self.root.config(cursor="")
+
+        if not found:
+            messagebox.showinfo(
+                "Nothing found",
+                "No device is offering to pair on this network.\n\nOn the other device open "
+                "Settings and tap “Pair a new device”, then try again while its code is showing.",
+                parent=self.root)
+            return
+
+        name, addrs, salt = found[0] if len(found) == 1 else self._choose(found)
+        if name is None:
+            return
+        code = self._ask_code(name)
+        if not code:
+            return
+
+        self.root.config(cursor="watch")
+        self.root.update()
+        try:
+            answer = clipsync_pair.join(addrs, salt, code, socket.gethostname().split(".")[0])
+        except Exception as e:                      # noqa: BLE001 - every failure is the user's to read
+            messagebox.showerror("Pairing failed", str(e), parent=self.root)
+            return
+        finally:
+            self.root.config(cursor="")
+
+        bad = cfgmod.check_psk(answer.get("psk", ""))
+        if bad is not None:
+            messagebox.showerror("Pairing failed", "The key it sent is not usable: %s" % bad, parent=self.root)
+            return
+        # Into the field, not straight to disk: Apply is what writes, everywhere else in this window,
+        # and pairing is a configuration change like any other.  It also leaves the user one visible
+        # step from undoing it.
+        self.psk.set(answer["psk"])
+        self.psk_shown.set(True)
+        self._toggle_psk()
+        self.discovery.set(True)
+        self.revalidate()
+        messagebox.showinfo(
+            "Paired",
+            "Got the key from {}.\n\nPress Apply to save it and restart the service.".format(
+                answer.get("device", name)),
+            parent=self.root)
+
+    def _choose(self, found):
+        """Which device, when more than one is offering. Returns (None, None, None) if cancelled."""
+        win = tk.Toplevel(self.root)
+        win.title("Pair with which device?")
+        win.transient(self.root)
+        win.grab_set()
+        picked = {"i": None}
+        ttk.Label(win, text="Pick the one showing a code.").grid(
+            row=0, column=0, sticky="w", padx=PAD, pady=(PAD, 0))
+        box = tk.Listbox(win, height=min(6, len(found)), exportselection=False)
+        for name, _, _ in found:
+            box.insert("end", name)
+        box.selection_set(0)
+        box.grid(row=1, column=0, sticky="ew", padx=PAD, pady=PAD)
+
+        def ok():
+            sel = box.curselection()
+            picked["i"] = sel[0] if sel else None
+            win.destroy()
+
+        bar = ttk.Frame(win)
+        bar.grid(row=2, column=0, sticky="e", padx=PAD, pady=(0, PAD))
+        ttk.Button(bar, text="Cancel", command=win.destroy).pack(side="left")
+        ttk.Button(bar, text="Continue", command=ok).pack(side="left", padx=(PAD, 0))
+        win.columnconfigure(0, weight=1)
+        self.root.wait_window(win)
+        return found[picked["i"]] if picked["i"] is not None else (None, None, None)
+
+    def _ask_code(self, name):
+        """
+        The six digits, typed here.
+
+        Its own window rather than simpledialog, for one reason: the count has to be exact. Six
+        digits is the whole authentication, and a field that accepts five and fails at the handshake
+        would spend one of the provider's five attempts on a typo this could have caught.
+        """
+        win = tk.Toplevel(self.root)
+        win.title("Enter the code")
+        win.transient(self.root)
+        win.grab_set()
+        out = {"code": None}
+        ttk.Label(win, wraplength=360, text="Enter the six-digit code shown on %s." % name).grid(
+            row=0, column=0, columnspan=2, sticky="w", padx=PAD, pady=(PAD, 0))
+        var = tk.StringVar()
+        entry = ttk.Entry(win, textvariable=var, width=10, font=("Consolas", 16))
+        entry.grid(row=1, column=0, columnspan=2, sticky="w", padx=PAD, pady=PAD)
+        entry.focus_set()
+        note = ttk.Label(win, foreground="#b3261e", text="")
+        note.grid(row=2, column=0, columnspan=2, sticky="w", padx=PAD)
+
+        def ok():
+            code = var.get().strip()
+            if not re.fullmatch(r"\d{6}", code):
+                note.config(text="Six digits.")
+                return
+            out["code"] = code
+            win.destroy()
+
+        bar = ttk.Frame(win)
+        bar.grid(row=3, column=0, columnspan=2, sticky="e", padx=PAD, pady=PAD)
+        ttk.Button(bar, text="Cancel", command=win.destroy).pack(side="left")
+        ttk.Button(bar, text="Pair", command=ok).pack(side="left", padx=(PAD, 0))
+        win.bind("<Return>", lambda _e: ok())
+        self.root.wait_window(win)
+        return out["code"]
 
     def apply(self):
         if not self.revalidate():

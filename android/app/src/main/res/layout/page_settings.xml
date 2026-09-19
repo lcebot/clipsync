@@ -309,6 +309,19 @@
                     android:value="3"
                     app:labelBehavior="floating"
                     app:tickVisible="true" />
+
+                <!-- In this card, not beside it: pairing *is* mDNS — a browse on one side and an
+                     advertisement on the other — so it belongs to local discovery rather than next
+                     to it, and with the switch off the button would promise something that cannot
+                     run. The label says "pair", matching what the mechanism is called everywhere
+                     else (_clipsync-pair._tcp, PAIR_ASK, "the pairing window"); a separate
+                     user-facing word would only mean the log, the sheet and this page each naming
+                     the same act differently. (docs/p2p-plan.md §12) -->
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/pair"
+                    style="@style/ClipSync.SettingsButton"
+                    android:layout_marginTop="8dp"
+                    android:text="@string/pair_button" />
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 

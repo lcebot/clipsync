@@ -238,6 +238,11 @@ public class MainActivity extends AppCompatActivity {
                 // invalid config: user will fix it and press Apply
             }
         }
+
+        // Last, so it lands on top of a page that is already built: the choice it offers writes to
+        // the very fields behind it, and a dialog racing the first layout pass would be reloading a
+        // form that had not finished being filled.
+        offerFirstRunIfUnconfigured();
     }
 
     private void bind() {
@@ -289,6 +294,9 @@ public class MainActivity extends AppCompatActivity {
         });
         browse = findViewById(R.id.browse);
         browseLabel = findViewById(R.id.browse_label);
+        // Offers this device's key, rather than going looking for one: a device with the key is the
+        // provider, and a device without it arrives through first run instead.
+        Haptics.onClick(findViewById(R.id.pair), () -> PairSheet.offer(this));
         threads = findViewById(R.id.threads);
         threadsLabel = findViewById(R.id.threads_label);
         settingsRoot = findViewById(R.id.settings_root);
@@ -459,12 +467,9 @@ public class MainActivity extends AppCompatActivity {
                 .show();
     }
 
+    /** Moved to {@link Crypto}: first run generates one too, and two of these would drift. */
     private static String randomPskHex() {
-        byte[] b = new byte[32];
-        Crypto.RNG.nextBytes(b);
-        StringBuilder sb = new StringBuilder(64);
-        for (byte x : b) sb.append(String.format("%02x", x));
-        return sb.toString();
+        return Crypto.randomPskHex();
     }
 
     private static boolean bool(String s) {
@@ -778,8 +783,57 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
-    private void snack(int textRes) {
+    void snack(int textRes) {
         Snackbar.make(coordinator, textRes, Snackbar.LENGTH_SHORT).setAnchorView(anchor()).show();
+    }
+
+    // ------------------------------------------------------------------ pairing (docs/p2p-plan.md §12)
+    /**
+     * A new key has been written to the file, so the form is showing the old one.
+     *
+     * <p>{@link #loadFields} rather than setting the PSK field directly: pairing turns discovery on
+     * as well, and re-reading is the only version of this that cannot fall behind whatever else
+     * pairing decides to write next.
+     */
+    void reloadAfterPairing() {
+        loadFields();
+        validate();
+    }
+
+    /**
+     * Get the service running on the key that was just written.
+     *
+     * <p>The same two branches as Apply, and for the same reason: a running service takes a reload
+     * in place, and one that was never started has to be started. Pairing is a configuration change
+     * like any other — it is only reached differently.
+     */
+    void restartServiceAfterPairing() {
+        try {
+            setAutoStart(true);
+            Intent svc = new Intent(this, SyncService.class);
+            if (Status.read(this).alive()) {
+                startService(svc.setAction(SyncService.ACTION_RELOAD));
+            } else {
+                startForegroundService(svc);
+                waitingForStart = true;
+                waitingSince = System.currentTimeMillis();
+                refreshActions();
+            }
+        } catch (Exception e) {
+            Logger.w("pairing: cannot start the service: " + e);
+        }
+    }
+
+    /**
+     * Offer the first-run choice to a device that has no key.
+     *
+     * <p>Keyed on the PSK alone, because that is the one setting without which nothing works at all:
+     * every other field has a usable default. Asked once per launch and never again once a key
+     * exists, so the escape hatch really is an escape rather than a question that keeps returning.
+     */
+    private void offerFirstRunIfUnconfigured() {
+        if (Config.checkPsk(Config.raw(this).getProperty("psk", "")) == null) return;
+        PairSheet.firstRun(this);
     }
 
     /** Above whichever FAB pair is on screen, above the navigation bar otherwise. */

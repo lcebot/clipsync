@@ -56,12 +56,25 @@ public final class Mdns {
      * @return a handle to unregister with, or null if registration could not even be attempted
      */
     public static Advert advertise(Context ctx, String name, int port) {
+        return advertise(ctx, SERVICE_TYPE, name, port, null);
+    }
+
+    /**
+     * @param type the service type; pairing advertises under its own ({@link Pairing#SERVICE_TYPE})
+     *             so that ordinary discovery never has to filter it out and the pairing browse never
+     *             turns up ordinary nodes
+     * @param txt  TXT record entries, or null. Pairing puts its salt here — public by design, since
+     *             a salt is not a secret and only has to be unique, and the joiner needs it before
+     *             it can derive the key it would connect with.
+     */
+    public static Advert advertise(Context ctx, String type, String name, int port, Map<String, String> txt) {
         NsdManager nsd = ctx.getSystemService(NsdManager.class);
         if (nsd == null) return null;
         NsdServiceInfo si = new NsdServiceInfo();
         si.setServiceName(name);
-        si.setServiceType(SERVICE_TYPE);
+        si.setServiceType(type);
         si.setPort(port);
+        if (txt != null) for (Map.Entry<String, String> e : txt.entrySet()) si.setAttribute(e.getKey(), e.getValue());
         Advert a = new Advert(nsd);
         try {
             nsd.registerService(si, NsdManager.PROTOCOL_DNS_SD, SHARED_EXECUTOR, a);
@@ -130,12 +143,15 @@ public final class Mdns {
     public static final class Instance {
         public final String name;
         public final List<InetSocketAddress> addrs;
+        /** The TXT record, never null. Empty for an ordinary node, which advertises none. */
+        public final Map<String, String> attrs;
         /** When this was last seen advertising, so a peer that goes quiet can be forgotten. */
         public final long foundAt = System.currentTimeMillis();
 
-        Instance(String name, List<InetSocketAddress> addrs) {
+        Instance(String name, List<InetSocketAddress> addrs, Map<String, String> attrs) {
             this.name = name;
             this.addrs = addrs;
+            this.attrs = attrs == null ? Map.of() : attrs;
         }
 
         @Override public String toString() { return name + " " + addrs; }
@@ -153,12 +169,17 @@ public final class Mdns {
      * <p>Blocking; call from a background thread only.
      */
     public static List<Instance> discover(Context ctx, Network net, long timeoutMs) {
+        return discover(ctx, net, SERVICE_TYPE, timeoutMs);
+    }
+
+    /** @param type which service to browse for — ordinary nodes, or {@link Pairing#SERVICE_TYPE} */
+    public static List<Instance> discover(Context ctx, Network net, String type, long timeoutMs) {
         NsdManager nsd = ctx.getSystemService(NsdManager.class);
         if (nsd == null) return new ArrayList<>();
-        Session s = new Session(nsd);
+        Session s = new Session(nsd, type);
         try {
             // pinned to the active (Wi-Fi) network: multicast never leaks to a cellular interface
-            nsd.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, net, s.executor, s.browser);
+            nsd.discoverServices(type, NsdManager.PROTOCOL_DNS_SD, net, s.executor, s.browser);
             s.done.await(timeoutMs, TimeUnit.MILLISECONDS);
         } catch (Exception e) {
             Logger.w("mdns discovery: " + e);
@@ -168,7 +189,9 @@ public final class Mdns {
         List<Instance> out = new ArrayList<>();
         synchronized (s.found) {
             for (Map.Entry<String, List<InetSocketAddress>> e : s.found.entrySet())
-                if (!e.getValue().isEmpty()) out.add(new Instance(e.getKey(), new ArrayList<>(e.getValue())));
+                if (!e.getValue().isEmpty()) {
+                    out.add(new Instance(e.getKey(), new ArrayList<>(e.getValue()), s.txt.get(e.getKey())));
+                }
         }
         return out;
     }
@@ -180,8 +203,12 @@ public final class Mdns {
         // onServiceInfoCallbackUnregistered after close(), and a rejected execute() would throw
         // on the system callback thread
         final ExecutorService executor = SHARED_EXECUTOR;
+        /** the type this browse asked for, minus its trailing dot, for matching what comes back */
+        final String want;
         /** advertised service name -> every address it resolved to, insertion-ordered */
         final Map<String, List<InetSocketAddress>> found = new LinkedHashMap<>();
+        /** advertised service name -> its TXT record, guarded by {@link #found} like the addresses */
+        final Map<String, Map<String, String>> txt = new LinkedHashMap<>();
         /** Counted down only when the browse cannot start: otherwise the full window is the point. */
         final CountDownLatch done = new CountDownLatch(1);
         private final List<NsdManager.ServiceInfoCallback> callbacks = new ArrayList<>();
@@ -195,8 +222,9 @@ public final class Mdns {
          */
         private boolean closed;
 
-        Session(NsdManager nsd) {
+        Session(NsdManager nsd, String type) {
             this.nsd = nsd;
+            this.want = type.endsWith(".") ? type.substring(0, type.length() - 1) : type;
         }
 
         final NsdManager.DiscoveryListener browser = new NsdManager.DiscoveryListener() {
@@ -208,7 +236,10 @@ public final class Mdns {
 
             @Override
             public void onServiceFound(NsdServiceInfo si) {
-                if (!si.getServiceType().contains("_clipsync._tcp")) return;
+                // Belt and braces — discovery is per-type, so nothing else should arrive. Note that
+                // the two types do not match each other by accident either: "_clipsync-pair._tcp"
+                // does not contain "_clipsync._tcp".
+                if (!si.getServiceType().contains(want)) return;
                 NsdManager.ServiceInfoCallback cb = new NsdManager.ServiceInfoCallback() {
                     @Override
                     public void onServiceInfoCallbackRegistrationFailed(int err) {
@@ -222,6 +253,13 @@ public final class Mdns {
                         synchronized (found) {
                             List<InetSocketAddress> have = found.computeIfAbsent(i.getServiceName(), k -> new ArrayList<>());
                             for (InetSocketAddress a : addrs) if (!have.contains(a)) have.add(a);
+                            Map<String, String> t = txt.computeIfAbsent(i.getServiceName(), k -> new LinkedHashMap<>());
+                            for (Map.Entry<String, byte[]> e : i.getAttributes().entrySet()) {
+                                // A TXT value may be present with no value at all ("key" rather than
+                                // "key=value"), which arrives as null rather than as an empty array.
+                                t.put(e.getKey(), e.getValue() == null ? ""
+                                        : new String(e.getValue(), java.nio.charset.StandardCharsets.UTF_8));
+                            }
                         }
                         Logger.i("mdns found " + i.getServiceName() + " " + addrs);
                     }

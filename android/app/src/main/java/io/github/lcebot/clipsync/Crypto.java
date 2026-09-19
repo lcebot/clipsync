@@ -16,6 +16,15 @@ public final class Crypto {
 
     public static final SecureRandom RNG = new SecureRandom();
 
+    /** A fresh 256-bit PSK, in the 64 hex characters the configuration stores. */
+    public static String randomPskHex() {
+        byte[] b = new byte[32];
+        RNG.nextBytes(b);
+        StringBuilder sb = new StringBuilder(64);
+        for (byte x : b) sb.append(Character.forDigit((x >> 4) & 0xf, 16)).append(Character.forDigit(x & 0xf, 16));
+        return sb.toString();
+    }
+
     public static byte[] hkdfSha256(byte[] ikm, byte[] salt, byte[] info, int length) throws Exception {
         Mac mac = Mac.getInstance("HmacSHA256");
         mac.init(new SecretKeySpec(salt, "HmacSHA256"));

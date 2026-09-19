@@ -123,6 +123,53 @@
     <string name="field_address">Address</string>
     <string name="field_reason">Reason</string>
 
+    <!-- pairing (docs/p2p-plan.md §12). "Pair" throughout, matching _clipsync-pair._tcp and
+         PAIR_ASK: a separate user-facing word would only mean the log, the sheet and the settings
+         page each naming the same act differently. -->
+    <string name="pair_button">Pair a new device</string>
+    <string name="pair_no_key">Set a PSK key first — there is nothing to share yet</string>
+
+    <!-- offering: this device has the key -->
+    <string name="pair_offer_title">Pair a new device</string>
+    <string name="pair_offer_opening">Opening…</string>
+    <!-- Says where to type it, because the code is useless on the device displaying it and that is
+         not obvious the first time. -->
+    <string name="pair_offer_body">On the new device, choose “I have another ClipSync device” and enter this code</string>
+    <string name="pair_opening">Starting</string>
+    <string name="pair_waiting">Waiting</string>
+    <string name="pair_waiting_for">Waiting — %1$d s left</string>
+    <string name="pair_offer_done">%1$s has the key. It should connect in a moment.</string>
+    <!-- The two ways a window can end on its own, told apart on purpose: a timer running out invites
+         another go, five wrong codes is worth saying out loud. -->
+    <string name="pair_expired">Nobody joined before the code expired.</string>
+    <string name="pair_burned">Too many wrong codes — the window was closed. Try again for a new code.</string>
+    <string name="pair_cannot_open">Could not open a pairing window: %1$s</string>
+
+    <!-- joining: this device wants the key -->
+    <string name="pair_join_title">Pair with a device</string>
+    <string name="pair_join_body">On the device that already works, open Settings and tap “Pair a new device”</string>
+    <string name="pair_searching">Looking on this network</string>
+    <string name="pair_none_found">Nothing is offering to pair on this network. Check that the other device has the pairing window open, and that both are on the same Wi-Fi.</string>
+    <string name="pair_search_again">Look again</string>
+    <string name="pair_pick">Found these. Pick the one showing a code.</string>
+    <string name="pair_enter_code">Enter the code shown on %1$s</string>
+    <string name="pair_code_hint">Six-digit code</string>
+    <string name="pair_code_length">Six digits</string>
+    <string name="pair_connect">Connect</string>
+    <string name="pair_connecting">Connecting</string>
+    <string name="pair_join_done">Paired with %1$s. The key is set and the service is restarting.</string>
+    <string name="pair_close">Close</string>
+
+    <!-- first run: the only screen a device with no key ever sees first -->
+    <string name="first_run_title">Set up ClipSync</string>
+    <string name="first_run_body">Every device shares one key. Take it from a device that already has it, or make one here and hand it out.</string>
+    <string name="first_run_join">I have another ClipSync device</string>
+    <string name="first_run_generate">This is my first device</string>
+    <!-- The escape hatch, and a neutral button rather than a peer of the other two: typing 64 hex
+         characters is what pairing exists to avoid. -->
+    <string name="first_run_manual">Set up manually</string>
+    <string name="pair_cannot_generate">Could not save the new key</string>
+
     <!-- snackbars -->
     <string name="snack_copied">Copied</string>
     <string name="snack_stopped">Service stopped (auto-start off until Apply)</string>
