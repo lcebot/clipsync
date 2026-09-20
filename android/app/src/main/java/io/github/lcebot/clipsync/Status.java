@@ -16,14 +16,13 @@ import java.util.List;
 /**
  * Service state shared with the UI across processes (the service lives in ":sync"):
  * files/status.json, rewritten by the service on every change and refreshed by the heartbeat. The UI
- * is told about a rewrite rather than looking for one — see {@link #watch} — and keeps a slow poll
- * only for the things no write can announce.
+ * is told about a rewrite rather than looking for one, as described at {@link #watch}, and keeps a
+ * slow poll only for the things no write can announce.
  *
- * <p><b>It carries a list now, not a connection.</b> The flat {@code via/lan/host/addr} tuple this
- * replaced could only describe one peer, which stopped being a fact about the device the moment it
- * could hold several. Two lists, because the interesting question is no longer "am I connected" but
- * "which of the things I was told to reach am I reaching": {@link #peers} is what is up, and
- * {@link #targets} is what is configured and is not, each with the reason.
+ * <p><b>It carries a list of peers, not a single connection</b>, because a device can reach more than
+ * one peer at once and no flat tuple could describe that. Two lists, because the interesting question
+ * is not "am I connected" but "which of the things I was told to reach am I reaching": {@link #peers}
+ * is what is up, and {@link #targets} is what is configured and is not, each with the reason.
  */
 public final class Status {
     private Status() {}
@@ -39,13 +38,12 @@ public final class Status {
     }
 
     /**
-     * What kind of thing a not-connected reason is — the four answers to "so what do I do?".
+     * What kind of thing a not-connected reason is, namely the four answers to "so what do I do?".
      *
-     * <p>*Not connected* began as a place to put errors, and was coloured as one: every reason in it
-     * got {@code colorError}. But most of what lands there is not an error at all, and the section's
+     * <p>Most of what lands in the not-connected section is not an error at all, and the section's
      * real job is to account for every configured target, whatever the account says. Grading it needs
      * a vocabulary rather than a boolean, and the grades are chosen so that each one answers that
-     * question differently — a colour that does not change what the reader does next is decoration.
+     * question differently, since a colour that does not change what the reader does next is decoration.
      *
      * <p>The order below is the order of visual weight, loudest first.
      */
@@ -57,21 +55,21 @@ public final class Status {
         FAULT,
         /**
          * The peer <b>told us</b> it was going idle. The one row in the section carrying positive
-         * knowledge rather than the absence of it, so it takes an accent — {@code colorTertiary},
+         * knowledge rather than the absence of it, so it takes an accent, {@code colorTertiary},
          * which this app already uses for the chip's *Connecting…*: a state the system is passing
          * through on purpose. Nothing to do; it will dial back when its screen comes on.
          */
         ASLEEP,
         /**
-         * Not connected, no explanation offered, and expected to be connected again — *Disconnected*,
-         * or a discovery browse that has found nothing yet. The default, at plain
+         * Not connected, no explanation offered, and expected to be connected again, such as
+         * *Disconnected* or a discovery browse that has found nothing yet. The default, at plain
          * {@code colorOnSurface}. Wait.
          */
         WAITING,
         /**
          * A fact about the setup rather than about a connection: *That is this device*, *Same device
          * as …*. Nothing will change it but the configuration, and there is nothing to be done about
-         * it now — so it is the quietest, {@code colorOnSurfaceVariant}. These are footnotes
+         * it now, so it is the quietest, {@code colorOnSurfaceVariant}. These are footnotes
          * explaining why a row exists at all.
          */
         NOTED;
@@ -115,9 +113,9 @@ public final class Status {
         public final String detail;
         public final long ts;           // wall-clock ms of the last write
         // the heartbeat caught the process being frozen at least once WHILE THE DEVICE WAS AWAKE.
-        // Being suspended along with the device is the intended outcome, not a fault — the service
-        // drops its links and idles with the screen off on purpose — so counting that would advise
-        // the user against a power saving that is working.
+        // Being suspended along with the device is the intended outcome, not a fault, because the
+        // service drops its links and idles with the screen off on purpose, so counting that would
+        // advise the user against a power saving that is working.
         public final boolean suspended;
         public final List<Peer> peers;
         public final List<IndirectPeer> indirectPeers;
@@ -137,7 +135,7 @@ public final class Status {
         }
 
         /**
-         * Directly connected peers — what the status chip counts.
+         * Directly connected peers, which is what the status chip counts.
          *
          * <p>Indirect peers are deliberately left out. They are devices this one has only heard
          * about from a neighbour, so counting them would make the chip claim connections that do
@@ -177,7 +175,7 @@ public final class Status {
      * <p>Push instead of poll, across a process boundary that has no other channel: the service
      * writes this file, the UI reads it, and inotify is the one thing both ends already share. What
      * it replaces is a read, a parse and a render once a second for as long as the app is in front,
-     * nearly all of which found nothing new — while still being up to a second late when there
+     * nearly all of which found nothing new, while still being up to a second late when there
      * was.
      *
      * <p><b>The directory is watched, not the file</b>, and that is forced by {@link #write}: it
@@ -201,13 +199,13 @@ public final class Status {
     }
 
     /**
-     * Synchronized, because the number of writers grew with the number of connections.
+     * Synchronized, because the number of writers scales with the number of connections: one per
+     * dialer, plus the heartbeat, plus the main thread.
      *
-     * <p>One temporary file, one rename. With two writers that was survivable; there are now one per
-     * dialer plus the heartbeat plus the main thread, and two of them truncating the same tmp file
-     * interleave their bytes. The reader's catch-all then yields the "stopped" snapshot — so the
-     * chip blinks *Stopped*, the button blinks *Start*, and pressing it in that window starts the
-     * service instead of reloading it. A per-thread tmp name would also work; serialising is
+     * <p>All of them share one temporary file and one rename, and two writers truncating that file at
+     * the same time interleave their bytes. The reader's catch-all then yields the "stopped" snapshot,
+     * so the chip blinks *Stopped*, the button blinks *Start*, and pressing it in that window starts
+     * the service instead of reloading it. A per-thread tmp name would also work; serialising is
      * cheaper to be sure of.
      */
     public static synchronized void write(Context ctx, String state, String detail, boolean suspended,

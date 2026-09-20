@@ -4,13 +4,13 @@
      On Android 12+ the wallpaper-derived (Monet) palette replaces every role below, applied as a
      theme overlay by ClipSyncApp. These are the fallback, and the fallback has to be a COMPLETE
      scheme rather than a few brand accents: M3 components pick their own roles, and a half-override
-     produces blue buttons on purple cards — the baseline scheme showing through wherever this file
+     produces blue buttons on purple cards, the baseline scheme showing through wherever this file
      stopped. Anything genuinely unused is still defined, because "unused" is a fact about today's
      layouts.
 
      Generated from the same blue seed as the launcher icon (ic_launcher_background is primary-40),
-     so an unthemed launcher and an unthemed app agree. Tones follow the standard M3 assignments —
-     primary 40/100/90/10 in light, 80/20/30/90 in dark — which is what makes the on-pairs legible by
+     so an unthemed launcher and an unthemed app agree. Tones follow the standard M3 assignments:
+     primary 40/100/90/10 in light, 80/20/30/90 in dark, which is what makes the on-pairs legible by
      construction rather than by luck.
 
      values-night/colors.xml carries the dark scheme under the same names. -->

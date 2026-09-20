@@ -2,12 +2,12 @@
 ClipSync - Windows configuration: defaults, parsing, validation, and writing config.json.
 
 **JSON, and configurator.py is the documentation.** The file underneath a settings window should be
-the one that is cheapest to read and write correctly — native types instead of strings-that-mean-
+the one that is cheapest to read and write correctly, using native types instead of strings-that-mean-
 numbers, a real list instead of a comma-joined one, a parser from the standard library. A key written
 twice, a BOM, a value containing a comma, an in-place rewrite that has to preserve comments: none of
 it is a problem for a file that is not pretending to be prose.
 
-**Nothing here migrates anything** — see the note above the field checks. No migration is written,
+**Nothing here migrates anything**; see the note above the field checks. No migration is written,
 for anything, ever: old keys are simply not read, and the release notes say to set the devices up
 again.
 
@@ -17,7 +17,7 @@ service's own log file and registers a clipboard format on load, so merely openi
 would start writing to the running service's log.
 
 **This module must stay free of side effects.** No logging setup, no ctypes calls, no sockets, no
-directories created — nothing but constants, functions and one class. Two processes import it.
+directories created; nothing but constants, functions and one class. Two processes import it.
 
 The check_* functions mirror Config.java's on the Android side one for one, including the wording of
 the messages: the same rule explained two different ways is the same bug reported twice. They return
@@ -67,11 +67,11 @@ DEFAULTS = {
     "mdns_name": "",
     "direct": False,
     "peers": [],
-    # The names and literals that point at THIS machine — typically a domain a dynamic DNS client
+    # The names and literals that point at THIS machine, typically a domain a dynamic DNS client
     # here keeps pointed at it, but a static address or a LAN name serves as well. Two things read
     # it: validation refuses an entry typed into `peers` that matches one, and the dialler skips
-    # such a target without opening a socket. Both are the cheap half of the self-connection guard
-    # — the authority is still the id exchanged in HELLO, because a second name for this host, or a
+    # such a target without opening a socket. Both are the cheap half of the self-connection guard,
+    # since the authority is still the id exchanged in HELLO, because a second name for this host, or a
     # LAN address that happens to be this machine today, is not in the list and still reaches the
     # handshake. Matching is a string comparison on the normalised form (lower-cased, brackets
     # stripped) and never a DNS lookup, because validation runs on every keystroke.
@@ -82,13 +82,13 @@ DEFAULTS = {
     "start_delay": 0,
     # Relay opt-out: do not be the LAN's relay for other devices. It is the power-saving control,
     # and it works by forcing this node's declared `persistent` to false, which takes it out of
-    # everyone else's relay election — plus a refusal for any RELAY_ASK that arrives anyway. See
+    # everyone else's relay election, plus a refusal for any RELAY_ASK that arrives anyway. See
     # clipsync_node.declaration() and SyncState.on_relay_ask.
     "relay_opt_out": False,
 }
 
 # The order keys are written in. json.dump preserves insertion order, so this is also the order
-# someone opening the file sees — worth keeping deliberate even though nothing parses by position.
+# someone opening the file sees, which is worth keeping deliberate even though nothing parses by position.
 KEY_ORDER = list(DEFAULTS)
 
 TRUE_WORDS = ("1", "true", "yes", "on")
@@ -118,7 +118,7 @@ def as_list(v) -> list:
 
 
 # ----------------------------------------------------------------------------- key rotation
-# Mirrors Keys.java on the Android side — same constants, same logic, same field names in the file.
+# Mirrors Keys.java on the Android side, with the same constants, same logic, and same field names in the file.
 
 PRE_RETIRE_MS = 48 * 3600_000
 RETIRE_MS = 72 * 3600_000
@@ -127,7 +127,7 @@ KEYRING = 3
 
 
 class Schedule:
-    """One device's view of its own key schedule. Immutable — every mutation returns a new one."""
+    """One device's view of its own key schedule. Immutable; every mutation returns a new one."""
 
     __slots__ = ("psk", "next", "old", "since", "retire_at", "agreed_at")
 
@@ -166,12 +166,12 @@ class Schedule:
     def agreed(self, now: int) -> "Schedule":
         """Record that a peer has confirmed our successor. **Idempotent, and that is the point.**
 
-        Recording it a second time changes nothing anyone reads — `phase()` only asks whether
-        `agreed_at > since` — but it produces a schedule that compares unequal to the one before it,
-        and `on_keys` persists and re-announces on any inequality. Both ends do that, so each T_KEYS
-        provoked another one: a full config rewrite and a network-wide broadcast per round trip, for
-        as long as the pre-retirement window lasted. Returning `self` once there is already an
-        agreement is what lets the exchange go quiet.
+        `phase()` only asks whether `agreed_at > since`, so recording the agreement again changes
+        nothing anyone reads, but `on_keys` persists and re-announces on any inequality between
+        schedules, and both ends run this, so a naive update that bumped `agreed_at` every time would
+        keep producing a "new" schedule and re-triggering a config rewrite and broadcast on every
+        round trip for as long as the pre-retirement window lasts. Returning `self` once there is
+        already an agreement is what lets the exchange go quiet.
         """
         if self.agreed_at > self.since:
             return self
@@ -202,7 +202,7 @@ class Schedule:
         """Merge a peer's announced schedule into ours.
 
         `trusted` is whether the connection this arrived on authenticated with our *current* key or
-        our successor — not merely with something in the ring. Only such a peer may hand us a key we
+        our successor, not merely with something in the ring. Only such a peer may hand us a key we
         have never seen (`adopt`). The ring exists because rotation assumes a superseded key may
         have leaked, so letting one authenticate an adopt would turn a temporary leak into permanent
         control of every device's key. A peer on an old key is behind; our own T_KEYS teaches it.
@@ -229,9 +229,8 @@ class Schedule:
         """Value equality, **excluding `agreed_at`**.
 
         `agreed_at` is a timestamp of when something was confirmed, not part of what was confirmed,
-        and including it made every re-confirmation look like a change worth persisting and
-        broadcasting. `agreed()` is idempotent now, so this is belt-and-braces — but it is the
-        cheaper of the two braces and it stops the next person reintroducing the storm.
+        so excluding it here keeps a re-confirmation from looking like a change worth persisting and
+        broadcasting on its own; a cheap backstop alongside `agreed()`'s own idempotence.
 
         The one transition that must still be seen as a change is the *first* agreement (0 ->
         non-zero, which moves `phase()` from STRANDED to DUE). `on_keys` therefore compares the
@@ -311,8 +310,8 @@ def read_config(path: str = CONFIG_PATH) -> dict:
     DEFAULTS overlaid with whatever the file names.
 
     A missing file is not an error: it means every default, which is what a first run should see. A
-    file that is not valid JSON *is* an error and is raised, because the alternative — starting on
-    defaults — would quietly ignore a PSK the user believes is set and then fail to connect, which is
+    file that is not valid JSON *is* an error and is raised, because the alternative, starting on
+    defaults, would quietly ignore a PSK the user believes is set and then fail to connect, which is
     a far worse hour to spend than reading one parse error.
 
     utf-8-sig, because Notepad and PowerShell's Set-Content both write a BOM and json.loads chokes
@@ -331,37 +330,41 @@ def read_config(path: str = CONFIG_PATH) -> dict:
 
 
 # No migration is written, for anything, ever. This file reads what it finds and nothing else, and
-# a key it does not recognise is a log line rather than a compatibility path. The rule was set when
-# the protocol version made every device need updating together anyway: the cost of asking for a
-# one-time reconfiguration is a few minutes, and the cost of carrying migration code is permanent.
-#
-# Worth keeping because it is what stops the idea coming back. One attempt at being helpful, moving
-# names out of `peers` into `own_addresses`, also turned `direct` off -- which can leave both paths
-# off, which check_all refuses -- so a configuration that worked became a service that exits at
-# start-up. Migration code is a second, rarely exercised way to be wrong about a file, and the cost
-# of carrying it is permanent while the reconfiguration it saves takes a minute once.
+# a key it does not recognise is a log line rather than a compatibility path. Every device needs
+# updating together anyway when the protocol version changes, so the cost of a one-time
+# reconfiguration is a few minutes, while migration code is a second, rarely exercised way to be
+# wrong about a file whose cost is permanent.
 
 
 def save_schedule(sched: Schedule, rotate: bool, path: str = CONFIG_PATH) -> None:
-    """Merge a new key schedule into the existing config and write it back.
+    """Write a new key schedule, leaving every other setting alone.
 
-    This is the equivalent of Config.save() on Android: it reads, overlays the schedule fields,
-    and writes the whole file. The PSK field itself changes when a promotion swaps the key, so
-    it is included. Does NOT raise on a missing file — every field has a default.
+    The equivalent of Config.save() on Android. The PSK field itself changes when a promotion swaps
+    the key, so it is included. Does NOT raise on a missing file; every field has a default.
     """
-    raw = read_config(path)
-    raw.update(schedule_to_raw(sched, rotate))
-    write_config(raw, path)
+    write_config(schedule_to_raw(sched, rotate), path)
 
 
 def write_config(values: dict, path: str = CONFIG_PATH) -> None:
     """
-    Write the whole file. Written to a temporary file in the same directory and moved into place, so
-    a crash halfway through leaves the old config rather than half of the new one.
+    Write some settings, keeping the rest of the file as it is.
 
-    Whole-file rather than in-place because there is nothing left to preserve: the explanation that
-    used to sit above each key now lives in configurator.py, where it can also be acted on.
+    **`values` is a patch, not a document.** The function reads the existing file and merges
+    `values` over it before writing, so a caller may pass only the fields it owns, which means the
+    settings window need not know about fields it does not display, such as the key rotation state
+    (`psk_since`, `psk_next`, `psk_old`, `psk_retire`, `psk_agreed`). Keeping the merge here, inside
+    the one function every writer goes through, means the invariant holds regardless of what any
+    given caller remembers to do; an invariant kept by one function is kept, an invariant kept by
+    every caller is kept only until the next caller.
+
+    Written to a temporary file in the same directory and moved into place, so a crash halfway
+    through leaves the old config rather than half of the new one. Whole-file rewrite rather than an
+    in-place edit because there is nothing that needs preserving beyond the values themselves; key
+    documentation lives in configurator.py, not in this file.
     """
+    merged = read_config(path)
+    merged.update(values)
+    values = merged
     ordered = {k: values[k] for k in KEY_ORDER if k in values}
     ordered.update({k: v for k, v in values.items() if k not in ordered})   # nothing silently lost
     tmp = path + ".tmp"
@@ -391,7 +394,7 @@ def _is_ip_literal(s: str) -> bool:
 
 def check_peer(s: str):
     """One entry of the peers list: a host name, an IPv4 literal or an IPv6 literal. Nothing here
-    requires dynamic DNS — a static address, a LAN address, a .local name or a VPN address are all
+    requires dynamic DNS; a static address, a LAN address, a .local name or a VPN address are all
     equally valid, and the service resolves them all the same way."""
     t = normalise_peer(s)
     if not t:
@@ -422,7 +425,7 @@ def check_addresses(stored, *, allow_empty: bool, own=None):
     """
     A whole address list: every entry valid, no repeats, and optionally at least one entry.
 
-    Used for both lists, which is the point — `peers` and `own_addresses` accept exactly the same
+    Used for both lists, which is the point: `peers` and `own_addresses` accept exactly the same
     things and must not drift into accepting different ones. They differ in two parameters only:
     the peer list needs an entry while `direct` is on, the own list never does; and a peer entry is
     additionally refused when it names this device.
@@ -461,7 +464,7 @@ def check_range(s: str, low, high, unit: str = ""):
         return "must be a whole number"
     u = (" " + unit) if unit else ""
     if v < low or v > high:
-        return "must be {}–{}{}".format(low, high, u)
+        return "must be between {} and {}{}".format(low, high, u)
     return None
 
 
@@ -501,7 +504,7 @@ def check_files_dir(s: str):
 
 
 def check_mdns_name(s: str):
-    """Empty means this machine's name — the same string it declares as `device`, which is also what
+    """Empty means this machine's name, the same string it declares as `device`, which is also what
     Android advertises. A service instance name is otherwise free text; DNS-SD caps its length at
     63 bytes of UTF-8, and a dot would split it into labels."""
     s = str(s).strip()
@@ -523,7 +526,7 @@ def own_set(raw: dict) -> set:
 def is_self(address: str, own) -> bool:
     """Does this address name this device, as far as the declared list can tell?
 
-    A string comparison on the normalised form, never a DNS lookup — validation runs on every
+    A string comparison on the normalised form, never a DNS lookup, because validation runs on every
     keystroke. It therefore catches the spellings that were declared and nothing else: a second name
     for the same host still reaches the handshake, where the node id decides.
     """
@@ -576,11 +579,11 @@ class Cfg:
     the service cannot run with, because that is exactly what should happen at start-up.
 
     **Three fields are mutable; everything else is a start-up snapshot.** `psk`, `psk_hex` and
-    `keys` are rewritten by `SyncState.persist_schedule` — inside `state.lock`, and nowhere else —
+    `keys` are rewritten by `SyncState.persist_schedule`, inside `state.lock` and nowhere else,
     because key rotation changes them while the process runs and the connection paths read them on
     every dial and every accept. Android reaches the same place by reloading Config after a save;
-    this is the equivalent, and leaving it out meant the rotation machinery computed new keys that
-    nothing ever used, so a PC fell out of the network two or three cycles after it started.
+    this is the equivalent, needed so the rotation machinery's computed keys are actually the ones
+    the connection paths use.
 
     A reader that needs a consistent pair (the accepted list *and* the current key, say) must take
     `state.lock` for the read: a rotation between the two reads hands back a mismatched combination.
@@ -618,10 +621,8 @@ class Cfg:
         self.discovery = as_bool(raw["discovery"])
         self.mdns_name = str(raw["mdns_name"]).strip()
         self.direct = as_bool(raw["direct"])
-        # Host names or literal addresses of peers to reach directly -- this is what this PC dials.
-        # It used to do double duty: an advertiser probe asked "does this PC own one of these names?"
-        # and stayed quiet on the LAN if not. That probe is gone (several PCs advertising on one LAN
-        # is normal now), so the list means one thing only.
+        # Host names or literal addresses of peers to reach directly -- this is what this PC dials,
+        # and nothing else uses this list.
         # Empty when the switch is off, exactly as Config.from() does on Android: the
         # addresses stay in the file so they survive a round trip through the switch, but nothing
         # acts on them.

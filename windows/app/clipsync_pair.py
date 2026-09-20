@@ -7,12 +7,11 @@ Both derive the same channel key from the code and the salt, and the joiner then
 protocol on an ordinary SecureChannel -- HELLO with `role: pair`, then PAIR_ASK -- and gets PAIR_KEY
 with the PSK and the service port.  Nothing new is invented for it; only the key differs.
 
-The design originally had the PC only ever *joining*, on the grounds that a provider has to listen
-and a listening port on Windows is a firewall rule somebody has to create.  That is still the cost;
-it is just not a reason to leave out the case where the PC is the device that was set up first.  So
-the provider is here too, and the firewall rule is install.ps1's job -- a **bounded** range from
-`port + 1`, the same range `Provider` searches, so the two cannot disagree about which ports are
-open.
+The PC could be made a joiner only, since a provider has to listen and a listening port on Windows
+is a firewall rule somebody has to create. But that cost is not a reason to leave out the case where
+the PC is the device that was set up first, so the provider role lives here too. The firewall rule is
+install.ps1's job -- a **bounded** range from `port + 1`, the same range `Provider` searches, so the
+two cannot disagree about which ports are open.
 
 Free of side effects, like clipsync_config and clipsync_proto, because configurator.py imports it
 and must not drag the service's logging and clipboard registration in with it.
@@ -77,9 +76,9 @@ DK_LEN = 32
 # while working fine on Android: a pairing broken on one end only, by a default nobody passed.
 # 64 MiB is four times what is needed, so no default on either side is load-bearing.
 SCRYPT_MAXMEM = 64 * 1024 * 1024
-# Nine, restored from the eight one revision spent, and the reasoning is written out in
-# Pairing.CODE_DIGITS: the ninth digit is 10x the offline attack cost, and the legibility it used to
-# cost is bought back by SHOWING the code in groups of three instead of by shortening it.
+# Nine digits: the reasoning is written out in Pairing.CODE_DIGITS on the Android side. The ninth
+# digit is worth 10x the offline attack cost; the legibility it costs is bought back by SHOWING the
+# code in groups of three (see format_code) rather than by shortening it.
 #
 # It counts DIGITS.  `format_code` below adds two spaces for display, and they are display and
 # nothing else: what is generated here, what travels, what is compared and what `channel_key`
@@ -134,39 +133,20 @@ def channel_key(code: str, salt: bytes) -> bytes:
     low-entropy, and a PAKE is the only real answer -- but it prices the attack out of being done on
     the off-chance, which is the threat that is actually there.
 
-    **The numbers, one RTX 4090 walking the whole code space**, all from a single published hashcat
-    v6.2.6 run so they are comparable to each other.  scrypt at exactly our N and r with p=1 is
-    hashcat mode 8900 and measures 7 126 H/s; p is that many sequential ROMix passes, so p=10 is
-    713 H/s and p=8 is 891 H/s.  The first three lines are HISTORY, kept for the shape of the curve
-    and not descriptions of this build:
+    **The numbers, one RTX 4090 walking the whole code space**, from a single published hashcat
+    v6.2.6 run: scrypt at exactly our N and r with p=1 is hashcat mode 8900 and measures 7 126 H/s;
+    p is that many sequential ROMix passes, so p=10 is 713 H/s. Nine digits at p=10 is an expected
+    hit around 8 days on that one card -- an honest fortnight, not an impossible wall, which is the
+    realistic bound for a low-entropy secret. The full argument, including why the memory footprint
+    rather than the work factor is what does the work, and why p stopped at 10, is in the Pairing
+    class comment on the Android side; this end's job is to agree with it.
 
-    * six digits, PBKDF2-HMAC-SHA256 at 200 000 rounds (where this started): **~30 seconds**
-    * nine digits, scrypt p=8 (before p was raised): **13 days**
-    * eight digits, scrypt p=10 (the one revision the code was shortened for): **1.6 days**
-    * nine digits, scrypt p=10 (**here**): **16 days** (expected hit ~8 days)
-
-    So the ninth digit is back and it is 10x on the revision that dropped it; p is unchanged at 10.
-    The digit had been traded for two fewer glyphs to read across a room, and grouping the code
-    three-and-three (`format_code`) buys that legibility back without paying the factor of ten.  The
-    honest summary is a fortnight of one card rather than a day and a half.  The full argument,
-    including why the memory footprint rather than the work factor is what does the work, and why p
-    stopped at 10, is in the Pairing class comment on the Android side -- it is written out once,
-    there, and this end's job is to agree with it.
-
-    **The change also ended an asymmetry that used to be ten to one.**  PBKDF2 was a few hundred
-    milliseconds here (`hashlib.pbkdf2_hmac` is C on top of OpenSSL) and 1.5-4 seconds on Android,
-    because Conscrypt implements no PBKDF2 at all and the call fell through to the bundled pure-Java
-    BouncyCastle.  Both ends now run native scrypt for something under a second each.  That is the
-    *reason* minSdk had to go to 35: AOSP's Conscrypt first registers `SecretKeyFactory.SCRYPT` on
-    the android15 branch, so below Android 15 this algorithm does not exist and the app would throw
-    NoSuchAlgorithmException rather than fall back.  Nothing on THIS end was ever the obstacle --
-    `hashlib.scrypt` has been available since CPython 3.6 wherever OpenSSL is 1.1+.
-
-    The symmetry does not make the timeouts in this file re-readable as generous.  A mid-range phone
-    is not the slowest phone, and the waits that dominate a pairing were never the derivation: a
-    four-second browse, and up to ASK_TIMEOUT of a person at the other device deciding.  What has not
-    changed at all is the structural point: both implementations derive the key *before* opening a
-    socket, so the derivation is never inside anybody else's timeout.
+    Both ends run native scrypt (`hashlib.scrypt` here, Conscrypt's `SecretKeyFactory.SCRYPT` on
+    Android, which is why minSdk is 35 -- that registration only exists from the android15 branch
+    up), so the derivation costs something under a second on either side, and the timeouts in this
+    file are sized around the parts of pairing that actually dominate: a four-second browse, and up
+    to ASK_TIMEOUT of a person at the other device deciding. Both implementations derive the key
+    *before* opening a socket, so the derivation is never inside anybody else's timeout.
     """
     # maxmem is explicit and must be -- see SCRYPT_MAXMEM.  dklen is in bytes here; Android's
     # equivalent is in bits.  ASCII, matching Java's `new String(password).getBytes("UTF-8")` over a
@@ -178,7 +158,7 @@ def channel_key(code: str, salt: bytes) -> bytes:
 
 def format_code(code: str) -> str:
     """
-    The code as a person should see it: "123456789" -> "123 456 789".
+    The code as a person should see it: "123456789" becomes "123 456 789".
 
     **Display only, and the distinction is load-bearing.**  A nine-digit run is read back wrong and
     read *aloud* worse, and somebody copying a code off one device into another does both -- so the
@@ -300,9 +280,10 @@ def join(addrs, salt: bytes, code: str, device: str) -> dict:
         # so a failure past this point is the code being wrong -- which every address would report
         # identically while spending one of the provider's five attempts each time.
         #
-        # Getting that boundary wrong is what turned a wrong code into "no address answered: peer
-        # closed": a provider that cannot decrypt closes the socket, the joiner's next read raises
-        # ConnectionError, and ConnectionError is an OSError, so it was being read as "unreachable".
+        # This distinction matters because ConnectionError is an OSError: a provider that cannot
+        # decrypt closes the socket, the joiner's next read raises ConnectionError, and treating that
+        # the same as a genuinely unreachable address would misreport a wrong code as "no address
+        # answered".
         try:
             sock = socket.create_connection((host, port), timeout=CONNECT_TIMEOUT)
         except OSError as e:
@@ -372,13 +353,12 @@ class Provider:
     so there is no concurrency to serve -- and not spawning a thread per connection is what makes a
     flood cost nothing but a queue.
 
-    Only a wrong code counts towards the five.  It used to be every failure, on the reasoning that a
-    dropped connection is indistinguishable from a guess -- but it is distinguishable, and cheaply:
-    the first frame either decrypts or it does not.  Counting the rest meant that a phone which lost
-    Wi-Fi mid-handshake, or one refused for speaking the wrong protocol version, silently spent the
-    window the user was standing there waiting on, and the error they finally saw said "too many
-    wrong codes" about a code they never mistyped.  `on_attempt` is what stops those failures being
-    silent; `_serve` is where they are told apart.
+    Only a wrong code counts towards the five, because a wrong code is cheaply distinguishable from
+    everything else that can end a connection: the first frame either decrypts or it does not.
+    Counting a dropped Wi-Fi connection or a protocol-version mismatch against the same budget would
+    silently spend the window on a caller who never mistyped anything, and report it to them as "too
+    many wrong codes". `on_attempt` is what stops those failures being silent; `_serve` is where
+    they are told apart.
     """
 
     def __init__(self, psk_hex: str, base_port: int, device: str, on_ask, on_paired, on_closed,
@@ -434,9 +414,8 @@ class Provider:
         salt = os.urandom(16)
         # Once per window, not once per connection: being slow and 16 MiB heavy is the point of the
         # exercise, and paying it per caller would let anyone on the network cost this PC the better
-        # part of a second of the one thread that serves everybody, just by opening a socket.  (The
-        # same line now costs the phone about the same -- see channel_key; it used to cost it
-        # several seconds.)
+        # part of a second of the one thread that serves everybody, just by opening a socket.  (See
+        # channel_key for why this costs the phone about the same amount of time.)
         self._key = channel_key(self.code, salt)
 
         self._sock, self.port = self._bind(base_port)
@@ -538,10 +517,9 @@ class Provider:
         One caller, start to finish.
 
         :return: (outcome, detail) -- one of the ATTEMPT_* constants, and a line for the user.
-                 Every exit tells the caller apart from the others on purpose: this used to be a
-                 single `except Exception: return False`, and the cost of that one line was that a
-                 version mismatch, a dropped socket and a wrong code were all reported as, and
-                 charged as, a wrong code.
+                 Every exit tells the caller apart from the others on purpose: collapsing them into
+                 a single `except Exception: return False` would report, and charge, a version
+                 mismatch and a dropped socket as if each were a wrong code.
         """
         ch = None
         try:
@@ -600,19 +578,17 @@ class Provider:
                 pass
 
     def _shut(self):
-        """Take the window down.  Idempotent, and that is the whole of the fix below.
+        """Take the window down.  Idempotent, because it has to be.
 
         The window can end three ways -- the clock, MAX_TRIES, and close() from the UI -- and the
-        first two race the third, so this used to run twice.  It also used to call
-        `unregister_service(self._info)` before `close()`, which was redundant: Zeroconf.close()
-        unregisters everything that Zeroconf registered, goodbye packets and all.
+        first two race the third, so more than one path can call this. Taking `self._zc` out of the
+        field before acting on it (`zc, self._zc = self._zc, None`) is what makes a second call a
+        no-op instead of operating on an already-closed Zeroconf instance.
 
-        Redundant *and* noisy.  `unregister_service` schedules `Zeroconf.async_unregister_service`
-        onto Zeroconf's event loop and waits for it; on the second call that loop is already gone,
-        so it raised with the coroutine never awaited, and the bare `except: pass` here swallowed
-        the exception -- leaving Python to print "coroutine 'Zeroconf.async_unregister_service' was
-        never awaited" from a line number that pointed at the `pass` rather than at the cause.
-        Taking the Zeroconf out of the field first means the second caller finds nothing to do.
+        Only `zc.close()` is called, never `unregister_service` first: `Zeroconf.close()` already
+        unregisters everything it registered, goodbye packets included, so a separate call would be
+        redundant -- and `unregister_service` schedules work onto Zeroconf's own event loop, which a
+        second, redundant call could find already gone.
         """
         zc, self._zc = self._zc, None
         if zc is not None:

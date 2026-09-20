@@ -31,15 +31,15 @@ public final class Root {
      * Runs the keep-alive commands via su; returns a one-line summary for the log.
      *
      * <p><b>The output is read on another thread, and that is the whole shape of this method.</b>
-     * It used to read the pipe to EOF on the calling thread and only then call
-     * {@code waitFor(10, SECONDS)} — which meant the timeout could not fire in the case it existed
-     * for. A su that prompts for confirmation and gets none, or a Magisk daemon that is wedged,
-     * never closes the pipe and never writes {@code __done__}, so {@code readLine()} blocked for as
-     * long as it took, and the timeout below it was only ever reached by a process that had already
-     * finished talking. Caller side: this runs on the service's start path.
+     * Reading the pipe to EOF on the calling thread before calling {@code waitFor(10, SECONDS)}
+     * would defeat the timeout it is paired with: a su that prompts for confirmation and gets none,
+     * or a Magisk daemon that is wedged, never closes the pipe and never writes {@code __done__}, so
+     * {@code readLine()} would block for as long as it took, and the timeout would only ever be
+     * reached by a process that had already finished talking. Caller side: this runs on the
+     * service's start path.
      *
      * <p>So the reader is a daemon thread, the calling thread waits on the process with a deadline,
-     * and a timeout means {@code destroyForcibly()} — plain {@code destroy()} sends SIGTERM, which a
+     * and a timeout means {@code destroyForcibly()}, because plain {@code destroy()} sends SIGTERM, which a
      * shell sitting in a read may ignore, and the point of reaching this line is that asking nicely
      * has not worked.
      */
@@ -84,7 +84,7 @@ public final class Root {
             // is only to let the last lines land in the summary, never to wait on anything.
             reader.join(500);
             if (p.exitValue() != 0) return "root keep-alive: su denied (exit " + p.exitValue() + ")";
-            return "root keep-alive applied (whitelist, app-ops, standby bucket)" + (out.length() > 0 ? " — " + out : "");
+            return "root keep-alive applied (whitelist, app-ops, standby bucket)" + (out.length() > 0 ? ": " + out : "");
         } catch (Exception e) {
             if (p != null) p.destroyForcibly();
             return "root keep-alive unavailable: " + e.getMessage();

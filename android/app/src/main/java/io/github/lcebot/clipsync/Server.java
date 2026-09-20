@@ -17,23 +17,22 @@ import java.util.concurrent.TimeUnit;
 /**
  * The listening half of the device: connections other peers open to us.
  *
- * <p>Until now Android only dialled, and that shaped what the project could do far more than it
- * looks: two devices could only meet through one that had a stable address, which meant the PC, and
- * a phone and a tablet on the same Wi-Fi could not find each other at all with the PC switched off.
- * Neither of them has a name the other can be configured with. Only one of the two has to find the
- * other for both to be connected — so a listening socket plus an mDNS advertisement is the whole of
- * it. Every device listens; there is no server role left anywhere in this protocol.
+ * <p>Every device both dials and listens, with mDNS advertisement for discovery: two devices on the
+ * same network can find each other directly, and neither needs a stable, externally reachable
+ * address the other can be configured with. Only one side has to find the other for both to be
+ * connected, since a listening socket plus an mDNS advertisement is the whole of it. There is no
+ * server role anywhere in this protocol; every device listens.
  *
  * <p>What arrives here is either a <b>control</b> connection, which becomes an ordinary peer link
  * indistinguishable from one we dialled, or a <b>data</b> connection, which is one stream of one
- * file transfer. Which it is, is in the HELLO, so this reads it before dispatching — and that is why
- * the handshake was split in two ({@link Connection#readHello()} / {@link Connection#sendHello}):
+ * file transfer. Which it is, is in the HELLO, so this reads it before dispatching, which is why
+ * the handshake is split in two ({@link Connection#readHello()} / {@link Connection#sendHello}):
  * the accepter has to know who is calling before it can answer.
  *
- * <p>The cost, accepted deliberately: the attack surface grows from one open port on the PC to one
- * on every device. What limits it is that the PSK handshake completes before a single frame is parsed —
- * an unauthenticated peer gets 32 bytes of nonce read and nothing else — and that this pool is
- * bounded, so a flood of sockets cannot become a flood of threads.
+ * <p>The tradeoff, accepted deliberately: the attack surface is one open port per device rather than
+ * one shared port. What limits it is that the PSK handshake completes before a single frame is
+ * parsed, so an unauthenticated peer gets 32 bytes of nonce read and nothing else; that, and this
+ * pool being bounded, means a flood of sockets cannot become a flood of threads.
  */
 final class Server implements Closeable {
     /** What the listener needs from the service, and what it hands back. */
@@ -76,7 +75,7 @@ final class Server implements Closeable {
     /**
      * Bind and start accepting.
      *
-     * @throws IOException if the port cannot be bound — which is not fatal to the service: a device
+     * @throws IOException if the port cannot be bound, which is not fatal to the service: a device
      *                     that cannot listen can still dial out, it just cannot be dialled.
      */
     static Server start(Context ctx, Handler h, int port) throws IOException {
@@ -120,7 +119,7 @@ final class Server implements Closeable {
                 s = socket.accept();
             } catch (IOException e) {
                 if (closed || socket.isClosed()) return;      // the ordinary way this thread ends
-                // Anything else is transient — out of descriptors, a connection reset between the
+                // Anything else is transient: out of descriptors, or a connection reset between the
                 // SYN and the accept. Returning here would silently end every future inbound
                 // connection while the service went on looking healthy, which is the expensive
                 // failure; a second of quiet and another try is the cheap one.
@@ -148,23 +147,21 @@ final class Server implements Closeable {
             if (Hello.ROLE_DATA.equals(hello.role)) handler.onData(c, hello);
             // A role this port does not serve, rather than "anything that is not data is a peer".
             // Connection.readHello lets a declared role past the "peer sent no node id" check,
-            // because a data connection legitimately has none — so a `role=pair` HELLO arriving
+            // because a data connection legitimately has none, so a `role=pair` HELLO arriving
             // here would be handed to onControl and register() would key the peer map on null.
             // Pairing has its own ephemeral listener (PairProvider); it never belongs on this port.
             else if (!hello.role.isEmpty())
                 throw new java.io.IOException("role '" + hello.role + "' is not served on this port");
             else handler.onControl(c, hello);
         } catch (Connection.SelfConnection e) {
-            // Reached ourselves — our own mDNS advertisement, most often, since a device browses the
+            // Reached ourselves, most often our own mDNS advertisement, since a device browses the
             // same LAN it advertises on.
             //
             // Answer the handshake anyway, then close. The dialler is this same process, and the only
-            // way it can discover that is to read back an id it recognises; closing without replying
-            // left it blocked in its own read, so it saw an EOFException — indistinguishable from a
-            // peer that crashed. It then retried its own advertisement every 60 s for the life of the
-            // process and reported the LAN as failing in the sheet. One frame on a connection that is
-            // about to die is the whole fix, and it keeps the self-check where it belongs: with
-            // whichever end is reading an id.
+            // way it can recognise that is by reading back an id it knows; closing without replying
+            // would leave it blocked in its own read, seeing an EOFException indistinguishable from a
+            // peer that crashed. One frame on a connection that is about to die is enough, and it
+            // keeps the self-check where it belongs: with whichever end is reading an id.
             try {
                 if (c != null) c.sendHello(ctx, 0, "");
             } catch (Exception ignored) {

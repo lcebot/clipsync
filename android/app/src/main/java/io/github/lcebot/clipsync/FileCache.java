@@ -17,14 +17,14 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * sha256 -> MediaStore URI of every file this app has stored (received, or re-used).
+ * Maps sha256 to the MediaStore URI of every file this app has stored (received, or re-used).
  * Answers OFFERs with HAVE when the content is already here, and is the ground truth for
  * housekeeping ("last used" is tracked here, since MediaStore dates are not ours to set).
  * Persisted as files/cache.json so it survives process death.
  *
  * <p>The digests are only ever computed once, when the content passes through, and are read back
- * from this file afterwards — nothing is ever re-hashed at start-up. (The Windows side had to grow
- * a digest index in %TMP% to reach the same position: it owns a folder rather than a set of
+ * from this file afterwards; nothing is ever re-hashed at start-up. (The Windows side keeps a
+ * separate digest index in %TMP% to reach the same position: it owns a folder rather than a set of
  * MediaStore rows, so it cannot assume the folder only changes through it.)
  */
 public final class FileCache {
@@ -51,7 +51,7 @@ public final class FileCache {
     /**
      * What this cache is holding, for the startup line: {@code {bytes, count}}.
      *
-     * <p>From the index rather than from the directory, deliberately — the index is what the budget
+     * <p>From the index rather than from the directory, deliberately: the index is what the budget
      * in {@link #prune} is spent against, so this is the number that explains a prune, and a
      * disagreement with the folder's real size is itself worth seeing.
      */
@@ -105,7 +105,7 @@ public final class FileCache {
     }
 
     /**
-     * For changes that are not worth a disk write of their own — currently only the "last used"
+     * For changes that are not worth a disk write of their own, currently only the "last used"
      * stamp, which get() bumps on every OFFER we can answer from the cache. Rewriting the whole
      * index each time put a synchronous file write on the network path to save a timestamp whose
      * only consumer is the ordering inside prune(). Losing the last few seconds of it to a kill
@@ -161,7 +161,7 @@ public final class FileCache {
      * @param inFlight hashes currently being received or served, which {@link #prunePartials} must
      *                 leave alone. Prune runs on the completion of <em>some other</em> file, so
      *                 "old enough to delete" is a statement about the chunk map's mtime and says
-     *                 nothing about whether a transfer is live — a large file arriving slowly has an
+     *                 nothing about whether a transfer is live; a large file arriving slowly has an
      *                 old map and an open stream, and deleting its pending row mid-transfer failed
      *                 the transfer that was going perfectly well.
      */

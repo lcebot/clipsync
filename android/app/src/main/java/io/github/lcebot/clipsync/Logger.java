@@ -24,7 +24,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * App-process log: in-memory ring buffer (shown by MainActivity) + files/clipsync.log
  * (survives process death, rotated at 256 KB). Nothing goes to logcat.
  * <p>The file is written through one writer that stays open and is flushed at most every
- * {@link #FLUSH_MS} ms, so a line can be up to that far behind the disk — the price of not paying
+ * {@link #FLUSH_MS} ms, so a line can be up to that far behind the disk, which is the price of not paying
  * four syscalls per line on whichever thread happened to log. A crash can therefore lose the last
  * fraction of a second; everything older is there.
  * The Xposed hook runs in system_server and is a different process; it keeps using the
@@ -47,7 +47,7 @@ public final class Logger {
     /**
      * How many evicted entries a reader tolerates before it is told to rebuild instead of append.
      * Without it, a full buffer would evict one entry per new line and every update would be a
-     * rebuild — exactly what appending exists to avoid. With it, a reader's view may hold up to
+     * rebuild, exactly what appending exists to avoid. With it, a reader's view may hold up to
      * MAX_ENTRIES + this many entries between rebuilds.
      */
     private static final int REBUILD_SLACK = 64;
@@ -59,23 +59,23 @@ public final class Logger {
 
     // ------------------------------------------------------------------ the open writer
     /**
-     * Guards {@link #out}, {@link #writtenLen} and {@link #flushedLen} — the file side of this
+     * Guards {@link #out}, {@link #writtenLen} and {@link #flushedLen}; the file side of this
      * class, and nothing else.
      *
      * <p>A second lock rather than reusing the class lock, because they protect different things and
-     * one of them touches the disk. {@link #write} used to hold the class lock across the whole
-     * append, so a thread writing a line blocked every other thread — including the UI's
-     * {@link #read} — for the duration of a file open, a stat, a write and a close. Now the class
-     * lock covers only the in-memory ring, and this one covers the writer.
+     * one of them touches the disk. Holding the class lock across the whole append would block every
+     * other thread, including the UI's {@link #read}, for the duration of a file open, a stat, a
+     * write and a close. So the class lock covers only the in-memory ring, and this one covers the
+     * writer.
      *
      * <p><b>Lock order is always class lock first, then this one</b> ({@link #flushNow} is the only
      * place that holds both). Nothing under this lock ever asks for the class lock.
      */
     private static final Object FILE_LOCK = new Object();
     /**
-     * Held open. One line used to cost an open, a stat, a write and a close — four syscalls and a
-     * path walk each — on whichever thread happened to log, which on the screen-on broadcast is the
-     * main thread.
+     * Held open, rather than opened per line: a fresh open, stat, write and close for every log call
+     * is four syscalls and a path walk on whichever thread happened to log, and on the screen-on
+     * broadcast, that is the main thread.
      */
     private static BufferedWriter out;
     /** Bytes handed to {@link #out} since the file was opened or rotated. */
@@ -86,10 +86,10 @@ public final class Logger {
      * How long a line may sit in the writer's buffer.
      *
      * <p>Not "never" and not "immediately". Never is wrong because this log's whole purpose is to
-     * survive the process — and because the UI process reads the :sync process's lines out of this
+     * survive the process, and because the UI process reads the :sync process's lines out of this
      * very file, so an unflushed line is a line that never appears on the Log page. Immediately is
      * wrong because it is a syscall per line again. A third of a second is below what anybody
-     * notices on a log tail and still batches a burst — a reload, a network change — into one write.
+     * notices on a log tail and still batches a burst, such as a reload or a network change, into one write.
      */
     private static final long FLUSH_MS = 300;
     private static java.util.concurrent.ScheduledExecutorService flusher;
@@ -176,7 +176,7 @@ public final class Logger {
     /**
      * The service writes the log from its own process (":sync"); the UI polls this to pick up new
      * lines. Only the bytes appended since the last call are read, so a new line costs one small
-     * read and one entry — readers can then append rather than rebuild. A file that shrank was
+     * read and one entry, so readers can then append rather than rebuild. A file that shrank was
      * rotated or cleared, and is the one case that still reloads wholesale.
      *
      * <p>Returns true when anything was added.
@@ -221,7 +221,7 @@ public final class Logger {
         }
         String line = sb.toString();
         // The ring first, and on its own lock. A reader that is only after the in-memory tail is
-        // then never held up by the disk — which matters because one of the callers of this method
+        // then never held up by the disk, which matters because one of the callers of this method
         // is the screen-on broadcast, on the main thread.
         synchronized (Logger.class) {
             push(line);
@@ -246,7 +246,7 @@ public final class Logger {
             try {
                 // Against our own counter, not file.length(): a stat per line is exactly the kind of
                 // syscall the open writer exists to stop making, and the counter is authoritative
-                // anyway — we are the only writer of this file in this process.
+                // anyway, since we are the only writer of this file in this process.
                 if (out == null || writtenLen > MAX_FILE_BYTES) openWriter();
                 if (out == null) return;
                 out.write(line);
@@ -277,7 +277,7 @@ public final class Logger {
      * Get the buffered lines onto the disk, and let {@link #refresh()} know they are ours.
      *
      * <p>The second half is the subtle one. {@code refresh()} reads whatever the file has grown by
-     * and pushes it into the ring — which is right for the :sync process's lines and wrong for our
+     * and pushes it into the ring, which is right for the :sync process's lines and wrong for our
      * own, since {@link #write} has already pushed those. Advancing {@code loadedLen} past the bytes
      * we just flushed is what stops every line this process logs from appearing twice.
      *
@@ -321,11 +321,11 @@ public final class Logger {
      *
      * <p>Closing first is what makes the size test honest: a buffered writer's bytes are not in
      * {@code length()} until they are, and {@code close()} flushes. So the file on disk is complete
-     * before it is measured, and complete before it is renamed — a rotation cannot lose the tail.
+     * before it is measured, and complete before it is renamed, so a rotation cannot lose the tail.
      *
      * <p>{@code loadedLen} is deliberately left alone across a rotation: leaving it above the new
      * file's length is exactly how {@link #refresh()} notices, and a reload is the right answer
-     * there — the buffer's oldest entries are now in a file nothing reads any more.
+     * there: the buffer's oldest entries are now in a file nothing reads any more.
      */
     private static void openWriter() throws IOException {
         closeWriter();

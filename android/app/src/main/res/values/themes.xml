@@ -8,7 +8,7 @@
          colours to live: where the system has no palette to give, it falls back to Material's
          baseline purple, which is the library's identity rather than this app's. The roles below are
          ClipSync's own, and ClipSyncApp overlays the wallpaper-derived palette on top *when the
-         system provides one* — the same result on a device with Monet, and ours rather than
+         system provides one*, giving the same result on a device with Monet, and ours rather than
          Material's on a device without.
 
          Every role is bound, not a chosen few: components pick their own, so a partial scheme shows
@@ -48,7 +48,7 @@
         <item name="colorOnSurfaceInverse">@color/brand_inverse_on_surface</item>
         <!-- No colorSurfaceTint: that is a Compose role, not one the Views library declares, and
              naming it fails resource linking. The elevation tint here is elevationOverlayColor,
-             which the parent already points at ?attr/colorPrimary — a theme reference, so it
+             which the parent already points at ?attr/colorPrimary, a theme reference, so it
              follows whatever colorPrimary ends up being and needs no restating. -->
 
         <item name="colorSurfaceDim">@color/brand_surface_dim</item>
@@ -66,18 +66,18 @@
     <!-- The roles whose MEANING is fixed, re-pinned on top of the wallpaper palette.
 
          Monet is a palette, not a vocabulary. It is welcome to decide what "this app's accent" looks
-         like — that is the whole point of it — but it does not get a say in what *error* looks like,
-         because red is not a decorative choice here: it is the difference between "a target is
+         like, since that is the whole point of it, but it does not get a say in what *error* looks
+         like, because red is not a decorative choice here: it is the difference between "a target is
          deferring to a better route" and "a target you need to fix", and between the battery card
          and the rest of the settings page. A wallpaper that turned the error container green would
          leave those distinctions drawn in a colour that means the opposite of what they say.
 
          Applied by ClipSyncApp AFTER the dynamic overlay, because that overlay is applied with
-         force=true and would otherwise win. Whether it currently touches these roles at all is not
-         the point — Android 12's palette had no error hue, later ones do, and this app should not
-         have to re-check which platform version decided what. Pinning makes the guarantee ours.
+         force=true and would otherwise win. Whether it currently touches these roles at all does not
+         matter, since Android 12's palette had no error hue while later ones do, and this app should
+         not have to re-check which platform version decided what. Pinning makes the guarantee ours.
 
-         Only the error family. colorTertiary — the peer sheet's "asleep" accent — is deliberately
+         Only the error family. colorTertiary, the peer sheet's "asleep" accent, is deliberately
          NOT here: that one is an accent doing an accent's job, and it should follow the wallpaper
          with everything else. -->
     <style name="ThemeOverlay.ClipSync.Semantic" parent="">
@@ -100,17 +100,17 @@
     <!-- An action inside a settings card: "Generate random PSK key", "Add address".
 
          Outlined, not borderless. Its left edge then sits exactly where the outlined text fields'
-         left edges sit — 12dp into the card body for both — so the alignment that carries the page is
+         left edges sit, 12dp into the card body for both, so the alignment that carries the page is
          outline to outline, between two things of the same kind. That is also what makes an icon
          harmless again: with a border to read, nothing depends on where the label happens to land.
-         The stroke and its colour come from the parent, which is the point of using it — Expressive's
+         The stroke and its colour come from the parent, which is the point of using it: Expressive's
          outlined button strokes ?attr/colorOutlineVariant at ?attr/containerStrokeWidth, and there is
          no Expressive ".Icon" variant to reach for because its padding is already symmetric.
 
          The padding items below are probably redundant under this parent, which supplies 16dp through
          containerPaddingStart/End. They are kept because this exact set is what was confirmed correct
          on a device, and because the inherited absolute pair is still live underneath:
-           paddingLeft/Right  Widget.Material3.Button — the parent two levels up — sets
+           paddingLeft/Right  Widget.Material3.Button, the parent two levels up, sets
                               android:paddingLeft/Right to m3_btn_padding_left = 24dp, and the
                               Expressive child adds paddingStart/End WITHOUT clearing them. Both stay
                               live in the merged attribute set, and the absolute pair is what was

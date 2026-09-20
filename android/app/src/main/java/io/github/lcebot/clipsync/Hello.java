@@ -12,24 +12,22 @@ import java.util.TreeSet;
 /**
  * The first frame of every connection: what a node declares about itself, in both directions.
  *
- * <p>Split out of {@link Connection} because the two were different things wearing one class.
- * Connection is the transport — a socket, a nonce exchange, a frame codec — and HELLO is the
- * protocol's vocabulary. While they were one, the semantics were reachable only through a live
- * socket and every field arrived as an {@code optString} at whichever call site needed it, which is
- * how {@code lan} ended up being read in one place and written in another with nothing tying the
- * two together. It also dragged an Android {@code Context} into the semantic layer: building the
- * declaration needed one to ask {@code Node} for the device type and battery, so a data connection
- * — which has no Context to give — passed null and silently declared itself non-LAN. Hello takes
- * values, not a Context; the caller that has a Context looks the values up.
+ * <p>Kept separate from {@link Connection} because the two are different things: Connection is the
+ * transport (a socket, a nonce exchange, a frame codec) and HELLO is the protocol's vocabulary.
+ * Keeping the semantics here, off the live socket, is what lets a field like {@code lan} be read
+ * and written against one typed object instead of an {@code optString} at each call site. It also
+ * keeps Android's {@code Context} out of the semantic layer: building a declaration needs one to
+ * ask {@code Node} for the device type and battery, and a data connection has no Context to give.
+ * Hello takes values, not a Context; the caller that has a Context looks the values up.
  *
- * <h2>Field ‖ JSON key — this is the protocol document</h2>
+ * <h2>Field ‖ JSON key: this is the protocol document</h2>
  *
  * <p>The Windows side (clipsync.py) sends and reads the same keys, and there is no other written
  * record of them, so this table is the one both ends are kept in step by.
  *
  * <pre>
  *   v           "v"            int      protocol version; both ends must match exactly
- *   id          "id"           string   node id — the key for link dedup and the self-check
+ *   id          "id"           string   node id: the key for link dedup and the self-check
  *   device      "device"       string   the name a human sees
  *   type        "type"         string   "pc" | "tablet" | "phone"
  *   persistent  "persistent"   bool     can this node hold a connection while idle
@@ -37,7 +35,7 @@ import java.util.TreeSet;
  *   clipTs      "clip_ts"      long     this node's clipboard timestamp, for catch-up
  *   clipSha     "clip_sha"     string   digest of that clipboard; OPTIONAL (absent when empty)
  *   lan         "lan"          bool     dialler's verdict on whether the two are on one LAN;
- *                                       OPTIONAL — only the end that dialled sends it
+ *                                       OPTIONAL: only the end that dialled sends it
  *   port        "port"         int      where this node LISTENS (an accepted socket's remote port
  *                                       is an ephemeral one and reaches nothing)
  *   dataOut     "data_out"     bool     can this node open data connections of its own
@@ -48,7 +46,7 @@ import java.util.TreeSet;
  *
  * <p>Immutable, and parsed with {@code opt*} throughout: a HELLO arrives from the network, so a
  * missing or mistyped field is a peer bug, not an exception path. The one field whose absence is
- * fatal — {@code id} on a peer link — is checked by {@link Connection#readHello()}, because what to
+ * fatal ({@code id} on a peer link) is checked by {@link Connection#readHello()}, because what to
  * do about it is a connection decision.
  */
 public final class Hello {
@@ -63,7 +61,7 @@ public final class Hello {
     public static final String ROLE_DATA = "data", ROLE_PAIR = "pair";
 
     public final int v;
-    /** Null when the peer sent none — the one absence {@link Connection} refuses a peer link for. */
+    /** Null when the peer sent none; that is the one absence {@link Connection} refuses a peer link for. */
     public final String id;
     /** "" when absent; the caller falls back to the address it dialled. */
     public final String device;
@@ -77,7 +75,7 @@ public final class Hello {
     public final String sha256;
     public final boolean persistent;
     public final boolean dataOut;
-    /** Meaningful only when {@link #has}({@code "lan"}) — the accepter never sends one back. */
+    /** Meaningful only when {@link #has}({@code "lan"}); the accepter never sends one back. */
     public final boolean lan;
     /** A bucket, not a percentage: "mains" | "high" | "medium" | "low". "medium" when absent. */
     public final String battery;
@@ -90,7 +88,7 @@ public final class Hello {
      *
      * <p>Nothing here can be answered from the field values. {@link #audit} and {@link #auditSent}
      * have to distinguish "the peer sent {@code lan=false}" from "the peer sent no {@code lan}", and
-     * {@link #toJson} has to reproduce the exact set a given kind of HELLO is supposed to contain —
+     * {@link #toJson} has to reproduce the exact set a given kind of HELLO is supposed to contain:
      * a data connection's HELLO is five fields, and filling the other eight with defaults would be a
      * wire change dressed up as tidiness.
      */
@@ -125,7 +123,7 @@ public final class Hello {
      * This node's declaration on an ordinary peer link.
      *
      * <p>Every argument is a value the caller looked up; nothing here touches Android. {@code
-     * clipSha} may be null, and then the key is left out rather than sent empty — see
+     * clipSha} may be null, and then the key is left out rather than sent empty; see
      * {@link #HELLO_OPTIONAL}.
      */
     public static Hello control(String id, String device, String type, boolean persistent,
@@ -142,7 +140,7 @@ public final class Hello {
      * A file-transfer connection's declaration: whose transfer, and for which file.
      *
      * <p>Deliberately not a peer's HELLO. It carries no capability flags and no clipboard state
-     * because nothing on the far side enrols a data connection as a peer — {@code role} is read
+     * because nothing on the far side enrols a data connection as a peer; {@code role} is read
      * before any of that happens, and the id is here only so the accepting node can tell whose
      * transfer these bytes belong to.
      */
@@ -158,7 +156,7 @@ public final class Hello {
      *
      * <p>No node id on purpose. The id is what the self-check and the link dedup key on, so an
      * unpaired device offering one would be enrolling itself into machinery it is not part of yet.
-     * What it does send — a name and a device type — is exactly what the provider puts in front of
+     * What it does send, a name and a device type, is exactly what the provider puts in front of
      * the user before handing the key over, and it is authenticated by nothing but the code, which
      * is the point: a guesser still has to appear under a name the person recognises.
      */
@@ -219,7 +217,7 @@ public final class Hello {
 
     // ------------------------------------------------------------------ the audit
     /**
-     * Fields this end puts in a peer-link HELLO. Keep in lockstep with {@link #control} — and
+     * Fields this end puts in a peer-link HELLO. Keep in lockstep with {@link #control}, and
      * {@link #auditSent} says so in the log when they have drifted apart.
      */
     static final Set<String> HELLO_SENT = Set.of(
@@ -234,12 +232,12 @@ public final class Hello {
      *
      * <p>{@code role} marks the two non-peer connections and is absent on every ordinary one,
      * {@code clip_sha} is omitted by a peer with nothing on its clipboard, and {@code lan} is sent
-     * only by the end that dialled — the accepter takes the dialler's word for it and never sends
+     * only by the end that dialled; the accepter takes the dialler's word for it and never sends
      * one back, so the dialler never sees one.
      *
      * <p>The Windows side's HELLO_OPTIONAL has a fourth entry, {@code sha256}. It needs it because
-     * its HELLO_READ lists {@code sha256} — the PC reads the field on a data connection through the
-     * same contract — while this end's {@link #HELLO_READ} does not: a data connection is answered
+     * its HELLO_READ lists {@code sha256}, because the PC reads the field on a data connection through the
+     * same contract, while this end's {@link #HELLO_READ} does not: a data connection is answered
      * before the audit runs (see {@link Connection#readHello()}), so {@code sha256} can never be
      * missing from anything audited here. Listing it would declare a rule this end has no use for.
      */
@@ -255,11 +253,11 @@ public final class Hello {
      * <p>The counterpart of {@link #audit}, and the reason {@code HELLO_SENT} is worth having at
      * all: the audit below is only as good as its constants, and a constant kept by hand beside the
      * method it describes is exactly the thing that drifts. This is what notices that someone added
-     * a field to {@link #control} and not to the contract — the same job {@code audit_hello_sent}
+     * a field to {@link #control} and not to the contract; that is the same job {@code audit_hello_sent}
      * does on the Windows side, where it runs once at start-up for the same reason.
      *
      * <p>Once, not per connection: the answer cannot change within a run, and a line per session
-     * would be noise rather than a finding. {@link #HELLO_OPTIONAL} applies on this side too —
+     * would be noise rather than a finding. {@link #HELLO_OPTIONAL} applies on this side too:
      * {@code clip_sha} is left out by a node with an empty clipboard, and that is a state, not an
      * omission.
      */
@@ -280,16 +278,16 @@ public final class Hello {
      *
      * <p>Every asymmetry this protocol has grown has looked the same from the outside: one end sends
      * a field, the other never reads it, and the feature that field exists for simply does not
-     * happen — no exception, no timeout, nothing in either log. The two sets above make that
+     * happen: no exception, no timeout, nothing in either log. The two sets above make that
      * checkable at the one moment both halves are in hand, and the cost is a comparison of a dozen
      * strings once per session.
      *
      * <p>Their upkeep is the honest cost: they are maintained by hand beside the methods they
      * describe, so a new field added to one and not to the set here makes this line lie in the
-     * opposite direction. {@link #auditSent} closes half of that hole — it compares a real outgoing
-     * HELLO against {@link #HELLO_SENT} — but nothing can check {@link #HELLO_READ} the same way,
+     * opposite direction. {@link #auditSent} closes half of that hole: it compares a real outgoing
+     * HELLO against {@link #HELLO_SENT}, but nothing can check {@link #HELLO_READ} the same way,
      * because "which fields does this end actually consume" is not a set the code can be asked for.
-     * It is still the cheaper failure — a spurious warning is read, a silent gap is not.
+     * It is still the cheaper failure: a spurious warning is read, a silent gap is not.
      *
      * @param peerLabel what to call the peer in the warning
      */

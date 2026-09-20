@@ -16,7 +16,7 @@ import com.google.android.material.slider.Slider;
  * {@link HapticFeedbackConstants} rather than driving the vibrator, which matters for three reasons:
  * the device maps them to its own actuator, the user's "touch feedback" setting is honoured without
  * this code knowing about it, and a phone with no vibrator does nothing instead of throwing. It also
- * means the feel matches the platform's own — a tick here is the same tick the system uses.
+ * means the feel matches the platform's own, because a tick here is the same tick the system uses.
  *
  * <p>minSdk is 35, so the API 34 additions are simply available: {@code DRAG_START} and
  * {@code SEGMENT_TICK} exist precisely for a slider being dragged across detents, and using them is

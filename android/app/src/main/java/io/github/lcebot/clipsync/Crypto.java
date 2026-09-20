@@ -15,15 +15,15 @@ import javax.crypto.spec.SecretKeySpec;
 /**
  * HKDF-SHA256 + ChaCha20-Poly1305 (Conscrypt, API 28+). Mirrors clipsync.py.
  *
- * <h2>Why there is no {@code seal(key, counter, plaintext)} any more</h2>
+ * <h2>Why the nonce counter is private to {@link Sealer} and {@link Opener}</h2>
  *
- * <p>A ChaCha20-Poly1305 nonce may never be reused under one key — reuse does not degrade the
- * cipher, it breaks it, leaking the keystream and the authentication key together. The old shape
- * handed that rule to the caller as an ordinary {@code long} parameter and relied on a convention
- * ("increment it inside the send lock, and nowhere else") to keep it. A convention is something a
- * reader has to know; a private field is something they cannot get wrong. {@link Sealer} and
- * {@link Opener} own the counter, expose no way to set it, and advance it only on success — so the
- * one invariant that matters is enforced by the type rather than by a comment.
+ * <p>A ChaCha20-Poly1305 nonce may never be reused under one key, because reuse does not degrade
+ * the cipher, it breaks it, leaking the keystream and the authentication key together. Handing the
+ * counter to the caller as an ordinary parameter would make that rule a convention ("increment it
+ * inside the send lock, and nowhere else") for callers to keep. A convention is something a reader
+ * has to know; a private field is something they cannot get wrong. {@link Sealer} and {@link
+ * Opener} own the counter, expose no way to set it, and advance it only on success, so the one
+ * invariant that matters is enforced by the type rather than by a comment.
  *
  * <p>They also cache their {@link Cipher}, which the static form could not: a data connection seals
  * one 512 KiB frame after another and was paying for a provider lookup on each.
@@ -31,11 +31,11 @@ import javax.crypto.spec.SecretKeySpec;
  * <h2>What the platform actually provides (checked, do not re-check)</h2>
  *
  * <p>{@code Cipher.getInstance("ChaCha20-Poly1305")} resolves to Conscrypt: its provider registers
- * {@code Cipher.ChaCha20/Poly1305/NoPadding -> OpenSSLAeadCipherChaCha20} and the alias
+ * {@code Cipher.ChaCha20/Poly1305/NoPadding} to {@code OpenSSLAeadCipherChaCha20} and the alias
  * {@code Alg.Alias.Cipher.ChaCha20-Poly1305} pointing at it
  * (conscrypt/common/src/main/java/org/conscrypt/OpenSSLProvider.java, the
  * {@code putSymmetricCipherImplClass("ChaCha20/Poly1305/NoPadding", ...)} line and the alias below
- * it). Available since API 28, so minSdk 35 is safe. Do not pass a provider name — Android's own
+ * it). Available since API 28, so minSdk 35 is safe. Do not pass a provider name; Android's own
  * guidance is to let the platform choose
  * (https://developer.android.com/privacy-and-security/cryptography).
  *
@@ -47,7 +47,7 @@ import javax.crypto.spec.SecretKeySpec;
  *       {@code OpenSSLAeadCipher.engineInitInternal} accepts a {@code GCMParameterSpec} (via
  *       {@code Platform.fromGCMParameterSpec}) or an {@code IvParameterSpec}, and <em>anything
  *       else, including {@code javax.crypto.spec.ChaCha20ParameterSpec}, falls into the
- *       {@code else} branch that sets {@code iv = null}</em> — which for ENCRYPT_MODE silently
+ *       {@code else} branch that sets {@code iv = null}</em>, which for ENCRYPT_MODE silently
  *       generates a random nonce instead of the one you asked for, and for DECRYPT_MODE throws
  *       "IV must be specified". So: {@link IvParameterSpec}, never ChaCha20ParameterSpec. An iv of
  *       any length other than {@code EVP_AEAD_nonce_length} (12) is rejected with
@@ -62,7 +62,7 @@ import javax.crypto.spec.SecretKeySpec;
  *       next call without an intervening {@code init} throws {@code IllegalStateException("Cannot
  *       re-use same key and IV for multiple encryptions")}. Conscrypt additionally remembers the
  *       previous (key, iv) pair and throws InvalidAlgorithmParameterException if you init with the
- *       same one twice. Both are satisfied here because every seal inits with a fresh counter — the
+ *       same one twice. Both are satisfied here because every seal inits with a fresh counter; the
  *       provider is, in effect, a second enforcement of the same invariant the counter enforces.
  * </ul>
  *
@@ -84,8 +84,8 @@ public final class Crypto {
      *       <em>worse</em>, and seeding from a timestamp or an ANDROID_ID is the textbook weak-PRNG
      *       finding (https://developer.android.com/privacy-and-security/risks/weak-prng).
      *   <li><b>Not {@code getInstanceStrong()}.</b> On Android it is not the blocking /dev/random
-     *       source it is on a server JRE — it resolves to the same AndroidOpenSSL/urandom-backed
-     *       implementation — so it buys nothing and only adds a lookup. It does not block here, but
+     *       source it is on a server JRE; it resolves to the same AndroidOpenSSL/urandom-backed
+     *       implementation, so it buys nothing and only adds a lookup. It does not block here, but
      *       relying on that is relying on an Android-specific detail for no gain.
      *   <li><b>Not {@code SecureRandom.getInstance("SHA1PRNG", "Crypto")}.</b> The Crypto provider
      *       was removed in API 28 and that call now throws NoSuchProviderException
@@ -112,13 +112,12 @@ public final class Crypto {
      * Hex back to bytes, <b>leniently</b>: anything that is not an even-length run of hex digits is
      * {@code null}, not an exception.
      *
-     * <p>Deliberately not the strict parse it replaced. Every caller here is reading a value that
-     * arrived from somewhere it does not control — a configuration file, a mDNS TXT record, a key
-     * ring an authenticated peer can add to — and exactly one of them wants the whole operation
-     * abandoned when one entry is bad. The strict version threw from inside the accepted-key loop,
-     * so a single malformed key anywhere in the ring made <em>every</em> inbound connection fail
-     * before a byte was read, permanently and across restarts. Returning null lets each caller skip
-     * the one bad entry and carry on, which is what all of them actually want.
+     * <p>Deliberately lenient rather than throwing. Every caller here is reading a value that arrived
+     * from somewhere it does not control, such as a configuration file, a mDNS TXT record, or a key
+     * ring an authenticated peer can add to, and none of them wants the whole operation abandoned because
+     * one entry is bad: a single malformed key in an accepted-key ring must not fail every inbound
+     * connection. Returning null lets each caller skip the one bad entry and carry on, which is what
+     * all of them actually want.
      *
      * @return the bytes, or null if {@code s} is null, odd-length, empty or not all hex digits
      */
@@ -145,18 +144,18 @@ public final class Crypto {
      * HKDF-SHA256, RFC 5869, written out by hand because the platform does not offer it.
      *
      * <p>Checked, so the next reader does not have to: Android has no HKDF in its public crypto
-     * API. Conscrypt's provider registers no {@code KDF} or {@code SecretKeyFactory} for it — the
-     * HKDF it contains is internal to its HPKE support — and {@code javax.crypto.KDF} is JDK 24/25
+     * API. Conscrypt's provider registers no {@code KDF} or {@code SecretKeyFactory} for it, because
+     * the HKDF it contains is internal to its HPKE support, and {@code javax.crypto.KDF} is JDK 24/25
      * (JEP 478 / JEP 510, https://openjdk.org/jeps/510), which no Android API level ships. The
      * alternatives are all third-party (Tink's {@code com.google.crypto.tink.subtle.Hkdf} and
      * similar); pulling in a crypto dependency for twenty lines of HMAC is not worth it, so this
      * stays. What follows is the RFC's two steps verbatim:
      *
      * <ul>
-     *   <li><b>Extract</b> (RFC 5869 §2.2): {@code PRK = HMAC-Hash(salt, IKM)} — the salt is the
+     *   <li><b>Extract</b> (RFC 5869 §2.2): {@code PRK = HMAC-Hash(salt, IKM)}, where the salt is the
      *       HMAC <em>key</em> and the IKM is the message, which is the way round that is easy to
      *       get backwards. Salt is always 64 bytes here (two 32-byte nonces), never empty, so the
-     *       RFC's "substitute HashLen zeros when absent" case cannot arise — which matters because
+     *       RFC's "substitute HashLen zeros when absent" case cannot arise, which matters because
      *       {@link SecretKeySpec} rejects a zero-length key with IllegalArgumentException.
      *   <li><b>Expand</b> (RFC 5869 §2.3): {@code T(0) = empty}, {@code T(i) = HMAC-Hash(PRK,
      *       T(i-1) ‖ info ‖ i)} with {@code i} a single byte counting from 1, and the output is
@@ -165,7 +164,7 @@ public final class Crypto {
      *       every block.
      * </ul>
      *
-     * @param length at most 255 × 32 = 8160, the RFC's limit — beyond it the one-byte counter would
+     * @param length at most 255 × 32 = 8160, the RFC's limit; beyond it the one-byte counter would
      *     wrap and silently repeat blocks. Every call here asks for 32.
      */
     public static byte[] hkdfSha256(byte[] ikm, byte[] salt, byte[] info, int length)
@@ -200,7 +199,7 @@ public final class Crypto {
      *
      * <p><b>Thread confinement is the caller's job and it is a real obligation.</b> The counter is a
      * plain {@code long} and the {@link Cipher} is shared between calls, so a Sealer must be used by
-     * one thread at a time — {@link Connection} holds every call inside its send lock, which is what
+     * one thread at a time; {@link Connection} holds every call inside its send lock, which is what
      * makes that true there. It is not an {@code AtomicLong} because atomicity of the counter alone
      * would not be enough anyway: the increment and the encryption have to be one indivisible step
      * or two threads could still seal different frames under the same nonce.
@@ -234,9 +233,9 @@ public final class Crypto {
          * life of the connection; this is what they are for.
          *
          * <p><b>The overload is supported here, checked against the implementation.</b>
-         * {@code OpenSSLAeadCipher.engineDoFinal(byte[], int, int, byte[], int)} is a real override
-         * — not the {@code UnsupportedOperationException} some providers use for the write-through
-         * forms — and it ends in the same {@code EVP_AEAD_CTX_seal} call the array-returning form
+         * {@code OpenSSLAeadCipher.engineDoFinal(byte[], int, int, byte[], int)} is a real override,
+         * not the {@code UnsupportedOperationException} some providers use for the write-through
+         * forms, and it ends in the same {@code EVP_AEAD_CTX_seal} call the array-returning form
          * does, minus the intermediate array.
          *
          * <p>Two conditions it imposes, both met by the caller:
@@ -246,11 +245,11 @@ public final class Crypto {
          *       ShortBufferException before touching anything. The check is literally
          *       {@code getOutputSizeForFinal(inputLen) > output.length - outputOffset}, and for
          *       ChaCha20-Poly1305 encryption {@code getOutputSizeForFinal} is {@code inputLen + 16}
-         *       exactly — no padding, no block rounding, so {@code Cipher.getOutputSize()} is an
+         *       exactly, with no padding and no block rounding, so {@code Cipher.getOutputSize()} is an
          *       exact figure here rather than the upper bound it is for block ciphers.
          *       {@link Connection#sendChunk} sizes its frame buffer to fit the largest chunk with
          *       nothing to spare, which is why that arithmetic must stay in step with this.
-         *   <li><b>{@code pt} and {@code out} may be the same array</b> — BoringSSL forbids
+         *   <li><b>{@code pt} and {@code out} may be the same array</b>: BoringSSL forbids
          *       overlapping input and output, and Conscrypt handles it for us by copying the input
          *       range when {@code input == output} and the ranges overlap. Correct, but it
          *       reinstates the copy this method exists to avoid, so the caller passes two distinct
@@ -271,7 +270,7 @@ public final class Crypto {
     /**
      * The receiving half: frames opened in the order they were sealed.
      *
-     * <p>Same thread rule as {@link Sealer} — {@link Connection} reads on one thread and that is the
+     * <p>Same thread rule as {@link Sealer}: {@link Connection} reads on one thread and that is the
      * whole of what keeps this safe.
      *
      * <p>The counter advances <b>only on success</b>, which is what makes the multi-key path work
@@ -286,7 +285,7 @@ public final class Crypto {
      * clears the input buffer and the counters itself. Sharing one Cipher across candidates and
      * relying on that would be betting on an implementation detail. Note also that the
      * {@code mustInitialize} latch Conscrypt sets after encrypting is <em>not</em> set after
-     * decrypting — decryption has no nonce-reuse hazard to guard — so nothing here depends on it.
+     * decrypting, because decryption has no nonce-reuse hazard to guard, so nothing here depends on it.
      */
     public static final class Opener {
         private final Cipher cipher;

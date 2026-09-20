@@ -20,7 +20,7 @@
         android:roundIcon="@mipmap/ic_launcher_round">
 
         <!-- libxposed API 102 module: declared by META-INF/xposed/* (java_init.list, scope.list,
-             module.prop). Nothing to declare here — the classic API is not supported. -->
+             module.prop). Nothing to declare here; the classic API is not supported. -->
 
 
         <activity
@@ -47,13 +47,13 @@
 
              NOT exported, and this is a security decision rather than tidiness. The service accepts
              ACTION_CLIP and pushes whatever text it carries to every paired device, without asking
-             where the intent came from. While it was exported, any app on the phone could call
+             where the intent came from. Exported, any app on the phone could call
              startService(ACTION_CLIP) and put a phishing link or a swapped payment address on the
              user's clipboard on every device at once.
 
              The one legitimate outside caller is xposed/Common.pushClip, which runs INSIDE
              system_server and calls startService with SYSTEM_UID. That is allowed, and it is
-             allowed twice over — verified against AOSP android15-release:
+             allowed twice over, verified against AOSP android15-release:
 
                services/.../am/ActiveServices.java#retrieveServiceLocked
                    if (mAm.checkComponentPermission(r.permission, callingPid, callingUid,
@@ -73,7 +73,7 @@
              canAccessUnexportedComponents(uid) is appId == ROOT_UID || appId == SYSTEM_UID, and it
              runs BEFORE the !exported branch. So system_server (uid 1000, and in fact pid ==
              MY_PID) and a real root caller (`su -c am startservice`, uid 0) both get through;
-             `adb shell am startservice` does NOT — shell is uid 2000 and hits the !exported
+             `adb shell am startservice` does NOT, because shell is uid 2000 and hits the !exported
              branch. Every other app on the device is locked out, which is the point.
 
              The app's own MainActivity and BootReceiver are the same uid (isSameApp) and were
@@ -86,14 +86,14 @@
              `started`.
 
              Do NOT "fix" a missing push by re-exporting: that restores the hole above, and
-             Binder.getCallingUid() cannot replace the check — onStartCommand does not run inside a
+             Binder.getCallingUid() cannot replace the check: onStartCommand does not run inside a
              binder transaction, so it returns this app's own uid (framework javadoc: "If the
              current thread is not currently executing an incoming transaction, then its own UID is
              returned"). The only real alternative is a signature-level <permission> declared here
              and held by the module. -->
         <!-- PROPERTY_SPECIAL_USE_FGS_SUBTYPE is a Play-console/policy requirement ("apps must
              declare a service-level <property> as a hint of what the exact use case here is") and
-             is not enforced by AOSP at runtime — ActiveServices never reads it. Declared anyway. -->
+             is not enforced by AOSP at runtime; ActiveServices never reads it. Declared anyway. -->
         <service
             android:name=".SyncService"
             android:exported="false"

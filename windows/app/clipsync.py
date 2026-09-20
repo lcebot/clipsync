@@ -24,9 +24,9 @@ Protocol (must match the Android side, see Connection.java / SyncService.java):
              20 PEERS {peers: [{id,name,type,persistent,battery}]}
 
 Text goes as CLIP (JSON, <= max_bytes; sha256 is always over the LF-normalised text, so the two
-platforms agree about a clip that came from a CRLF clipboard).  Files: OFFER -> HAVE | SKIP |
-WANT {ranges of missing chunks}; the bytes then move over up to N parallel data connections that
-*one* of the two ends opens (HELLO role=data) — whichever SecureChannel.drives_transfer() names,
+platforms agree about a clip that came from a CRLF clipboard).  Files: an OFFER is answered with
+HAVE, SKIP, or WANT {ranges of missing chunks}; the bytes then move over up to N parallel data connections that
+*one* of the two ends opens (HELLO role=data), whichever SecureChannel.drives_transfer() names,
 which is the dialler when both ends can open them.  The opener pushes CHUNKs when it holds the
 file and sends PULL {ranges} when it wants them.  Chunks
 are written in place into a pre-sized .part file with a persisted chunk map, so a lost
@@ -43,7 +43,7 @@ Locally, a copied file (Explorer) or image (screenshot, browser) is offered; tex
 
 Discovery has two independent halves, named for how a peer is found rather than for the route
 taken to it.  `peers` is a list of host names or literal addresses that devices connect to
-directly — a dynamic DNS name, a static address, a LAN address, all the same to the code.
+directly, whether a dynamic DNS name, a static address, or a LAN address; all the same to the code.
 `discovery` advertises this PC on the LAN as _clipsync._tcp via mDNS (python-zeroconf), so a
 device can find it with nothing configured at all, and browses for other nodes to dial.
 `own_addresses` is the other side of `peers`: the names that point at THIS machine, which is how
@@ -75,7 +75,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 
-try:                                   # optional: DIB <-> PNG conversion for image clips
+try:                                   # optional: converts between DIB and PNG for image clips
     from PIL import Image
 except ImportError:                    # pragma: no cover
     Image = None
@@ -91,8 +91,8 @@ from clipsync_config import (CHUNK, LOG_PATH, Cfg, is_self, Schedule, schedule_f
 from clipsync_node import declaration, node_id, node_name, short_id   # noqa: E402
 # Frame types, the key schedule and SecureChannel, so that clipsync_pair.py can speak the protocol
 # without importing this module and its side effects.  A star import, unusually, because these are
-# the protocol's vocabulary and the whole file refers to them unqualified — `__all__` over there is
-# what keeps that honest.
+# the protocol's vocabulary and the whole file refers to them unqualified, which is what `__all__`
+# over there is there to keep honest.
 from clipsync_proto import *   # noqa: E402,F403
 
 MAP_SAVE_EVERY = 8         # persist the received-chunk bitmap every N chunks
@@ -102,11 +102,11 @@ LOG_MAX_BYTES = 128 * 1024  # roll clipsync.log over at this size; see RotatingL
 # case. "Will not do it" is answered immediately by RELAY_NO; "died mid-transfer" shows up as a
 # closed TCP connection, because the waiter is on the same LAN as the relay. Only "alive but stuck"
 # needs a timeout at all, and that is rare enough that the value can be generous without making
-# failures slow. It is a backstop, not a scheduler — do not "optimise" it downwards.
+# failures slow. It is a backstop, not a scheduler, so do not "optimise" it downwards.
 RELAY_ASK_TIMEOUT_S = 30
 # Parallel data connections this end opens for one file, matching Android's `threads` default. Not
 # a configuration key here on purpose: there is no settings window field for it and the number that
-# matters is the one the *opener* picks, which on a PC<->phone link is usually the phone.
+# matters is the one the *opener* picks, which on a link between a PC and a phone is usually the phone.
 DATA_STREAMS = 8
 HEARTBEAT_INTERVAL = 30    # seconds between PINGs, matching Android's PING_WIFI_MS
 MAX_INBOUND = 24           # concurrent inbound connections, matching Server.MAX_INBOUND
@@ -122,7 +122,7 @@ def priority_key(persistent: bool, node_type: str, battery: str) -> tuple:
 
     One total order, compared left to right: `(persistent, type, battery, id)`, where pc beats
     tablet beats phone and mains beats high beats medium beats low. The caller appends the node id
-    as the last component, and that is what makes the order **total** — every node computes the same
+    as the last component, and that is what makes the order **total**: every node computes the same
     answer from the same declarations, so the relay is derived rather than elected and not one
     message is exchanged to decide it.
 
@@ -139,12 +139,11 @@ def priority_key(persistent: bool, node_type: str, battery: str) -> tuple:
 class _Bounded:
     """Insertion-ordered, bounded membership set. Mirrors SyncService.sentHashes.
 
-    Echo suppression used to be two single slots — "the last thing we sent" and "the last thing we
-    wrote into the clipboard" — and a single slot is only correct with two nodes. With three, A's
-    clip arrives, then B's; our slot now holds B's, and when A's comes back round from B we no
-    longer recognise it as ours and write it over the clip the user just made. That is lost data,
-    not noise, so the fix is to remember a handful: 16 is far more than any real round trip needs
-    and still bounded.
+    Echo suppression needs more than a single remembered hash per direction, because with three or
+    more nodes a clip can circulate, A's, then B's, before A's own copy comes back around, and a
+    single slot would no longer recognise it as ours and would write it back over the clip the user
+    just made. Remembering a handful (16) instead is far more than any real round trip needs and
+    still bounded.
 
     Re-adding a hash moves it to the newest end, so something still circulating does not age out
     from underneath us.
@@ -230,8 +229,8 @@ class RotatingLog(logging.FileHandler):
         except (OSError, ValueError):
             return False
         if pos == 0:
-            # Never roll an empty file. Without this, a single record longer than the whole limit —
-            # a long traceback — rolls before writing, then rolls again on the next record, and the
+            # Never roll an empty file. Without this, a single record longer than the whole limit,
+            # such as a long traceback, rolls before writing, then rolls again on the next record, and the
             # second roll overwrites .old with that one record and then throws it away too. The
             # limit is a ceiling for ordinary lines, not a promise to truncate one enormous one.
             return False
@@ -241,8 +240,8 @@ class RotatingLog(logging.FileHandler):
 
     def _roll(self):
         # The stream is closed directly rather than through Handler.close(), which would also mark
-        # the handler closed and drop it from logging's own bookkeeping — this handler is going
-        # straight back into service. Windows will not rename a file that is still open.
+        # the handler closed and drop it from logging's own bookkeeping, because this handler is
+        # going straight back into service. Windows will not rename a file that is still open.
         stream, self.stream = self.stream, None
         try:
             stream.flush()
@@ -291,8 +290,8 @@ class Partial:
     """
     An inbound file being assembled from CHUNK frames that may arrive on several data
     connections, in any order.  Backed by <final>.part (pre-sized, positional writes) plus
-    <final>.part.json (header + received-chunk list), so an interrupted transfer — connection
-    lost, PC restarted, sender aborted — resumes with only the missing chunks.
+    <final>.part.json (header + received-chunk list), so an interrupted transfer, whether from a
+    lost connection, a PC restart, or a sender abort, resumes with only the missing chunks.
     """
 
     @staticmethod
@@ -302,9 +301,9 @@ class Partial:
     def __init__(self, folder: str, hdr: dict = None, part: str = None):
         self.lock = threading.Lock()
         # Relay serve threads wait on this for a chunk that has not landed yet. A relay streams
-        # rather than storing and forwarding — waiting for a 500 MB file to arrive before offering
-        # it doubles the end-to-end time and demands 500 MB of scratch space on whatever device was
-        # elected — so a waiter's pull can legitimately run ahead of our own download.
+        # rather than storing and forwarding, because waiting for a 500 MB file to arrive before
+        # offering it doubles the end-to-end time and demands 500 MB of scratch space on whatever
+        # device was elected, so a waiter's pull can legitimately run ahead of our own download.
         self.cond = threading.Condition(self.lock)
         self.have = set()
         self.finalized = False
@@ -355,7 +354,7 @@ class Partial:
             return len(self.have) == self.n
 
     def claim_first_chunk(self) -> bool:
-        """"Nothing had landed yet, and I am the one who gets to say so" — true for one caller only.
+        """"Nothing had landed yet, and I am the one who gets to say so": true for one caller only.
 
         `len(pt.have) == 0` read here and `pt.write` called there are two operations, and eight
         data connections reach their first write together: every one of them can see an empty set
@@ -363,12 +362,10 @@ class Partial:
         to the same waiter.  Testing and setting under one acquisition of the lock `write` uses
         makes that unrepresentable.
 
-        The pull side has enforced this all along — it was `Transfer.firstChunkFired` on the phone,
-        which is now this same one-shot claim on the Partial, `Files.Partial.claimFirstChunk`.  One
-        rule, one implementation per end: the last time it had two, only one of them was right and
-        the push path had no guard at all.  Both of this end's paths ask it here — `data_thread`
-        when a peer pushes at us and `_pull_worker` when we drive the download — which is the pair
-        Java answers with `serveData` and `Transfer.pull`.  Cleared by `keep()`, so a transfer that
+        One rule, one implementation, shared by both of this end's paths: `data_thread` when a peer
+        pushes at us and `_pull_worker` when we drive the download, matching `Files.Partial.
+        claimFirstChunk` / `Transfer.firstChunkFired` on the Android side (`serveData` and
+        `Transfer.pull` there).  Cleared by `keep()`, so a transfer that
         stopped before a single chunk landed can still announce its first one when it resumes (and
         only then: a non-empty `have` fails the claim regardless of the flag).
         """
@@ -390,7 +387,7 @@ class Partial:
         A file handle for one data connection to keep for its lifetime.
 
         Two reasons not to open the file per chunk. It is a syscall and a handle allocation for
-        every 512 KiB — 200 of them for a 100 MB file — and, worse, doing it inside the lock made
+        every 512 KiB, 200 of them for a 100 MB file, and, worse, doing it inside the lock made
         the eight parallel streams take turns at the disk, which is the opposite of what opening
         eight of them was for. Chunks occupy disjoint ranges, so a handle each is safe.
         """
@@ -458,7 +455,7 @@ class Partial:
     def read_chunk(self, idx: int) -> bytes:
         """Read chunk `idx` from the .part file, for forwarding it on while we are still receiving.
 
-        A chunk in `self.have` has been fully written — chunks occupy disjoint ranges, so reading
+        A chunk in `self.have` has been fully written; chunks occupy disjoint ranges, so reading
         from a separate file handle while another connection is writing a *different* chunk is safe.
         After finalize() the file has been renamed; use `self.final` in that case.
         """
@@ -573,7 +570,7 @@ def sha256_file(path: str) -> str:
 
 class Item:
     """
-    One clipboard content.  kind 'text': text.  kind 'file': name, mime, size, sha256, path —
+    One clipboard content.  kind 'text': text.  kind 'file': name, mime, size, sha256, path;
     files always live on disk (a screenshot is written to files_dir first), never in memory.
     """
 
@@ -760,8 +757,8 @@ def safe_name(name: str) -> str:
     separator at all; basename then drops every directory part. The character filter is the set
     Windows refuses, and the length cap is well under MAX_PATH's share for a name.
 
-    `.` and `..` survive all of that — basename returns them unchanged, they contain no filtered
-    character and they are short — and joining `..` to files_dir writes to its *parent*. They are
+    `.` and `..` survive all of that: basename returns them unchanged, they contain no filtered
+    character and they are short, and joining `..` to files_dir writes to its *parent*. They are
     the one pair that has to be named. Android's safeName() applies the same rules to the same
     inputs; the two are meant to produce the same string for any name.
     """
@@ -777,7 +774,7 @@ def unique_path(folder: str, name: str, ignore_part: str = None) -> str:
 
     `ignore_part` is the transfer's *own* part file. Without it finalize() asked whether
     `clip.png.part` existed, found the very file it was about to rename, decided the name was taken
-    and saved as `clip (1).png` — every single time, for every received file.
+    and saved as `clip (1).png`, every single time, for every received file.
     """
     os.makedirs(folder, exist_ok=True)
     base, ext = os.path.splitext(name)
@@ -795,7 +792,7 @@ class FileCache:
     Lets an OFFER be answered with HAVE instead of transferring the bytes again, and serves WANTs.
 
     The digests are remembered between runs in %TMP%, keyed by name + size + mtime. Without that,
-    every logon re-hashed the whole folder — up to keep_max_mb of reading before the clipboard
+    every logon re-hashed the whole folder, up to keep_max_mb of reading before the clipboard
     listener was even registered. The index is a cache in the strict sense: delete it and the only
     consequence is one slow start. It lives in %TMP% and not next to the files for exactly that
     reason, and because the folder it describes is the user's, not ours to litter.
@@ -811,11 +808,11 @@ class FileCache:
         self.by_sha = {}
         self.dir = pathlib.Path(cfg.files_dir)
         self.dir.mkdir(parents=True, exist_ok=True)
-        self.partials = {}                     # sha -> Partial (interrupted transfers, resumable)
+        self.partials = {}                     # maps a sha to its Partial (interrupted transfers, resumable)
         self.index_path = self._index_path()
-        # name -> [sha, size, mtime_ns, origin]. `origin` is "remote" for a file this service
-        # received and "local" for anything else — a screenshot we wrote, a file the user dropped
-        # in the folder. Only prune reads it, and only to decide what it may delete.
+        # maps a name to [sha, size, mtime_ns, origin]. `origin` is "remote" for a file this service
+        # received and "local" for anything else, such as a screenshot we wrote or a file the user
+        # dropped in the folder. Only prune reads it, and only to decide what it may delete.
         self.index = self._load_index()
         self._scan()
 
@@ -882,7 +879,7 @@ class FileCache:
                     else:
                         sha = sha256_file(p)
                         hashed += 1
-                    # A file we cannot place — the index is gone, or someone put it here — counts
+                    # A file we cannot place, because the index is gone or someone put it here, counts
                     # as local, so prune leaves it alone. Keeping a file too long costs disk;
                     # deleting one of the user's costs the file.
                     origin = known[3] if known and len(known) > 3 else "local"
@@ -928,7 +925,7 @@ class FileCache:
         except OSError:
             return
         # touching is exactly the case where mtime moves without the content changing, so the
-        # index has to be told — otherwise every re-use of a cached file costs a re-hash next start
+        # index has to be told, otherwise every re-use of a cached file costs a re-hash next start
         name = os.path.basename(path)
         known = self.index.get(name)
         if known:
@@ -947,7 +944,7 @@ class FileCache:
         and deleting those after keep_hours meant a phone asking for one got "not available any
         more" for a picture the user could still see on the clipboard.
 
-        The consequence is that keep_max_mb can be unreachable — a folder full of the user's own
+        The consequence is that keep_max_mb can be unreachable: a folder full of the user's own
         files stays full. That is the right way round to fail.
         """
         cfg = self.cfg
@@ -1015,7 +1012,7 @@ class SyncState:
     Text: CLIP frames, pushed as-is.
     Files: OFFER {name,mime,size,sha256,forwarded} -> HAVE (cached: re-used, nothing sent) | SKIP
     (too big for that link) | WANT {ranges: missing chunks}.  The bytes then move over data
-    connections (HELLO role=data) opened by whichever end SecureChannel.drives_transfer() names —
+    connections (HELLO role=data) opened by whichever end SecureChannel.drives_transfer() names;
     both ends can open them now, so it is the dialler unless the other end says it cannot.  The end
     that opens them pushes CHUNK frames when it holds the file and sends PULL {ranges} when it
     wants them; the accepting end answers in data_thread.  Every chunk lands in a Partial
@@ -1035,7 +1032,7 @@ class SyncState:
         self.by_peer: dict[str, SecureChannel] = {}
         # The version of the clip this node currently holds: `(wall-clock ms, node id)`, compared
         # lexicographically, last writer wins. There is no hub and no monotonic sequence number, so
-        # this is the only answer to "which clip is newer" — and it has to be one every node
+        # this is the only answer to "which clip is newer", and it has to be one every node
         # computes the same way. Incoming versions are normalised by the per-link clock offset
         # before being compared against it.
         self.clip_ts = 0
@@ -1043,7 +1040,7 @@ class SyncState:
         self.clip_sha = None         # SHA-256 hex of the current clip content
         self.latest_item = None      # the Item, for catch-up and relay
         # Last 64 "ts:from:sha" keys, for dedup across any topology. The sha is part of the key
-        # because two different clips can share a millisecond and a sender — and because files join
+        # because two different clips can share a millisecond and a sender, and because files join
         # this set too, keyed on the OFFER's `seq`, where the digest is the whole identity.
         self.seen_set = {}
         # Echo suppression, 16 entries each (see _Bounded): what we wrote into the local clipboard,
@@ -1053,7 +1050,7 @@ class SyncState:
         self.last_set_path = None    # file we last put on the clipboard (cheap loop check)
         self.last_announce = 0.0     # monotonic time of the last T_KEYS broadcast (rate limit)
         self.last_announced_keys = None   # (psk, since, next) of it; only exact repeats are damped
-        self.aborted = {}            # sha -> time of the last ABORT (pull loops check it)
+        self.aborted = {}            # maps a sha to the time of its last ABORT (pull loops check it)
         self.pushing = set()         # shas we are currently pushing over our own data connections
         # Shas with a debounced re-ask already armed (see _schedule_reask). One timer per file at a
         # time: eight streams of one transfer can end within microseconds of each other, and one
@@ -1062,13 +1059,13 @@ class SyncState:
         self.reask_pending = set()
         # Relay coordination: files we are waiting on someone else to fetch for us, and files we
         # have agreed to fetch for someone else.
-        self.relay_waits = {}        # sha -> RelayWait
-        self.relay_accepted = {}     # sha -> set of SecureChannel (waiters we accepted)
+        self.relay_waits = {}        # maps a sha to its RelayWait
+        self.relay_accepted = {}     # maps a sha to the set of SecureChannel waiters we accepted
         # What each direct peer told us about *its* direct peers, so this node knows the two-hop
         # neighbourhood and can build an OFFER `to` list naming devices it has no connection to.
         # A full snapshot, replaced entirely on each T_PEERS; dropped when the sender disconnects.
         self.indirect: dict[str, list[dict]] = {}
-        # Peers that said BYE {reason: idle} — by node id, and that is the whole reason this is a
+        # Peers that said BYE {reason: idle}, by node id, and that is the whole reason this is a
         # set here rather than a flag on the dialler.
         #
         # Two devices that found each other over mDNS both dial, one of the two links is dropped as
@@ -1080,7 +1077,7 @@ class SyncState:
         # awake whatever it said last time it left; and by a failed dial, because a device that will
         # not answer at all is not merely asleep and the real error is the better thing to show.
         # Those two are also what keeps a peer switched off while idle from reading as idle for the
-        # life of the process — which is why the idle claim only stretches the back-off to its
+        # life of the process, which is why the idle claim only stretches the back-off to its
         # maximum instead of suppressing the dial outright. Mirrors SyncService.idlePeers.
         self.idle_peers: set[str] = set()
         # Key rotation state, mirroring SyncService.java's cfg.keys / cfg.rotate.
@@ -1091,11 +1088,10 @@ class SyncState:
         """Persist a new key schedule to config.json and update everything that reads it.
 
         **Including cfg.** `cfg` is otherwise a start-up snapshot, but the three key fields are the
-        ones the connection paths read on every accept and every dial, and leaving them behind was
-        the whole of the bug: rotation computed a new key, wrote it to the file, told nobody, and
-        two or three cycles later this PC was refusing every peer and being refused by every peer,
-        recoverable only by pairing again. Android gets the same effect by reloading Config after
-        the save; this is the equivalent, and the contract is written down on Cfg itself.
+        ones the connection paths read on every accept and every dial, so a rotation that only wrote
+        the new key to disk without updating them would leave every live connection path using a key
+        the file no longer agrees with. Android gets the same effect by reloading Config after the
+        save; this is the equivalent, and the contract is written down on Cfg itself.
 
         Done inside the lock so nobody can observe a psk from before the swap together with an
         accepted list from after it.
@@ -1112,26 +1108,26 @@ class SyncState:
 
     # -- link registry --
     #
-    # The same node can be reachable two ways at once — a listed address *and* its mDNS
-    # advertisement, or two listed names pointing at one machine — and both sides may dial each
+    # The same node can be reachable two ways at once, a listed address *and* its mDNS
+    # advertisement, or two listed names pointing at one machine, and both sides may dial each
     # other in the same moment. When a second connection to a known id appears, three rules decide
     # which one goes:
     #
     #   1. keep the one whose peer address is on-link, drop the other;
     #   2. if both are on-link or neither is, and the two were opened by *different* nodes, the node
     #      with the larger id closes the connection it opened;
-    #   3. if both were opened by the *same* node — two names for one machine — keep the older.
+    #   3. if both were opened by the *same* node, two names for one machine, keep the older.
     #
     # Rule 2's asymmetry is essential: if both sides closed, the pair would disconnect entirely.
-    # Rule 3 is not an afterthought — several names for one host is a supported configuration, and
+    # Rule 3 is not an afterthought: several names for one host is a supported configuration, and
     # without it the rule set is undefined for the case it creates.
     @staticmethod
     def _duplicate_loser(old: "SecureChannel", new: "SecureChannel") -> "SecureChannel":
         """
         Which of two links to one peer has to go.
 
-        Both ends compute this from the same three facts — whether each link is on-link, which node
-        opened it, and which is older — so they reach the same verdict independently. That is the
+        Both ends compute this from the same three facts, whether each link is on-link, which node
+        opened it, and which is older, so they reach the same verdict independently. That is the
         property the rules exist for: a tiebreak the two ends can disagree about closes *both*
         links and disconnects the pair. It is also why `lan` is the term here and not `via`: only a
         dialler knows whether it found the peer by mDNS or by name, so `via` is not a shared fact.
@@ -1142,12 +1138,12 @@ class SyncState:
             # 2. opened by different nodes: the link opened by the *larger* id goes. `initiator` is
             # true for the links this PC opened, so this picks a side, not a link we happen to own.
             #
-            # The plan phrases the close as the larger node's job. Performing it from whichever end
-            # notices first is the same close of the same socket — both ends name the same loser —
-            # and it does not depend on the larger node having both links registered yet.
+            # The larger node's link is the one to close; performing it from whichever end notices
+            # first is the same close of the same socket, both ends name the same loser, and it
+            # does not depend on the larger node having both links registered yet.
             loser_is_ours = node_id() > str(new.node_id or "")
             return old if old.initiator == loser_is_ours else new
-        # 3. same opener — two names for one machine. Keep the older: it is the one already carrying
+        # 3. same opener, two names for one machine. Keep the older: it is the one already carrying
         # traffic, and `new` is the newer by construction, having registered second.
         return new
 
@@ -1177,7 +1173,7 @@ class SyncState:
             self.clients.discard(other)
             self.clients.add(ch)
             self.by_peer[ch.node_id] = ch
-        log.info("two links to %s [%s] — closing the %s one", other.device,
+        log.info("two links to %s [%s], closing the %s one", other.device,
                  short_id(other.node_id), "outbound" if other.initiator else "inbound")
         other.superseded = True
         other.bye("duplicate")
@@ -1198,7 +1194,7 @@ class SyncState:
         if ch.node_id:
             broadcast_peers(self)
         # If a relay we were waiting on disconnected, walk to the next candidate rather than falling
-        # back to the origin — see _ask_relay.
+        # back to the origin; see _ask_relay.
         if ch.node_id:
             for rw in list(self.relay_waits.values()):
                 if ch.node_id == self._current_relay_for(rw) and self._advance(rw, ch.node_id):
@@ -1216,8 +1212,8 @@ class SyncState:
     def note_bye(self, ch: "SecureChannel", reason):
         """Record an idle goodbye against the peer, whichever link it arrived on.
 
-        Called from both ends of every control connection — the accepting one as well as the
-        dialling one — because that is the whole point of keeping it by node id: the link that hears
+        Called from both ends of every control connection, the accepting one as well as the
+        dialling one, because that is the whole point of keeping it by node id: the link that hears
         the goodbye is often not the link that would otherwise redial.
         """
         if reason == BYE_IDLE and ch.node_id:
@@ -1292,7 +1288,7 @@ class SyncState:
         `forwarded` is what caps a file at one hop, exactly as it does for text: a node that
         receives an OFFER already marked forwarded passes it to nobody. Without it a file reaching
         a node with two other peers is re-offered by each of them in turn, and in a triangle it
-        comes back to where it started — where, the digest being unknown by then, it is applied to
+        comes back to where it started, where, the digest being unknown by then, it is applied to
         the clipboard and offered onwards again.
 
         `seq` and `from` together with the digest are also the seen-set key, so a forwarded copy of
@@ -1335,11 +1331,10 @@ class SyncState:
     def catch_up(self, ch: SecureChannel, peer_clip_ts: int, peer_clip_sha: str):
         """Send our clip if it is newer than the peer's.
 
-        This is what replaces the hub. The PC used to be the only thing that remembered the latest
-        clip for a device that was offline; instead each side now states its `(version, sha256)` in
-        HELLO and the one holding the newer content sends it. Both evaluate independently, only the
-        newer one acts, and no request frame is needed — which is strictly stronger than the hub
-        version, because it does not depend on one particular machine having been awake.
+        There is no hub: each side states its `(version, sha256)` in HELLO and the one holding the
+        newer content sends it. Both evaluate independently, only the newer one acts, and no request
+        frame is needed, so catching a device back up does not depend on any one particular machine
+        having been awake.
         """
         with self.lock:
             item = self.latest_item
@@ -1350,11 +1345,11 @@ class SyncState:
         # offline before the transfer finished could never get the file without a fresh copy.
         if item is None:
             return
-        # Same content — nothing to send.
+        # Same content, so there is nothing to send.
         if peer_clip_sha and peer_clip_sha == sha:
             return
         # Version comparison: (ts, from) lexicographic.  HELLO does not carry clip_from,
-        # so ch.node_id is an approximation — wrong when the peer's clip was originated by a
+        # so ch.node_id is an approximation, which is wrong when the peer's clip was originated by a
         # third node.  The sha check above handles the common case; this guard is a tiebreak.
         if peer_clip_ts > 0 and (ts, from_id) <= (peer_clip_ts, ch.node_id or ""):
             return
@@ -1389,7 +1384,7 @@ class SyncState:
             # must not delete it out from under a peer that is about to ask for it.
             self.cache.put(h, item.path, origin="local")
             self.clear_abort(h)
-        log.info("local -> remote (%s)", item)
+        log.info("sent local clip to remote (%s)", item)
         self.announce(item, targets)
 
     # -- a peer offers a file --
@@ -1398,7 +1393,7 @@ class SyncState:
         name = safe_name(str(hdr.get("name", "clip")))
         size = int(hdr.get("size", -1))
         # `forwarded` is read off the header by Partial and carried to _apply_remote, which is where
-        # the forwarding decision is finally made — by then the bytes have arrived, possibly minutes
+        # the forwarding decision is finally made, by then the bytes have arrived, possibly minutes
         # and one restart later, so it cannot be decided here.
         #
         # Files go through the same seen-set as text, keyed on the OFFER's `seq` where text uses its
@@ -1406,7 +1401,7 @@ class SyncState:
         # something it sent an hour ago is indistinguishable from a peer offering it for the first
         # time, and in a three-node network the same file circulates until something else is
         # copied. Hitting the set means we have already decided about this exact file from this
-        # exact sender — answer HAVE if we have it, and otherwise say nothing.
+        # exact sender, so answer HAVE if we have it, and otherwise say nothing.
         seen_key = "%s:%s:%s" % (int(hdr.get("seq", 0) or 0), str(hdr.get("from", "")), sha)
         with self.lock:
             seen = seen_key in self.seen_set
@@ -1418,25 +1413,24 @@ class SyncState:
         if seen:
             if self.cache.get(sha) is not None:
                 origin.send_json(T_HAVE, {"sha256": sha})
-            log.info("offer from %s: %s -> already seen, ignored", origin.device, name)
+            log.info("offer from %s: %s already seen, ignored", origin.device, name)
             return
         if echo:
             origin.send_json(T_HAVE, {"sha256": sha})
             return
         path = self.cache.get(sha)
         if path is not None:
-            # HAVE and a touch, and nothing else. This used to apply the file to the clipboard as
-            # well, which reads as "the user just copied this" when all that happened is a peer
-            # mentioned a file we happen to still have on disk — so a reconnecting phone re-offering
-            # an old file replaced whatever was on the clipboard, and that copy was then broadcast
-            # back out. Having something is not a reason to paste it.
+            # HAVE and a touch, and nothing else: an OFFER for content we already hold on disk is
+            # not evidence the user just copied it, so it must not be applied to the clipboard;
+            # otherwise a reconnecting phone re-offering an old file would silently replace whatever
+            # is on the clipboard right now and get that copy broadcast back out.
             origin.send_json(T_HAVE, {"sha256": sha})
-            log.info("offer from %s: %s -> already cached as %s", origin.device, name, path)
+            log.info("offer from %s: %s already cached as %s", origin.device, name, path)
             self.cache.touch(path)
             return
         if size < 0 or size > origin.limit:
             origin.send_json(T_SKIP, {"sha256": sha, "reason": f"{size} bytes > {origin.limit} ({'lan' if origin.lan else 'internet'} link)"})
-            log.info("offer from %s: %s (%d bytes) -> skip, over the %s limit", origin.device, name, size,
+            log.info("offer from %s: %s (%d bytes) skipped, over the %s limit", origin.device, name, size,
                      "lan" if origin.lan else "internet")
             return
 
@@ -1452,9 +1446,9 @@ class SyncState:
         # failure cascades.
         rw = self.relay_waits.get(sha)
         if rw is not None and origin.node_id and origin.node_id == self._current_relay_for(rw):
-            # This OFFER is from the relay we asked — skip election, WANT directly.
+            # This OFFER is from the relay we asked, so skip election and WANT directly.
             self.relay_waits.pop(sha, None)
-            log.info("offer from relay %s: %s -> want directly", short_id(origin.node_id), name)
+            log.info("offer from relay %s: %s, want directly", short_id(origin.node_id), name)
         else:
             offer_from = str(hdr.get("from", ""))
             to_list = hdr.get("to") or []
@@ -1500,10 +1494,10 @@ class SyncState:
         if not missing:
             self._finalize(pt, origin)
             origin.send_json(T_HAVE, {"sha256": sha})
-            log.info("offer from %s: %s -> already complete on disk", origin.device, name)
+            log.info("offer from %s: %s already complete on disk", origin.device, name)
             return
         origin.send_json(T_WANT, {"sha256": sha, "ranges": missing})
-        log.info("offer from %s: %s (%d bytes) -> want %s", origin.device, name, size,
+        log.info("offer from %s: %s (%d bytes), want %s", origin.device, name, size,
                  "all" if len(pt.have) == 0 else f"{sum(b - a for a, b in missing)}/{pt.n} chunks (resume)")
         # Only one end opens the data connections. When it is this one, the WANT above is not the
         # whole of our part: nothing else will happen until we go and pull the bytes.
@@ -1516,7 +1510,7 @@ class SyncState:
         path = self.cache.get(sha)
         if path is None:
             # Streaming relay: a file we accepted to relay is still arriving, so it is in `partials`
-            # and by definition not in the cache — but we can forward it chunk by chunk as it lands,
+            # and by definition not in the cache, but we can forward it chunk by chunk as it lands,
             # which is what serve_relay_pull does. ABORTing here on the control connection killed
             # that before the data connection ever got the chance, so the relay degraded to
             # store-and-forward and doubled the end-to-end time for every relayed file.
@@ -1541,8 +1535,8 @@ class SyncState:
     # -- data connection: phone pushes chunks of an inbound file --
     def on_push_open(self, sha: str, ch: SecureChannel):
         """This data connection has shown itself to be a pusher: count it in, and hand back the
-        Partial it feeds.  Called from the first CHUNK, never at open — until a frame arrives a
-        pusher and a relay waiter's puller are indistinguishable (see data_thread)."""
+        Partial it feeds.  Called from the first CHUNK, never at open, because until a frame arrives
+        a pusher and a relay waiter's puller are indistinguishable (see data_thread)."""
         pt = self.cache.partials.get(sha)
         if pt is None or pt.finalized:
             raise ConnectionError(f"no transfer in progress for {sha[:12]}")
@@ -1571,18 +1565,18 @@ class SyncState:
     def on_stream_gone(self, sha: str, ch: SecureChannel):
         """A data connection we accepted closed without ever having been counted as a push stream.
 
-        Counting a push stream at its first CHUNK rather than at open is right — until a frame
+        Counting a push stream at its first CHUNK rather than at open is right, because until a frame
         arrives, a pusher and a relay waiter's puller are indistinguishable, and counting a puller
         as a pusher let an unrelated connection decide when "the last push stream is out". But it
         left a hole: a connection that opens *to push* and dies before its first byte is counted by
-        nobody, so `on_push_close` never runs and the one thing that restarts a stalled transfer —
-        the debounced WANT — is never armed. With all eight streams failing before their first byte
+        nobody, so `on_push_close` never runs and the one thing that restarts a stalled transfer,
+        the debounced WANT, is never armed. With all eight streams failing before their first byte
         (a peer whose storage read fails, a link that drops the moment it is used) the transfer then
         waited for the peer's next OFFER, which may be a reconnect or a catch-up away.
 
         Deliberately *not* a stream for counting purposes: this connection pushed nothing, and
-        putting it back into `pt.streams` is the bug the late counting exists to avoid. It only arms
-        the same debounced re-ask, which re-checks everything before it sends anything.
+        counting it in `pt.streams` would be exactly what the late counting is designed to avoid. It
+        only arms the same debounced re-ask, which re-checks everything before it sends anything.
 
         The caller filters out connections that identified themselves as pullers (a PULL arrived),
         so what reaches here is "pushed nothing and never said it was pulling". A connection that
@@ -1595,7 +1589,7 @@ class SyncState:
             return
         # Only where WANT is our lever at all: when the peer drives, it opens the data connections
         # and a WANT asks it to do what it is already doing. When *we* drive there is no stall to
-        # clear either — _pull_transfer retries its own stripes.
+        # clear either, since _pull_transfer retries its own stripes.
         origin = pt.origin
         if origin is None or origin.drives_transfer():
             return
@@ -1613,7 +1607,7 @@ class SyncState:
 
         The debounce gives the peer a moment to open its remaining streams before we re-ask, so the
         ordinary "one stripe finished early" case never produces a WANT at all. The one-timer rule
-        is what keeps eight streams ending together — or failing together before their first byte —
+        is what keeps eight streams ending together, or failing together before their first byte,
         from turning into eight WANTs.
 
         daemon: a two-second debounce must not be a reason the process refuses to exit.
@@ -1628,7 +1622,7 @@ class SyncState:
 
     def _finalize(self, pt: Partial, ch: SecureChannel):
         """Verify, publish and apply a complete file. Called from a stream ending and from an offer
-        of something already on disk — which is why it is not inline in on_push_close any more."""
+        of something already on disk, which is why it is not inline in on_push_close any more."""
         try:
             path = pt.finalize()
         except ValueError as e:
@@ -1641,7 +1635,7 @@ class SyncState:
         self._apply_remote(Item.from_path(path, pt.mime, pt.sha), pt.origin or ch,
                            forwarded=pt.forwarded, to=pt.to, from_id=pt.origin_id, seq=pt.seq)
         # Offer it to every waiter that asked us to relay this file, carrying the originator's
-        # seq/from — this is the only caller that still holds them, and without them the completed
+        # seq/from, since this is the only caller that still holds them, and without them the completed
         # offer would land under a different seen-set key than the early one already sent.
         self.offer_to_waiters(pt.sha, seq=pt.seq, from_id=pt.origin_id)
 
@@ -1705,7 +1699,7 @@ class SyncState:
 
         Aimed at the peer's **declared listening port**, not at the control socket's remote port:
         on a connection we accepted that is the peer's ephemeral source port and reaches nothing.
-        The rest of the address is copied from the control socket verbatim — flow info and scope id
+        The rest of the address is copied from the control socket verbatim, flow info and scope id
         included, because a link-local IPv6 peer is unreachable without its scope.
         """
         peer = control.sock.getpeername()
@@ -1727,7 +1721,7 @@ class SyncState:
                 pass
             raise
         # A data connection's HELLO is deliberately short: it enrols nothing, so it carries only
-        # what the accepter needs to route it — who we are, and which file this stream is for.
+        # what the accepter needs to route it: who we are, and which file this stream is for.
         ch.send_json(T_HELLO, {"v": PROTOCOL_VERSION, "id": node_id(), "device": node_name(),
                                "role": "data", "sha256": sha})
         return ch
@@ -1801,7 +1795,7 @@ class SyncState:
                     (idx,) = struct.unpack(">I", payload[:4])
                     # Streaming relay, the half this end was missing: when *we* drive the download
                     # the write happens here rather than in data_thread, so nothing was watching the
-                    # first chunk land and the early OFFER was never sent — a PC relay that pulled
+                    # first chunk land and the early OFFER was never sent, so a PC relay that pulled
                     # silently degraded to store-and-forward and doubled the end-to-end time for
                     # every file crossing it. This is the symmetric half of Java's
                     # FileExchange.startDownload, which hangs Transfer.onFirstChunk on the download
@@ -1815,7 +1809,7 @@ class SyncState:
                     # Only when we are relaying it: an early OFFER means "start pulling from me",
                     # and with no waiter there is nobody it could mean it to. Java's condition is
                     # `relay.hasWaiters(sha)`, which is this same membership test on the accepted
-                    # map (RelayCoordinator.hasWaiters -> relayAccepted.containsKey).
+                    # map: RelayCoordinator.hasWaiters is the same thing as relayAccepted.containsKey.
                     if was_first and pt.sha in self.relay_accepted:
                         self.early_offer_to_waiters(pt.sha, pt)
                 elif typ == T_END:
@@ -1942,14 +1936,14 @@ class SyncState:
             self.latest_item = item
             others = [c for c in self.clients if c is not origin]
 
-        log.info("remote(%s) -> local (%s%s)", origin.device, item,
+        log.info("applied remote(%s) clip locally (%s%s)", origin.device, item,
                  ", forwarded" if forwarded else "")
         if not clipboard_set_text(item.text):
             log.warning("failed to set clipboard")
 
         # Forward to exactly `my peers ∖ to`: the ones the origin could not reach itself. One hop
-        # only — a frame we forward is marked so and nobody forwards it again, which bounds the
-        # depth at two without a TTL — and never back down the link it arrived on.
+        # only: a frame we forward is marked so and nobody forwards it again, which bounds the
+        # depth at two without a TTL, and it never goes back down the link it arrived on.
         if not forwarded and others:
             to_set = set(msg.get("to") or [])
             to_set.add(remote_from)
@@ -1965,12 +1959,12 @@ class SyncState:
                       to=None, from_id: str = "", seq: int = 0):
         """Apply a received file to the local clipboard, and forward it where text would go.
 
-        Forwarding is the same rule as for text (`on_remote_text`), and it has to be: this used to
-        offer the file to *every* other connected device unconditionally, so a peer that already
-        had it got it offered again, and a node with two peers bounced it between them. Now it goes
-        only to peers the OFFER's `to` list did not already cover, carries `forwarded=True` so they
-        pass it no further, and keeps the originator's `from`/`seq` so everyone's seen-set agrees
-        about which file this is.
+        Forwarding is the same rule as for text (`on_remote_text`), and it has to be: unconditional
+        forwarding to every other connected device would re-offer the file to a peer that already
+        had it and bounce it back and forth on a node with two peers. Instead it goes only to peers
+        the OFFER's `to` list did not already cover, carries `forwarded=True` so they pass it no
+        further, and keeps the originator's `from`/`seq` so everyone's seen-set agrees about which
+        file this is.
         """
         h = item.sha256
         with self.lock:
@@ -1979,7 +1973,7 @@ class SyncState:
             self.remote_hashes.add(h)
             self.latest_item = item
             others = [c for c in self.clients if c is not origin]
-        log.info("remote(%s) -> local (%s%s)", origin.device, item,
+        log.info("applied remote(%s) clip locally (%s%s)", origin.device, item,
                  ", forwarded" if forwarded else "")
         self.last_set_path = item.path
         if not clipboard_set_file(item.path, item.mime):
@@ -1999,14 +1993,14 @@ class SyncState:
     def _build_candidate_list(self, offer_from: str, origin_ch: SecureChannel, recipients: set) -> list:
         """Compute the candidate list for relay election, sorted by priority (best first)."""
         cands = []
-        # Me. A PC is type pc on mains, so it wins this order against anything else on the LAN —
+        # Me. A PC is type pc on mains, so it wins this order against anything else on the LAN,
         # which is the intended outcome: in a normal household the relay resolves to the PC every
         # time, the difference from a hardcoded hub being that the role is derived and replaceable.
         #
         # `persistent` comes from relay_opt_out and is not hardcoded true, because this has to agree
         # with what declaration() puts in our HELLO. If it did not, a PC that has opted out would go
         # on electing *itself* while every other node had already written it out of their candidate
-        # lists — so nobody would ask it to relay and it would never ask anyone else either, and the
+        # lists, so nobody would ask it to relay and it would never ask anyone else either, and the
         # file would go the expensive way round with no log line anywhere saying why.
         cands.append((node_id(), priority_key(not self.cfg.relay_opt_out, "pc", "mains")))
         # Origin, if on LAN.
@@ -2037,13 +2031,13 @@ class SyncState:
         return None
 
     def _advance(self, rw: RelayWait, cid: str) -> bool:
-        """Mark `cid` failed and move the walk past it — **once**.
+        """Mark `cid` failed and move the walk past it, **once**.
 
-        Several threads reach this for the same candidate: the ask timeout fires, a RELAY_NO
-        arrives, and the relay's link drops, all within the same second. Each of them used to add
-        one to `next_idx`, so two of them skipped a candidate that had never been asked, and three
-        could walk off the end of a list of viable relays. Returns False when the walk has already
-        moved on, which is the caller's signal to do nothing at all.
+        Several threads can reach this for the same candidate: the ask timeout fires, a RELAY_NO
+        arrives, and the relay's link drops, all within the same second. Advancing `next_idx` only
+        once no matter how many of them arrive is what keeps the walk from skipping a candidate that
+        was never asked, or walking off the end of the candidate list. Returns False when the walk
+        has already moved on, which is the caller's signal to do nothing at all.
         """
         with self.lock:
             if rw.next_idx >= len(rw.candidates) or rw.candidates[rw.next_idx] != cid:
@@ -2062,7 +2056,7 @@ class SyncState:
                 cid = rw.candidates[rw.next_idx]
             origin_id = rw.origin.node_id if rw.origin else None
             if cid == node_id() or cid == origin_id:
-                break                              # reached self or origin — stop walking
+                break                              # reached self or origin, so stop walking
             if cid in rw.failed:
                 if not self._advance(rw, cid):
                     return                         # another thread is already walking
@@ -2076,7 +2070,7 @@ class SyncState:
             try:
                 # `size` lets the candidate refuse immediately when the file is over its own limit.
                 # Without it an over-limit file cost the full RELAY_ASK timeout at every step of
-                # the walk — 30 seconds each, three candidates, a minute and a half of silence
+                # the walk: 30 seconds each, three candidates, a minute and a half of silence
                 # before falling back to the origin.
                 relay_ch.send_json(T_RELAY_ASK, {"sha256": rw.sha256,
                                                  "size": int(rw.offer_hdr.get("size", -1))})
@@ -2100,7 +2094,7 @@ class SyncState:
                 if not self._advance(rw, cid):
                     return
 
-        # Exhausted the candidate list — WANT from origin.
+        # Exhausted the candidate list, so WANT from origin.
         self.relay_waits.pop(rw.sha256, None)
         if rw.origin is None:
             return
@@ -2127,17 +2121,17 @@ class SyncState:
             log.info("relay: declined %s from %s (opted out)", sha[:12], origin.device)
             return
         # Over our own limit: say so now. The asker's walk is driven by our answer, and without
-        # this it had nothing to go on but the 30-second timeout — per candidate.
+        # this it had nothing to go on but the 30-second timeout, per candidate.
         size = int(msg.get("size", -1))
         if size >= 0 and size > self.cfg.max_file_any:
             origin.send_json(T_RELAY_NO, {"sha256": sha, "reason": "refused"})
             log.info("relay: declined %s from %s (%d bytes > our %d limit)", sha[:12],
                      origin.device, size, self.cfg.max_file_any)
             return
-        # PC is on mains — no low-battery refusal.
+        # PC is on mains, so there is no low-battery refusal.
         # A node that is itself waiting declines with `busy`, and that is what caps the depth at one
-        # hop by construction rather than by assumption: views are not always consistent — AP
-        # isolation can let D see C but not B — so D can pick C as its relay while C is itself
+        # hop by construction rather than by assumption: views are not always consistent; AP
+        # isolation can let D see C but not B, so D can pick C as its relay while C is itself
         # waiting on B. Retryable, because when a relay dies its waiters notice at slightly
         # different moments and the node answering `busy` may be about to become the new relay.
         if sha in self.relay_waits:
@@ -2160,7 +2154,7 @@ class SyncState:
             # _finalize calls offer_to_waiters
 
     def on_relay_ok(self, msg: dict, origin: SecureChannel):
-        """Relay accepted our request — wait for its OFFER."""
+        """Relay accepted our request; wait for its OFFER."""
         sha = str(msg.get("sha256", ""))
         rw = self.relay_waits.get(sha)
         if rw is None:
@@ -2168,7 +2162,7 @@ class SyncState:
         log.info("relay: %s accepted relay for %s", short_id(origin.node_id), sha[:12])
 
     def on_relay_no(self, msg: dict, origin: SecureChannel):
-        """Relay declined — walk to the next candidate."""
+        """Relay declined; walk to the next candidate."""
         sha = str(msg.get("sha256", ""))
         reason = str(msg.get("reason", ""))
         rw = self.relay_waits.get(sha)
@@ -2211,13 +2205,13 @@ class SyncState:
 
         A normal OFFER, deliberately: there is no READY frame, because OFFER already means "I have
         this, do you want it", the digest identifies it unambiguously, and reusing it puts the
-        second half of the transfer on the path that already works — data connections, chunking,
+        second half of the transfer on the path that already works: data connections, chunking,
         resume, dedup.
 
         `seq`/`from_id` are the ORIGINATOR's, passed in by whoever still has the Partial that
         carried them. A relay must not restamp them: they are two thirds of the seen-set key, so a
         waiter that also gets the file by the direct route has to compute the same key from both
-        copies — and, just as importantly, the early offer this same relay already sent
+        copies; and, just as importantly, the early offer this same relay already sent
         (`early_offer_to_waiters`) used the originator's pair, so restamping here would make one
         file look like two to the same waiter. Zero means "we never had the header", the case
         `on_relay_ask` hits when the file was already in the cache; `header()` then falls back to
@@ -2247,7 +2241,7 @@ class SyncState:
 
     def early_offer_to_waiters(self, sha: str, pt: Partial):
         """Send OFFER to waiters on the first chunk, so they can start pulling while we are still
-        receiving.  Does NOT remove from relay_accepted — that stays so serve_pull knows to use the
+        receiving.  Does NOT remove from relay_accepted; that stays so serve_pull knows to use the
         streaming path.
 
         This is what makes the relay a relay rather than a store-and-forward hop, and it is worth
@@ -2279,7 +2273,7 @@ class SyncState:
         Waits on the Partial's condition for each missing chunk, with a 60 s per-chunk timeout.
 
         A relay that dies mid-transfer costs the waiter nothing new: it is left holding a .part and
-        its chunk map, and falls back to asking the origin for the ranges it is missing — the
+        its chunk map, and falls back to asking the origin for the ranges it is missing, the
         ordinary resume path, unchanged.
         """
         sent = 0
@@ -2320,7 +2314,7 @@ def parse_clip(payload: bytes, cfg: Cfg):
     # The digest is always over the LF-normalised text, on both platforms and at every point that
     # computes one (Item.sha256 does the same). Line endings are a property of the clipboard the
     # text passed through, not of the clip: Windows hands back CRLF for text that arrived as LF, so
-    # hashing what we hold made the two ends disagree about a clip they both had — every reconnect
+    # hashing what we hold made the two ends disagree about a clip they both had, so every reconnect
     # re-sent it, and each catch-up decided the peer was behind again.
     text = text.replace("\r\n", "\n")
     if msg.get("sha256") != hashlib.sha256(text.encode("utf-8")).hexdigest():
@@ -2341,10 +2335,10 @@ def send_keys(ch: SecureChannel, state: SyncState):
         log.info("could not send key schedule: %s", e)
 
 
-# The shortest gap between two T_KEYS broadcasts. The reconciliation exchange is self-limiting now
-# that `agreed()` is idempotent, so this is the second line of defence rather than the fix — but a
-# broadcast is also a full config write on every peer that reconciles, and nothing legitimate needs
-# to announce twice in five seconds. The rotation clock ticks every 30 s, so it is never affected.
+# The shortest gap between two T_KEYS broadcasts. `agreed()`'s idempotence already keeps the
+# reconciliation exchange self-limiting; this is a second line of defence, because a broadcast is
+# also a full config write on every peer that reconciles, and nothing legitimate needs to announce
+# twice in five seconds. The rotation clock ticks every 30 s, so it is never affected.
 ANNOUNCE_MIN_INTERVAL = 5
 
 
@@ -2380,7 +2374,7 @@ def send_peers(ch: SecureChannel, state: SyncState):
     Excluded because telling B that we are connected to B is noise, and one hop only: we report the
     peers we hold a connection to, never peers we learned about from someone else. That single rule
     is what makes this loop-free without sequence numbers or a TTL, bounds the traffic at one frame
-    per peer per change, and leaves no stale transitive chain to age out — every entry is one hop
+    per peer per change, and leaves no stale transitive chain to age out: every entry is one hop
     from us, and we are one hop from the receiver.
     """
     with state.lock:
@@ -2413,7 +2407,7 @@ def on_peers(ch: SecureChannel, msg: dict, state: SyncState):
 
     Replaced entirely and never merged: the frame is a full snapshot, so a dropped one followed by a
     received one leaves the right state rather than a half-updated view of somebody else's LAN. An
-    empty list is a legitimate value — "I have no other peers right now".
+    empty list is a legitimate value: "I have no other peers right now".
     """
     if not ch.node_id:
         return
@@ -2445,8 +2439,8 @@ def on_keys(ch: SecureChannel, msg: dict, state: SyncState):
     before = state.schedule
     now = int(time.time() * 1000)
     # Which key this connection authenticated with decides whether the peer may hand us a key we
-    # have never seen. A peer on a retired ring key is one we still talk to — the ring is what lets
-    # a device that was switched off for a week back in — but rotation exists on the premise that a
+    # have never seen. A peer on a retired ring key is one we still talk to; the ring is what lets
+    # a device that was switched off for a week back in, but rotation exists on the premise that a
     # superseded key may have leaked, so it does not get to name the next one.
     matched = (ch.matched_secret or b"").hex()
     trusted = bool(matched) and (matched == before.psk or (before.next and matched == before.next))
@@ -2454,9 +2448,10 @@ def on_keys(ch: SecureChannel, msg: dict, state: SyncState):
         log.warning("keys: %s authenticated with a retired key; not adopting its psk", ch.device)
     after = before.reconcile(their_psk, their_next, now, trusted)
     # Compared field by field rather than with `!=`: Schedule equality deliberately ignores
-    # `agreed_at`, and the first agreement — 0 to non-zero, which moves phase() from stranded to
-    # due — is a real change that must reach the file. Everything else about `agreed_at` is noise
-    # and is exactly what used to make the two ends answer each other forever.
+    # `agreed_at`, and the first agreement (0 to non-zero, which moves phase() from stranded to
+    # due) is a real change that must reach the file. Everything else about `agreed_at` is noise
+    # that must not be treated as a change, or the two ends would keep re-announcing to each other
+    # indefinitely.
     changed = (after.psk != before.psk or after.next != before.next or after.old != before.old
                or after.since != before.since or after.retire_at != before.retire_at
                or (before.agreed_at == 0 and after.agreed_at != 0))
@@ -2473,7 +2468,7 @@ def serve(ch: SecureChannel, cfg: Cfg, state: SyncState):
     The frame loop of one control connection, whichever end opened it.
 
     Extracted so the client role reuses it rather than growing a second copy. Nothing in here ever
-    needed to know which side dialled — that is settled by the time the first frame arrives, and a
+    needed to know which side dialled; that is settled by the time the first frame arrives, and a
     peer is a peer from then on. The caller owns registration and cleanup.
 
     :return: the reason the peer gave in BYE, or None if it simply went away. A dialler must not
@@ -2550,9 +2545,9 @@ def client_thread(sock: socket.socket, addr, cfg: Cfg, state: SyncState):
         if len(accepted) > 1:
             secrets = []
             for h in accepted:
-                # One bad entry in the ring used to fail the whole accept, so a single malformed
-                # psk_old refused every inbound connection this device would ever see. Skipping it
-                # costs one peer that happens to hold that key; failing costs all of them.
+                # A single malformed entry must not fail the whole accept: skipping it costs one
+                # peer that happens to hold that key, while failing here would refuse every inbound
+                # connection this device would ever see.
                 try:
                     secrets.append(bytes.fromhex(h))
                 except ValueError:
@@ -2568,18 +2563,18 @@ def client_thread(sock: socket.socket, addr, cfg: Cfg, state: SyncState):
             data_thread(ch, hello, state)
             return
         # Refuse to talk to ourselves. Both ends hold the same PSK, so the handshake succeeds and the
-        # node would enrol itself as a peer — broadcasting to itself and comparing versions against
+        # node would enrol itself as a peer, broadcasting to itself and comparing versions against
         # its own clips. This is the authority for that; the declared own_addresses are only a fast
         # path that catches it before a socket is opened. Nothing else can replace this rule: a name
         # that resolves to this machine looks like any other name, and only the id exchange knows
-        # for certain. It is easy to arrange by accident — the same config copied onto a second PC,
-        # a LAN address typed on the machine that owns it, a name that resolves home — and a device
+        # for certain. It is easy to arrange by accident, such as the same config copied onto a second PC,
+        # a LAN address typed on the machine that owns it, or a name that resolves home, and a device
         # browsing the LAN it advertises on finds itself every single time.
         if ch.node_id and ch.node_id == node_id():
             # Answer the handshake anyway, then close. The dialler is this same process, and the
             # only way it can discover that is to read back an id it recognises. Closing without
             # replying left it blocked in its own read until the timeout, where an EOF is
-            # indistinguishable from a peer that crashed — so it redialled itself forever on the
+            # indistinguishable from a peer that crashed, so it redialled itself forever on the
             # back-off ladder and reported the LAN as failing.
             try:
                 ch.send_json(T_HELLO, {"v": PROTOCOL_VERSION, "clip_ts": 0, "clip_sha": "",
@@ -2612,7 +2607,7 @@ def client_thread(sock: socket.socket, addr, cfg: Cfg, state: SyncState):
         state.catch_up(ch, int(hello.get("clip_ts", 0)), str(hello.get("clip_sha", "")))
         # The return value is not decoration on this path either. The goodbye that says "I am going
         # to sleep" very often arrives here, on a link the peer dialled, while the thread that would
-        # otherwise redial it is the one in dial_thread — which never sees this frame. Dropping the
+        # otherwise redial it is the one in dial_thread, which never sees this frame. Dropping the
         # result on the floor meant the dialler went on waking a phone that had just settled, with
         # no way to find out it had said so.
         state.note_bye(ch, serve(ch, cfg, state))
@@ -2634,27 +2629,27 @@ def data_thread(ch: SecureChannel, hello: dict, state: SyncState):
       pull : the peer sends PULL {ranges}; we stream CHUNKs of a file we have, then END
     Several of these run in parallel for one file, and the end that opened them decides how many.
 
-    This is the *accepting* half. The other half — opening them — is SyncState._pull_worker and
+    This is the *accepting* half. The other half, opening them, is SyncState._pull_worker and
     ._push_worker, and which of the two ends does which is settled by drives_transfer().
     """
     sha = str(hello.get("sha256", ""))
     # `pt` is set by the first CHUNK and by nothing else, so it is both "this connection turned out
-    # to be a pusher" and the Partial on_push_close has to be told about. It used to be looked up
-    # (and counted) here at open, before either mode was known: a waiter opening a connection to
-    # PULL a file we are relaying was counted as a stream pushing that same file at us, and a
-    # connection that never sends a byte then held `pt.streams` above zero — so "the last push
-    # stream is out", which decides the re-ask, was being decided by an unrelated pull.
+    # to be a pusher" and the Partial on_push_close has to be told about. Deliberately not looked up
+    # (and counted) at open, before either mode is known: a waiter opening a connection to PULL a
+    # file we are relaying has no bearing on any push, and counting at open would let such a
+    # connection hold `pt.streams` above zero and confuse "the last push stream is out", which
+    # decides the re-ask, with an unrelated pull.
     #
-    # Counting at open did buy one thing: a stream that has opened but not yet sent is not counted,
-    # so a fast stream finishing first can still look like "all streams closed, file incomplete".
-    # Nothing is lost when it does — the re-ask below is debounced by two seconds and re-checks
-    # pt.streams, and pt.keep() only flushes the map — and the window is one disk read on the
-    # pushing side. The phone's FileExchange.serveData is the same shape.
+    # A stream that has opened but not yet sent is therefore not counted, so a fast stream finishing
+    # first can still look like "all streams closed, file incomplete". Nothing is lost when it does,
+    # because the re-ask below is debounced by two seconds and re-checks pt.streams, and pt.keep() only
+    # flushes the map, and the window is one disk read on the pushing side. The phone's
+    # FileExchange.serveData is the same shape.
     pt = None
     # What this connection turned out to be, when it turned out to be nothing. A PULL identifies a
     # puller for good: it is a relay waiter fetching from us and it has no bearing on a transfer
-    # coming *in*. Everything else that closes without a single CHUNK — including a connection that
-    # said nothing at all — may have been a push that died before its first byte, and that case has
+    # coming *in*. Everything else that closes without a single CHUNK, including a connection that
+    # said nothing at all, may have been a push that died before its first byte, and that case has
     # to reach on_stream_gone or the transfer stalls until the peer's next OFFER.
     was_pull = False
     clean = False
@@ -2706,10 +2701,10 @@ def data_thread(ch: SecureChannel, hello: dict, state: SyncState):
         if pt is not None:
             state.on_push_close(pt, ch, clean)
         elif not was_pull:
-            # Opened, pushed nothing, never said it was pulling: the one path that used to end here
-            # in silence. It is not counted as a stream — that is what on_push_open is for — it only
-            # arms the same debounced re-ask, so eight streams failing before their first byte are
-            # one WANT and not a stall.
+            # Opened, pushed nothing, never said it was pulling: this must not pass in silence. It
+            # is not counted as a stream, since that is what on_push_open is for; it only arms the same
+            # debounced re-ask, so eight streams failing before their first byte are one WANT and
+            # not a stall.
             state.on_stream_gone(sha, ch)
         try:
             ch.sock.close()
@@ -2726,13 +2721,13 @@ def exclusive_bind(sock: socket.socket):
     indeterminate", and that "no special privileges are required to use this option"
     (https://learn.microsoft.com/en-us/windows/win32/winsock/using-so-reuseaddr-and-so-exclusiveaddruse).
     The hijack needs the *first* binder to have opted in, which is exactly what the old
-    `setsockopt(SO_REUSEADDR, 1)` here did — on Windows Server 2003 and later the same table shows
+    `setsockopt(SO_REUSEADDR, 1)` here did; on Windows Server 2003 and later the same table shows
     first=SO_REUSEADDR/wildcard, second=SO_REUSEADDR/wildcard as "Success". So this service was
     holding the door open for the thing the comment was worried about. CPython reached the same
     conclusion and cites the same page: `socket.create_server` sets SO_REUSEADDR only when
     `os.name not in ('nt', 'cygwin')` (Lib/socket.py).
 
-    SO_EXCLUSIVEADDRUSE is not merely the Windows spelling of SO_REUSEADDR — it is stronger than
+    SO_EXCLUSIVEADDRUSE is not merely the Windows spelling of SO_REUSEADDR; it is stronger than
     doing nothing. With no option at all, a second bind to *our* port on a *specific* interface
     still succeeds ("Default wildcard" x "Default specific" = Success in the Server 2003+ table);
     with the exclusive flag on our wildcard bind it is refused. It needs no privilege on anything
@@ -2755,7 +2750,7 @@ def exclusive_bind(sock: socket.socket):
 
 def server_thread(cfg: Cfg, state: SyncState):
     # Retried, and only because of the exclusive flag. The same Microsoft page warns that a socket with
-    # SO_EXCLUSIVEADDRUSE set "cannot necessarily be reused immediately after socket closure" —
+    # SO_EXCLUSIVEADDRUSE set "cannot necessarily be reused immediately after socket closure":
     # if the listener accepted a connection and was then closed, the port stays taken "until the
     # original connection becomes inactive". The settings window restarts this service by killing
     # the old process and starting a new one within the same second, which is precisely that case.
@@ -2779,18 +2774,17 @@ def server_thread(cfg: Cfg, state: SyncState):
                 log.info("port %d still busy (%s); retrying", cfg.port, e)
                 time.sleep(0.5)
                 continue
-            # This used to sit outside the try below, on a daemon thread, under pythonw.exe: the
-            # bind failed, the thread died without a word, and the service went on running with a
-            # clipboard listener, an mDNS advertisement and no listening socket at all. Whatever
-            # else happens, this has to be said out loud.
-            log.error("cannot listen on [::]:%d (%s) — another instance, or the port is taken. Exiting.",
+            # Logged loudly and fatal on purpose: under pythonw.exe there is no console to show a
+            # silent failure, and a service that kept running with a clipboard listener and an mDNS
+            # advertisement but no listening socket would look alive while being useless.
+            log.error("cannot listen on [::]:%d (%s); another instance, or the port is taken. Exiting.",
                       cfg.port, e)
             os._exit(1)
     log.info("listening on [::]:%d", cfg.port)
     # Bounded, and **rejecting rather than queueing**. A bare thread per connection let anyone who
     # could open sockets decide how many threads this process has; a queue would be no better,
     # because it lets an unauthenticated caller put unbounded work in front of a real peer. The
-    # executor caps how many run at once and the semaphore caps how many are admitted at all — a
+    # executor caps how many run at once and the semaphore caps how many are admitted at all, because a
     # ThreadPoolExecutor's own queue is unbounded, so the cap has to be taken before submitting.
     # The ceiling matches Server.MAX_INBOUND on the Android side. A handful of peers hold one
     # control link each plus a few data connections during a transfer, so it is generous for the
@@ -2808,9 +2802,9 @@ def server_thread(cfg: Cfg, state: SyncState):
         try:
             sock, addr = srv.accept()
         except OSError as e:
-            # A transient accept failure — out of descriptors, a connection reset between the SYN
-            # and the accept — used to kill this thread, and with it every future inbound
-            # connection, silently. The service went on running and answering nothing.
+            # Caught rather than left to propagate: a transient accept failure, such as running out of descriptors or
+            # a connection reset between the SYN and the accept, must not kill this loop, or every
+            # future inbound connection dies with it while the service looks like it is still running.
             log.warning("accept failed: %s", e)
             time.sleep(1)
             continue
@@ -2842,7 +2836,7 @@ def on_lan(sock: socket.socket) -> bool:
     """
     Is the far end of this socket on a local network?
 
-    Decides which of the two file-size limits applies, so it has to be decided by the dialler — an
+    Decides which of the two file-size limits applies, so it has to be decided by the dialler; an
     inbound client tells us, but there is nobody to ask on the way out.
 
     Private, unique-local and link-local addresses are LAN; everything else is treated as the
@@ -2864,24 +2858,24 @@ def dial_thread(peer: str, cfg: Cfg, state: SyncState):
     """
     Keep one outbound connection to one listed peer.
 
-    This is the client role the PC did not have: it only ever accepted before, which is why a PC
-    could not reach a phone and two PCs could not find each other at all. One thread per peer, with
-    its own back-off, because a peer that is switched off must not slow down the redial of one that
-    is merely rebooting. Android arrived at the same shape from the other direction, having had one
-    shared back-off that any single dead target could hold everything else behind.
+    This gives the PC an outbound client role symmetric to Android's: without it, only whichever side
+    happens to accept can ever find the other, so a PC could not reach a phone and two PCs could not
+    find each other at all. One thread per peer, with its own back-off, because a peer that is
+    switched off must not slow down the redial of one that is merely rebooting -- a shared back-off
+    would let any single dead target hold up everything else.
 
     A connection that comes up is an ordinary client of `state`, indistinguishable from an inbound
     one from there on: the same SecureChannel, the same registry, the same broadcast. Only the
     handshake differs, and only in which half of the nonce exchange it performs.
     """
     # Checked once, not each round: `own` is one of the fields of cfg that never changes while the
-    # process runs (only the three key fields do — see Cfg), and Apply restarts the service anyway.
+    # process runs (only the three key fields do; see Cfg), and Apply restarts the service anyway.
     if is_self(peer, cfg.own):
         log.info("not dialling %s: that is this PC", peer)
         return
     backoff = DIAL_RETRY_MIN
     # The node the last handshake on this target reached. The link is gone by the time this loop
-    # asks what its silence means, so the id has to outlive it — it is the only handle on
+    # asks what its silence means, so the id has to outlive it, being the only handle on
     # state.idle_peers, which is keyed by peer and not by target precisely because a target is not
     # who you reach.
     last_peer_id = None
@@ -2897,13 +2891,12 @@ def dial_thread(peer: str, cfg: Cfg, state: SyncState):
             # even if we are behind by a rotation, it will still let us in.
             #
             # Read here, inside the loop and inside the lock, and deliberately not hoisted out: this
-            # thread outlives any number of rotations, and reading it once at start-up is precisely
-            # how the PC used to go on offering a key the rest of the network had retired.
+            # thread outlives any number of rotations, and reading it once at start-up would leave
+            # it offering a key the rest of the network has since retired.
             with state.lock:
                 psk = cfg.psk
             ch = SecureChannel(sock, psk, cfg.max_frame, initiator=True)
-            # The dialler declares first and the accepter answers — the same order as before, now
-            # with the PC on the other end of it.
+            # The dialler declares first and the accepter answers.
             with state.lock:
                 my_clip_ts, my_clip_sha = state.clip_ts, state.clip_sha
             ch.send_json(T_HELLO, {"v": PROTOCOL_VERSION, "lan": lan,
@@ -2921,7 +2914,7 @@ def dial_thread(peer: str, cfg: Cfg, state: SyncState):
             if refusal is not None:
                 # This name reaches a peer another route already holds. Say so and defer below,
                 # rather than connecting and handshaking every back-off interval to re-learn it.
-                log.info("%s is %s [%s] by another name — closing this link", peer, ch.device,
+                log.info("%s is %s [%s] by another name, closing this link", peer, ch.device,
                          short_id(ch.node_id))
                 ch.bye(refusal)
                 defer = ch.node_id
@@ -2940,7 +2933,7 @@ def dial_thread(peer: str, cfg: Cfg, state: SyncState):
                 state.note_bye(ch, reason)
                 if reason == BYE_IDLE:
                     # It has gone to sleep on purpose, and it dials out the moment its screen comes
-                    # on — this PC is always listening, so waiting costs nothing and a redial costs a
+                    # on, so this PC is always listening; waiting costs nothing and a redial costs a
                     # wake-up on a phone that has just settled.  Not the deferral path either: there
                     # is no winning link to wait on, so that loop would find nothing holding the node
                     # and dial again at its poll interval.  The back-off itself is set below, from
@@ -2948,7 +2941,7 @@ def dial_thread(peer: str, cfg: Cfg, state: SyncState):
                     # arrived on an inbound link this thread knows nothing about.
                     log.info("%s is idle; leaving it alone until it comes back", peer)
                 elif reason is not None:
-                    # It closed us deliberately — a duplicate link, most often, because it reached
+                    # It closed us deliberately, most often a duplicate link, because it reached
                     # us by another route as well. Redialling would rebuild exactly what it just
                     # discarded.
                     defer = ch.node_id
@@ -2956,7 +2949,7 @@ def dial_thread(peer: str, cfg: Cfg, state: SyncState):
             log.info("dial %s: %s", peer, e)
             # This is the one branch that is a *fault*: a timeout, a refusal, a name that will not
             # resolve, or a link that died without saying anything. A device that will not answer at
-            # all is not merely asleep, so any idle claim against it is stale and has to go —
+            # all is not merely asleep, so any idle claim against it is stale and has to go;
             # otherwise a peer that was switched off while idle would sit at the maximum back-off
             # for the life of this process, with the last thing it ever said standing in for the
             # real reason it is unreachable.
@@ -2972,7 +2965,7 @@ def dial_thread(peer: str, cfg: Cfg, state: SyncState):
         if ch is not None and ch.superseded:
             defer = ch.node_id          # closed from the accept side as the duplicate; see above
         if last_peer_id and state.is_idle(last_peer_id):
-            # It said it was going to sleep — asked of idle_peers and not of this link, because the
+            # It said it was going to sleep, as asked of idle_peers and not of this link, because the
             # goodbye may have arrived on an inbound one this thread never sees. A long wait, not
             # silence: suppressing the dial outright would be cheaper still and would leave a peer
             # switched off while idle reading as idle for ever, since the only things that clear the
@@ -2981,9 +2974,9 @@ def dial_thread(peer: str, cfg: Cfg, state: SyncState):
             backoff = DIAL_RETRY_MAX
         if defer:
             # A deferral, not a surrender. This target reaches a peer that is already connected
-            # by another route, so stop dialling it — but only while that route is up. Returning
-            # here instead, as this used to, meant a name that lost the tiebreak once was never
-            # dialled again, and the peer became unreachable the moment the winning route died.
+            # by another route, so stop dialling it, but only while that route is up. Returning
+            # outright here instead would leave a name that lost the tiebreak once never dialled
+            # again, and the peer unreachable the moment the winning route died.
             log.info("%s: deferring while %s is connected another way", peer, short_id(defer))
             # Sleep first, so a winner that dies in the same instant cannot turn this into a spin.
             while True:
@@ -3002,8 +2995,8 @@ def client_role_thread(cfg: Cfg, state: SyncState):
     One dialler per listed peer.
 
     Still only the *listed* ones: this PC advertises but does not browse, so it finds a phone on the
-    LAN by being found rather than by looking. That is enough for the pair to connect — only one of
-    two nodes has to do the finding — and it is the remaining asymmetry between the two platforms.
+    LAN by being found rather than by looking. That is enough for the pair to connect, since only one of
+    two nodes has to do the finding, and it is the remaining asymmetry between the two platforms.
     """
     for peer in cfg.peers:
         threading.Thread(target=dial_thread, args=(peer, cfg, state), daemon=True,
@@ -3046,7 +3039,7 @@ def local_addresses():
             continue
         # 169.254/16 means the adapter never got a lease. Nothing can reach us there, and it would
         # otherwise be advertised *first*: the ranking below only demotes link-local for IPv6, so
-        # an APIPA address counts as a plain IPv4 one. (fe80::/10 is kept but ranked last — it is
+        # an APIPA address counts as a plain IPv4 one. (fe80::/10 is kept but ranked last; it is
         # at least usable by a device on the same segment.)
         if ip.version == 4 and ip.is_link_local:
             continue
@@ -3064,11 +3057,9 @@ def mdns_thread(cfg: Cfg):
     """
     Advertise _clipsync._tcp on every network this PC is attached to.
 
-    One cadence now, on one thread: "what are my addresses?" is local and instant, so it is asked
-    every MDNS_SCAN seconds and is the only thing that drives the advertisement. The second thread
-    that used to run beside it asked whether another PC owned a listed address, and it is gone with
-    the hub it was arbitrating (see the note above local_addresses). The advertising path no longer
-    waits on a resolver.
+    One cadence, on one thread: "what are my addresses?" is local and instant, so it is asked every
+    MDNS_SCAN seconds and is the only thing that drives the advertisement. There is no hub to
+    arbitrate against and nothing here waits on a resolver.
     """
     try:
         from zeroconf import IPVersion, ServiceInfo, Zeroconf
@@ -3076,8 +3067,8 @@ def mdns_thread(cfg: Cfg):
         log.warning("mDNS disabled: 'zeroconf' not installed (pip install zeroconf)")
         return
     host = node_name()
-    # The device name, and nothing added to it. Android advertises Build.MODEL — the same string it
-    # puts in HELLO's `device` — while this end advertised "ClipSync on HOSTNAME", so one LAN showed
+    # The device name, and nothing added to it. Android advertises Build.MODEL, the same string it
+    # puts in HELLO's `device`, while this end advertised "ClipSync on HOSTNAME", so one LAN showed
     # two naming conventions and the browse results did not look like they came from one product.
     #
     # Unadorned is also the correct half of the disagreement to keep. The service type already says
@@ -3123,7 +3114,7 @@ def mdns_thread(cfg: Cfg):
         nonlocal zc, info, published
         again = published is not None       # read it before stop() clears it
         # A Zeroconf instance binds its sockets when it is created, so an adapter that comes up
-        # later is invisible to it — re-registering on the old instance would keep announcing on
+        # later is invisible to it, so re-registering on the old instance would keep announcing on
         # the old sockets only. Recreating it is what makes a new network actually see us.
         stop()
         try:
@@ -3148,7 +3139,7 @@ def mdns_thread(cfg: Cfg):
             addrs = local_addresses()
             # Announce only once two consecutive scans agree. The scheduled task fires at logon,
             # when adapters are still coming up and the first enumeration is usually short a few
-            # addresses — announcing that set would advertise a PC that is not reachable at some of
+            # addresses; announcing that set would advertise a PC that is not reachable at some of
             # them, and would miss the network that appears a second later. Waiting for the list to
             # settle costs one scan when the network is already up, and exactly as long as it takes
             # when it is not.
@@ -3163,7 +3154,7 @@ def mdns_thread(cfg: Cfg):
 
 
 # ----------------------------------------------------------------------------- key rotation scheduler
-ROTATION_CHECK_INTERVAL = 30   # seconds — same cadence as Android's heartbeat
+ROTATION_CHECK_INTERVAL = 30   # seconds, same cadence as Android's heartbeat
 
 
 def check_rotation(state: SyncState):
@@ -3209,12 +3200,12 @@ def heartbeat_thread(state: SyncState):
 
     Two things were missing and they are the same thing. This end answered PINGs and never sent
     any, so the four-timestamp offset calculation in the PONG branch of `serve()` could not run at
-    all — between two PCs the clock offset was permanently zero, and version comparison then simply
+    all; between two PCs the clock offset was permanently zero, and version comparison then simply
     believes whichever machine's clock is ahead. And a link that dies without closing (a cable
     pulled, a laptop lid shut) was only noticed when READ_TIMEOUT expired ninety seconds later; a
     ping that fails is a dead link found in thirty.
 
-    prune rides along because it had exactly one caller — receiving a file — so a PC that only ever
+    prune rides along because it had exactly one caller, receiving a file, so a PC that only ever
     sends kept everything for ever, and `keep_hours` was a setting that did nothing on it.
     """
     while True:
@@ -3260,8 +3251,8 @@ _MUTEX = []            # the single-instance handle, held for the life of the pr
 def single_instance() -> bool:
     """Take the named mutex that says "the ClipSync service is running here".
 
-    Four things can start this service — the scheduled task at logon, the installer, the settings
-    window's Apply, and a person double-clicking it — and two of them running at once is not
+    Four things can start this service: the scheduled task at logon, the installer, the settings
+    window's Apply, and a person double-clicking it, and two of them running at once is not
     harmless. Both register a clipboard listener, so every copy is read twice and broadcast twice;
     both build a FileCache over the same folder, so each one's prune deletes the other's `.part`
     files mid-transfer. The listening socket is no longer enough of a guard now that it is
@@ -3270,7 +3261,7 @@ def single_instance() -> bool:
     Returns False when another instance holds it. A failure to create one at all is not treated as
     a refusal: being unable to tell is not a reason not to run.
 
-    This is a *coordination* check, not a security boundary — Microsoft's CreateMutexW page points
+    This is a *coordination* check, not a security boundary: Microsoft's CreateMutexW page points
     out that anyone can create the name first and keep an application from starting. The thing that
     actually guarantees one listener is the exclusive bind in server_thread(); the mutex only exists
     so that the second instance stops before it has registered a clipboard listener and started
@@ -3286,7 +3277,7 @@ def single_instance() -> bool:
     # creation of these objects"
     # (https://learn.microsoft.com/en-us/windows/win32/termserv/kernel-object-namespaces). A mutex is
     # neither, so an ordinary interactive user can create one in Global\ and the fallback could only
-    # ever fire for some *other* reason — in which case dropping to a per-session name would answer a
+    # ever fire for some *other* reason, in which case dropping to a per-session name would answer a
     # different question than the one being asked. And the question is machine-wide: the port is, the
     # config file is, files_dir is. Two sessions on one PC (fast user switching) are exactly the case
     # the per-session namespace would have hidden.
@@ -3294,18 +3285,18 @@ def single_instance() -> bool:
     # get_last_error(), not GetLastError(): kernel32 is loaded with use_last_error=True, so ctypes
     # keeps a private copy of the thread's last-error and hands it back here
     # (https://docs.python.org/3/library/ctypes.html#ctypes.get_last_error). It has to be read
-    # immediately after the call, before any other ctypes call can overwrite it — hence the next line.
+    # immediately after the call, before any other ctypes call can overwrite it; hence the next line.
     h = kernel32.CreateMutexW(None, False, "Global\\ClipSyncService")
     err = ctypes.get_last_error()
     if h:
         # "If the mutex is a named mutex and the object existed before this function call, the
         # return value is a handle to the existing object, and GetLastError returns
-        # ERROR_ALREADY_EXISTS" — so a non-NULL handle plus that code is the whole test.
+        # ERROR_ALREADY_EXISTS", so a non-NULL handle plus that code is the whole test.
         if err == error_already_exists:
             return False
         # Held for the life of the process and never released: bInitialOwner is False, so this
         # process never *owns* the mutex, it merely keeps the named object alive. No leak is
-        # possible across runs — "the system closes the handle automatically when the process
+        # possible across runs, since "the system closes the handle automatically when the process
         # terminates. The mutex object is destroyed when its last handle has been closed"
         # (https://learn.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-createmutexw),
         # which covers the crash and the kill as well as the tidy exit. The list is only here to
@@ -3364,14 +3355,13 @@ def main():
     cfg = Cfg()
     state = SyncState(cfg, FileCache(cfg))
     # First line of every run. The id is per-process (see clipsync_node), so this is what ties every
-    # later "client <id> connected" in this file to the session it belongs to — the thing the old
-    # persisted id used to provide for free, and the only thing worth keeping from it.
+    # later "client <id> connected" in this file to the session it belongs to.
     log.info("ClipSync %s, node %s (protocol %d)", node_name(), short_id(node_id()), PROTOCOL_VERSION)
     if Image is None:
         log.info("Pillow not installed: images are still exchanged as files; install 'pillow' to paste them as pictures")
 
     # A key with no recorded start date is 55 years old by arithmetic and zero seconds old by
-    # intent, and schedule_from_raw resolves that to "now" — in memory only, so every restart reset
+    # intent, and schedule_from_raw resolves that to "now" in memory only, so every restart reset
     # the clock and a rotation window that needs 48 hours was never reached. Write it down once.
     # Here and not in clipsync_config, which must stay free of side effects.
     if cfg.psk_hex and int(read_config().get("psk_since", 0) or 0) == 0:
@@ -3379,7 +3369,7 @@ def main():
         log.info("key age was unknown; recorded as starting now")
     startup_report(cfg, state)
 
-    # The rotation thread runs unconditionally — the check inside is what skips when rotate is off.
+    # The rotation thread runs unconditionally; the check inside is what skips when rotate is off.
     threading.Thread(target=rotation_thread, args=(state,), daemon=True, name="clipsync-rotation").start()
     threading.Thread(target=heartbeat_thread, args=(state,), daemon=True, name="clipsync-heartbeat").start()
     # BYE on the way out, for every ordinary exit. Registered before the network starts so that a
@@ -3399,7 +3389,7 @@ def main():
             client_role_thread(cfg, state)
 
     # Reading the clipboard can mean writing a screenshot to disk, and handling the result means
-    # hashing a file that may be 100 MB — none of which belongs on the thread that pumps the
+    # hashing a file that may be 100 MB, none of which belongs on the thread that pumps the
     # window's messages. A listener window that stops answering is one Windows may drop from the
     # clipboard chain, and it would stall every other message besides. So the callback does the one
     # thing it must do quickly: note that something changed.
@@ -3447,7 +3437,7 @@ def main():
 
     # Only now: a device that connects can immediately be sent a clip, and answering one means
     # writing this PC's clipboard, so the listener window has to exist first. The network side
-    # needs no delay of its own — the listening socket is a wildcard bind and serves interfaces
+    # needs no delay of its own; the listening socket is a wildcard bind and serves interfaces
     # that appear later anyway, and the mDNS advertiser waits for the address list to settle.
     # start_delay remains for the one case that still wants it: a PC whose DDNS record is published
     # by something else at boot, where dialling before the record exists costs a full back-off
@@ -3469,10 +3459,10 @@ def main():
 if __name__ == "__main__":
     # The same `sys.stderr is None` that the handler list above is built around has a second
     # consequence, and this is it: the default excepthook prints an uncaught traceback to
-    # sys.stderr, and under pythonw.exe there is nowhere for it to go. Every `raise` in main() —
-    # the three WinError()s around the listener window, an unreadable config — used to end the
-    # process leaving nothing behind but a missing service, which is the exact failure mode the
-    # bind error above was given its own log line to avoid. One catch-all puts them in the file.
+    # sys.stderr, and under pythonw.exe there is nowhere for it to go. Left uncaught, any `raise` in
+    # main(), such as the WinError()s around the listener window or an unreadable config, would end the
+    # process leaving nothing behind but a missing service. One catch-all puts them in the file
+    # instead.
     #
     # Re-raised afterwards, so nothing about the exit code or a console run changes; the only
     # effect is that the traceback exists somewhere.

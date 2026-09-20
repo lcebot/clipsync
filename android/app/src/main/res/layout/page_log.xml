@@ -14,7 +14,7 @@
     android:visibility="gone">
 
     <!-- textSize is 12sp, not 11, and it is a number rather than a type-scale token on purpose.
-         The log wants density — a wrapped timestamp costs the reader more than a small font does —
+         The log wants density; a wrapped timestamp costs the reader more than a small font does,
          but 11sp was below the size at which text is legible to anyone who needs it to be, and it
          bought one sp of width. 12sp is that floor. A ?attr/textAppearance* token would bring a font
          family and a letter spacing with it, and a log has to stay monospace for its columns to line

@@ -22,18 +22,18 @@ import java.util.Set;
  * An editable list of addresses: a column of {@code item_peer} rows, each with its own trailing
  * remove icon and its own error, plus the "Add address" button that grows it.
  *
- * <p>Two of these exist on the Settings page — the Direct connections list and this device's own
+ * <p>Two of these exist on the Settings page: the Direct connections list and this device's own
  * addresses, the names and IPs by which other devices reach this one, which is how a configured
- * target is recognised as being this device rather than a peer — and they are one class used twice
+ * target is recognised as being this device rather than a peer, and they are one class used twice
  * rather than two copies of the same ninety lines. They accept exactly the same things and must not
  * drift into accepting different ones; that is the same reason {@link Config#checkAddresses} takes
  * its differences as parameters.
  *
  * <p>What actually differs between the two is small and is passed in:
  * <ul>
- *   <li><b>{@code allowEmpty}</b> — the peer list needs an entry while its switch is on; the own
+ *   <li><b>{@code allowEmpty}</b>: the peer list needs an entry while its switch is on; the own
  *       list never does.</li>
- *   <li><b>{@code enabled}</b> — only the peer list has a switch above it, and a disabled list still
+ *   <li><b>{@code enabled}</b>: only the peer list has a switch above it, and a disabled list still
  *       shows its contents rather than forgetting them.</li>
  *   <li>the set of addresses an entry may not be, which is how "that is this device" is reported on
  *       the row that is wrong rather than on the list as a whole.</li>
@@ -121,7 +121,7 @@ final class AddressList {
      *
      * <p>While the list is showing, a blank row is an error the user can see and fix; once hidden it
      * could neither be seen nor fixed, so refusing to save on it would be a dead end. Removing it
-     * instead keeps the stored value clean. Filled rows stay — preserving them is the entire point of
+     * instead keeps the stored value clean. Filled rows stay, because preserving them is the entire point of
      * having a switch rather than deleting the list.
      */
     private void dropBlankRows() {
@@ -180,7 +180,7 @@ final class AddressList {
 
     // ------------------------------------------------------------------ validation
     /**
-     * Per row, with a repeat reported on the second one — the first is not wrong, and marking both
+     * Per row, with a repeat reported on the second one, since the first is not wrong, and marking both
      * would leave the user with no clue which to change.
      *
      * @param forbidden addresses an entry may not be (this device's own), reported on the row

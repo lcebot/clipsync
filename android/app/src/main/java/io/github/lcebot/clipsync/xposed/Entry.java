@@ -16,13 +16,12 @@ import io.github.libxposed.api.XposedModuleInterface;
 
 /**
  * libxposed API 102 entry (META-INF/xposed/java_init.list; scope.list names system_server as
- * "system"). The only entry: a classic-API twin lived here as a never-declared fallback and is
- * gone, along with the compile-time dependency it alone needed. See {@link Common} for what the
- * hooks do — that is where the logic lives, and always did.
+ * "system"). The only entry point this module declares. See {@link Common} for what the hooks
+ * do; that is where the logic lives.
  *
  * <p>Hooks are kept to the minimum: only the overloads whose signature we actually rely on are
  * intercepted (package name at the expected argument index), every interceptor is a couple of
- * comparisons, and nothing is deoptimized — LSPosed's hooking already takes care of inlined
+ * comparisons, and nothing is deoptimized, since LSPosed's hooking already takes care of inlined
  * callees on the releases this targets.
  */
 public class Entry extends XposedModule {
@@ -45,7 +44,7 @@ public class Entry extends XposedModule {
         install(param.getClassLoader());
     }
 
-    /** Parameter {@code i} of {@code m} is a String — the overload shape our interceptors assume. */
+    /** Parameter {@code i} of {@code m} is a String, which is the overload shape our interceptors assume. */
     private static boolean stringAt(Method m, int i) {
         return m.getParameterCount() > i && m.getParameterTypes()[i] == String.class;
     }
@@ -84,7 +83,7 @@ public class Entry extends XposedModule {
             Method setter = Common.clipSetter(svc);
             if (setter != null) {
                 final int argc = setter.getParameterCount();
-                // Resolved once, here, from the overload we actually hooked — not re-derived per
+                // Resolved once, here, from the overload we actually hooked, not re-derived per
                 // call and never guessed from the argument VALUES. See Common.sourceArg.
                 final int clipAt = Common.clipArg(setter), sourceAt = Common.sourceArg(setter);
                 hook(setter).setId("push").setExceptionMode(ExceptionMode.PROTECTIVE)
@@ -97,7 +96,7 @@ public class Entry extends XposedModule {
                         });
                 // The indices are in the log on purpose: a ROM with a reshaped setter shows up as
                 // "clip -1" or "src -1" in one line, rather than as a clipboard that quietly echoes.
-                hooked.add(setter.getName() + " -> push (clip " + clipAt + ", src " + sourceAt + ")");
+                hooked.add(setter.getName() + " hooked to push (clip " + clipAt + ", src " + sourceAt + ")");
             }
         } catch (Throwable t) {
             both(Log.ERROR, "clipboard hook failed", t);
@@ -115,7 +114,7 @@ public class Entry extends XposedModule {
                             return r;
                         });
             }
-            hooked.add("ProcessRecord.<init> -> shouldNotFreeze");
+            hooked.add("ProcessRecord.<init> hooked to shouldNotFreeze");
         } catch (Throwable t) {
             both(Log.WARN, "ProcessRecord hook failed: " + t, null);
         }

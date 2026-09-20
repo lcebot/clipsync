@@ -14,7 +14,7 @@ import java.util.List;
  *
  * <p>The protocol it implements, in one paragraph: a file is announced by <b>hash</b>
  * (OFFER), never by sending it. The receiver answers HAVE if it already holds those bytes, SKIP if
- * it will not take them, or WANT with the chunk ranges it is missing — which is what makes a
+ * it will not take them, or WANT with the chunk ranges it is missing, which is what makes a
  * transfer resumable, because "missing" is read from a chunk map on disk and survives a dropped
  * link, a reboot and an ABORT. The bytes then cross on separate data connections, several in
  * parallel, opened by exactly one of the two ends, and the transfer finishes with END or ABORT.
@@ -22,7 +22,7 @@ import java.util.List;
  * <p>What lives here is therefore: the two small registries of what can still be served
  * ({@code offered}, {@code sent}), the one of what is being received ({@code partials}), the count
  * of streams pushing at us ({@code pushing}), the headers files arrived with ({@code inboundOffers}),
- * the at-most-one-each-way transfer slots, and the three server-side loops — serving a pull, serving
+ * the at-most-one-each-way transfer slots, and the three server-side loops: serving a pull, serving
  * a relayed pull, and receiving a push. It also owns the debounced re-ask ({@link #scheduleReask}),
  * which is what stops a peer-driven download that ran out of streams from waiting for the peer's
  * next OFFER. It also owns {@link RelayCoordinator}, because a relay is a file transfer seen from
@@ -31,14 +31,14 @@ import java.util.List;
  * <p><b>What it does not do.</b> It never reads or writes the system clipboard and never decides
  * what this device "holds": a file that finishes downloading is handed to {@link ClipboardBridge},
  * which decides whether it is news. It does not know about dialling, back-off or status. It does not
- * own the peer map — it asks {@link Host} for links, so that "which peers exist" has one answer in
+ * own the peer map; it asks {@link Host} for links, so that "which peers exist" has one answer in
  * one place.
  *
  * <p><b>Locking.</b> It does <em>not</em> take the device lock, and that is the whole point of
  * routing every clip-state question through {@link ClipboardBridge} ({@code isEcho},
  * {@code adoptFile}, {@code requeue}, {@code seen}): those methods take the lock themselves, so the
- * one invariant that spans the two classes — "what this device holds" is consistent with "what it
- * last put on the clipboard" — is still enforced by one monitor rather than by two that have to be
+ * one invariant that spans the two classes, that "what this device holds" is consistent with "what it
+ * last put on the clipboard", is still enforced by one monitor rather than by two that have to be
  * taken in the right order. Inside here, each registry keeps the monitor it always had
  * ({@code offered} and {@code sent} share one, {@code inboundOffers} and {@code partials} have their
  * own) and the transfer slots are atomics; no two of them are ever held at once.
@@ -55,7 +55,7 @@ final class FileExchange implements RelayCoordinator.Host {
         /** The live link to one peer id, or null. */
         Link linkTo(String peerId);
 
-        /** Direct ∪ indirect peer ids — the {@code to} set an OFFER header carries. */
+        /** Direct ∪ indirect peer ids: the {@code to} set an OFFER header carries. */
         java.util.Set<String> knownPeerIds();
     }
 
@@ -94,7 +94,7 @@ final class FileExchange implements RelayCoordinator.Host {
         return c.lanPeer ? cfg.maxFileBytesLocal : cfg.maxFileBytes;
     }
 
-    // ---- files: OFFER (hash) -> WANT {ranges} / HAVE / SKIP -> chunks over parallel data connections ----
+    // ---- files: an OFFER (hash) is answered with WANT {ranges}, HAVE, or SKIP, then chunks flow over parallel data connections ----
     /** Files we have offered and may be asked for (bounded; nothing is held in memory, only URIs). */
     private final java.util.LinkedHashMap<String, Files.Ref> offered = new java.util.LinkedHashMap<>();
     /** Files fully uploaded recently; a late re-WANT (lost stream on the PC side) is served from here. */
@@ -129,7 +129,7 @@ final class FileExchange implements RelayCoordinator.Host {
     }
 
     /**
-     * The transfers in flight — at most one each way for the whole device, still.
+     * The transfers in flight: at most one each way for the whole device, still.
      *
      * <p>Atomic references, and installed with {@code getAndSet}, because "at most one" stopped being
      * enforced by there being one peer. Two dialer threads can reach {@code onWant} for different
@@ -181,7 +181,7 @@ final class FileExchange implements RelayCoordinator.Host {
     // ------------------------------------------------------------------ sending a file
 
     /**
-     * Announce one file on one link — the file half of "put this clip on that peer".
+     * Announce one file on one link: the file half of "put this clip on that peer".
      *
      * <p>Two-step: the hash goes out first and the bytes only follow if the peer answers WANT. A
      * file over this link's limit is not announced at all, and is deliberately <b>not</b> marked as
@@ -199,7 +199,7 @@ final class FileExchange implements RelayCoordinator.Host {
         clip.markSent(f.sha256);
         rememberOffered(f.sha256, f);
         c.sendJson(Connection.T_OFFER, header(f, false));
-        Logger.i("local -> remote: offered " + f);
+        Logger.i("offered local file to remote: " + f);
     }
 
     /**
@@ -246,7 +246,7 @@ final class FileExchange implements RelayCoordinator.Host {
      * filesystem, so it is treated as hostile. {@code File.getName()} alone is not enough on
      * Android: a backslash is an ordinary character here, so {@code "..\..\evil.so"} survived it
      * untouched and went to MediaStore as a display name. Same rules as the Windows side's
-     * {@code safe_name}, deliberately — the two ends must reduce the same input to the same string,
+     * {@code safe_name}, deliberately, because the two ends must reduce the same input to the same string,
      * or a file's name depends on which device received it.
      */
     static String safeName(String name) {
@@ -254,7 +254,7 @@ final class FileExchange implements RelayCoordinator.Host {
         // Last segment taken by hand rather than with File.getName(), which differs from Python's
         // os.path.basename on a name ending in a separator: "a/b/" is "b" to one and "" to the
         // other, so the same OFFER would land under two different names depending on which end
-        // received it. Splitting explicitly makes both "" -> clip.
+        // received it. Splitting explicitly makes both cases resolve to "clip".
         String raw = name.replace('\\', '/');
         int cut = raw.lastIndexOf('/');
         String s = (cut < 0 ? raw : raw.substring(cut + 1)).trim();
@@ -278,8 +278,8 @@ final class FileExchange implements RelayCoordinator.Host {
         long size = hdr.optLong("size", -1);
         long seq = hdr.optLong("seq", 0);
         // A file's place in the seen-set, keyed by the sender's seq the way a clip is keyed by its
-        // ts. An OFFER that has already been dealt with is dropped outright — not answered, not
-        // written to the clipboard, not passed on — which is what stops a device coming back from a
+        // ts. An OFFER that has already been dealt with is dropped outright: not answered, not
+        // written to the clipboard, not passed on, which is what stops a device coming back from a
         // week offline and re-offering last week's file into a network that has moved on.
         if (clip.seen(seq, hdr.optString("from", ""), sha)) {
             Logger.i("offer: " + name + " already seen, ignored");
@@ -287,7 +287,7 @@ final class FileExchange implements RelayCoordinator.Host {
         }
         if (hdr.optBoolean("forwarded", false))
             Logger.i("offer: " + name + " (forwarded)");
-        // Remembered because the decision it feeds — whether to pass this file on, and to whom —
+        // Remembered because the decision it feeds, whether to pass this file on and to whom,
         // is taken much later, in finishDownload, by which time the frame that carried it is gone.
         synchronized (inboundOffers) {
             inboundOffers.put(sha, hdr);
@@ -310,7 +310,7 @@ final class FileExchange implements RelayCoordinator.Host {
             // forwarded flag and the seen-set exist to stop, and it would walk straight past both,
             // because this branch returns before either is consulted. HAVE + touch is the whole of
             // what the peer needs. Python does the same (clipsync.py, on_offer's cache-hit arm).
-            Logger.i("offer: " + name + " -> already cached, re-used " + cached);
+            Logger.i("offer: " + name + " already cached, re-used " + cached);
             cache.prune(cfg.keepHours, cfg.keepMaxBytes, cached, inFlight());
             return;
         }
@@ -318,7 +318,7 @@ final class FileExchange implements RelayCoordinator.Host {
         if (size < 0 || size > limit) {
             String why = size + " bytes > " + limit + " (" + (c.lanPeer ? "LAN" : "internet") + " limit)";
             c.sendJson(Connection.T_SKIP, Frames.shaMsg(sha).put("reason", why));
-            Logger.i("offer: " + name + " -> skipped, " + why);
+            Logger.i("offer: " + name + " skipped, " + why);
             return;
         }
 
@@ -350,7 +350,7 @@ final class FileExchange implements RelayCoordinator.Host {
         }
         List<int[]> missing = p.missing();
         if (missing.isEmpty()) {
-            // Already complete on disk — ask for nothing. An empty range list means "everything" to
+            // Already complete on disk, so ask for nothing. An empty range list means "everything" to
             // the peer, so sending it would re-stream the whole file to be discarded chunk by chunk.
             finishDownload(l, p);
             c.sendJson(Connection.T_HAVE, Frames.shaMsg(sha));
@@ -362,7 +362,7 @@ final class FileExchange implements RelayCoordinator.Host {
         wantOrigin.put(sha, l);
         p.resetReasks();
         c.sendJson(Connection.T_WANT, Frames.shaMsg(sha).put("ranges", rangesJson(missing)));
-        Logger.i("offer: " + name + " (" + size + " bytes) -> want " + (p.haveCount() == 0 ? "all" : (p.n - p.haveCount()) + "/" + p.n + " chunks (resume)"));
+        Logger.i("offer: " + name + " (" + size + " bytes), want " + (p.haveCount() == 0 ? "all" : (p.n - p.haveCount()) + "/" + p.n + " chunks (resume)"));
         // Only one end opens the data connections (Connection.drivesTransfer). When it is not this
         // one, the WANT above is not quite the whole of our part: the peer pushes the chunks over
         // connections it opens and serveData() receives them, and if those end with the file still
@@ -380,7 +380,7 @@ final class FileExchange implements RelayCoordinator.Host {
     private final java.util.Map<String, Files.Partial> partials = new java.util.concurrent.ConcurrentHashMap<>();
 
     /**
-     * The link a file was WANTed over — where a re-ask has to go.
+     * The link a file was WANTed over: where a re-ask has to go.
      *
      * <p>Python keeps this as {@code Partial.origin}; here it is a map beside the Partials instead,
      * because {@link Files.Partial} lives in the storage layer and knows about MediaStore rows and
@@ -396,12 +396,10 @@ final class FileExchange implements RelayCoordinator.Host {
     /**
      * Hashes whose transfer has been called off, with the moment it happened.
      *
-     * <p>The mirror of Python's {@code SyncState.aborted}, and it had no counterpart here at all
-     * until the re-ask arrived. Android tracked "aborted" only on a {@link Transfer} object — which
-     * is exactly the thing that does not exist in the case the re-ask is for, where the peer drives
-     * and this end only receives. So an ABORT for a peer-driven download left nothing behind that a
-     * later decision could read, and a re-ask would have gone out for a transfer both ends had
-     * already given up on.
+     * <p>The mirror of Python's {@code SyncState.aborted}. A {@link Transfer} object only exists for
+     * a transfer this end is actively driving, so a peer-driven download that gets ABORTed has
+     * nothing else to record the fact, and without this map, a later re-ask would go out for a
+     * transfer both ends have already given up on.
      *
      * <p>Aged out after an hour, like Python's, because "aborted" is about the session and not about
      * the file: the same hash offered again tomorrow is a new transfer, and {@link #clearAbort} says
@@ -434,7 +432,7 @@ final class FileExchange implements RelayCoordinator.Host {
     }
 
     /**
-     * @return the shared Partial, or null when one cannot be made — a MediaStore insert that fails
+     * @return the shared Partial, or null when one cannot be made, because a MediaStore insert that fails
      *         because the configured path is gone or storage is full. Caught here rather than thrown,
      *         because the caller can answer SKIP and keep the link: letting it out of the control
      *         loop would tear down a working session over one undeliverable file, and the peer would
@@ -472,10 +470,10 @@ final class FileExchange implements RelayCoordinator.Host {
                 p.keep();          // resumed on the next OFFER of the same file
             }
         });
-        // Streaming relay, the half that was missing: when this end drives the download the writes
-        // happen inside Transfer, so the service never saw the first chunk land and never sent the
-        // early offer — the relay silently became store-and-forward and every relayed file took
-        // twice as long end to end. The push direction has always done this in serveData.
+        // Streaming relay: when this end drives the download, the writes happen inside Transfer, so
+        // this callback is how the service learns the first chunk has landed and can offer the file
+        // to waiters immediately, rather than only once it is complete. The push direction gets the
+        // same signal directly, in serveData.
         t.onFirstChunk(() -> {
             if (relay.hasWaiters(p.sha256)) relay.earlyOfferToWaiters(p.sha256, p);
         });
@@ -513,13 +511,13 @@ final class FileExchange implements RelayCoordinator.Host {
     /**
      * Pass a received file on to the peers the sender could not reach.
      *
-     * <p>The text path has always done this and the file path never did, so a file could not cross a
-     * network shaped {@code A —internet— phone —LAN— C}: the phone received it and C simply never
-     * heard of it, with nothing in any log to say so. The rules are the text path's, for the same
-     * reasons and so that the two cannot drift:
+     * <p>This is what lets a file cross a network where A reaches the phone over the internet and the
+     * phone reaches C over the LAN: without it, the phone would receive the file and C would never
+     * hear of it. The rules mirror the text
+     * path's, for the same reasons and so that the two cannot drift:
      *
      * <ul>
-     *   <li>only to peers not already in the OFFER's {@code to} list — they have it or are getting it;
+     *   <li>only to peers not already in the OFFER's {@code to} list, because they have it or are getting it;
      *   <li>never back down the link it arrived on;
      *   <li>never at all if it arrived {@code forwarded}, which caps the chain at one hop. Two
      *       forwarders passing a file back and forth is not a slow network, it is a clipboard that
@@ -561,7 +559,7 @@ final class FileExchange implements RelayCoordinator.Host {
             // The other end opens the streams on this link (Connection.drivesTransfer), so there is
             // nothing to start: it will PULL, and servePull() answers. Exactly what the PC does in
             // this position, and for the same reason.
-            Logger.i("want: " + Frames.shortSha(sha) + " — waiting for " + c.peerLabel + "'s data connections");
+            Logger.i("want: " + Frames.shortSha(sha) + ", waiting for " + c.peerLabel + "'s data connections");
             return;
         }
         Transfer u = upload.get();
@@ -601,7 +599,7 @@ final class FileExchange implements RelayCoordinator.Host {
      * <p>All three are needed and none of them is a fallback for the others. An offer stays
      * answerable until HAVE/SKIP/ABORT because a lost stream is re-asked for; a sent file stays
      * answerable because the far end may have lost its last chunk; and the cache answers a peer that
-     * asks for something this device received rather than originated — which is how a file reaches a
+     * asks for something this device received rather than originated, which is how a file reaches a
      * third device at all.
      */
     @Override public Files.Ref refFor(String sha) {
@@ -620,19 +618,19 @@ final class FileExchange implements RelayCoordinator.Host {
      *
      * <p>Counted from a connection's first <b>CHUNK</b>, not from the moment it opens. A data
      * connection does not declare which way it runs, so at open time a stream a waiter opened to
-     * <em>pull</em> a file we are relaying looks exactly like one pushing it at us — and it was
-     * counted as one: a connection that will never send a byte held the count above zero, so the
-     * "last stream out" that finishes or re-asks for the file was decided by an unrelated pull.
+     * <em>pull</em> a file we are relaying looks exactly like one pushing it at us. Counting only
+     * from the first CHUNK keeps a pull stream that will never send a byte out of the count, so the
+     * "last stream out" that finishes or re-asks for the file is decided only by streams that are
+     * actually pushing.
      *
-     * <p>Counting at open bought one thing, which is worth naming so it is not lost by accident: a
-     * stream that has opened but not yet sent anything is not counted, so a fast stream finishing
-     * first can still look like "every stream closed, file incomplete". Nothing is thrown away when
-     * it does — {@link #endPush} answers that with {@code p.keep()}, which only flushes the chunk
-     * map, and the next chunk on another stream reopens the channel — and the window is one disk
-     * read on the pushing side, between opening the stream and sending the chunk it opened for. The
-     * re-ask endPush arms is debounced by two seconds and re-reads this very map before it sends
-     * anything, so a false "last stream out" costs nothing at all. The PC's on_push_close is the
-     * same shape.
+     * <p>The tradeoff worth naming: a stream that has opened but not yet sent anything is not
+     * counted, so a fast stream finishing first can still look like "every stream closed, file
+     * incomplete". Nothing is lost when that happens: {@link #endPush} answers it with
+     * {@code p.keep()}, which only flushes the chunk map, and the next chunk on another stream
+     * reopens the channel, and the window is one disk read on the pushing side, between opening the
+     * stream and sending the chunk it opened for. The re-ask {@code endPush} arms is debounced by two
+     * seconds and re-reads this very map before it sends anything, so a false "last stream out" costs
+     * nothing at all. The PC's on_push_close is the same shape.
      *
      * <p>A connection that opens to push and dies <em>before</em> that disk read is not in here
      * either, and nothing would ever have noticed it: that is what {@link #streamGone} is for.
@@ -643,7 +641,7 @@ final class FileExchange implements RelayCoordinator.Host {
      * One data connection a peer opened to us: it will push the chunks of a file we asked for, or
      * pull the chunks of one we offered.
      *
-     * <p>Which of the two is not declared — it is whichever frame arrives first — and it does not
+     * <p>Which of the two is not declared, it is whichever frame arrives first, and it does not
      * need to be: a connection that sends PULL is pulling and one that sends CHUNK is pushing, and
      * nothing else is accepted.
      */
@@ -654,7 +652,7 @@ final class FileExchange implements RelayCoordinator.Host {
         // in dataLoop, so the holder is only ever touched from here.
         final Files.Partial[] pushed = {null};
         // What this connection turned out to be, when it turned out to be nothing. A PULL identifies
-        // a puller for good — a relay waiter fetching from us, with no bearing on a transfer coming
+        // a puller for good, a relay waiter fetching from us, with no bearing on a transfer coming
         // in. Everything else that closes without a single CHUNK, including a connection that said
         // nothing at all, may have been a push that died before its first byte, and that case has to
         // reach streamGone. Python's data_thread calls the same flag `was_pull`.
@@ -718,26 +716,26 @@ final class FileExchange implements RelayCoordinator.Host {
         boolean last = pushing.computeIfPresent(sha, (k, v) -> v <= 1 ? null : v - 1) == null;
         if (!last) return;
         if (p.complete()) { finishDownload(null, p); return; }
-        // Whatever arrived stays on disk. What used to be the whole of the answer — "the peer's next
-        // OFFER resumes it" — is now only the backstop: a reconnect or a catch-up OFFER may be a long
-        // way off, and until one arrived the transfer simply sat there with its .part file. The
-        // debounced re-ask asks for the missing chunks instead, and the OFFER still resumes whatever
-        // the re-ask could not finish. Python's on_push_close, same two arms, same order.
+        // Whatever arrived stays on disk. A peer's next OFFER would eventually resume it, but that
+        // OFFER may be a long way off, so it is only the backstop: the debounced re-ask asks for the
+        // missing chunks directly, and the OFFER still resumes whatever the re-ask could not finish.
+        // Python's on_push_close, same two arms, same order.
         p.keep();
         if (!isAborted(sha)) scheduleReask(p);
     }
 
     /**
-     * A data connection we accepted closed without ever having pushed a chunk — and without ever
+     * A data connection we accepted closed without ever having pushed a chunk, and without ever
      * having said it was pulling.
      *
-     * <p>The counterpart of Python's {@code on_stream_gone}, and it exists for the same hole.
-     * Counting a push stream at its first CHUNK rather than at open is right — until a frame arrives
-     * a pusher and a relay waiter's puller are indistinguishable — but it means a connection that
-     * opens <em>to push</em> and dies before its first byte is counted by nobody, so {@link #endPush}
-     * never runs and the one thing that restarts a stalled transfer is never armed. With all eight
-     * streams failing that way (a peer whose storage read fails, a link that drops the moment it is
-     * used) the file waited for the peer's next OFFER.
+     * <p>The counterpart of Python's {@code on_stream_gone}. Counting a push stream at its first
+     * CHUNK rather than at open is right, because until a frame arrives, a pusher and a relay waiter's
+     * puller are indistinguishable, but it means a connection that opens <em>to push</em> and dies
+     * before its first byte is counted by nobody, so {@link #endPush} never runs and the one thing
+     * that restarts a stalled transfer is never armed. This method covers exactly that case: if all
+     * the streams for a file fail that way (a peer whose storage read fails, a link that drops the
+     * moment it is used), this is what still arms the re-ask instead of leaving the file waiting for
+     * the peer's next OFFER.
      *
      * <p>Deliberately <b>not</b> counted into {@link #pushing}: this connection pushed nothing, and
      * putting it into the count is the exact bug the late counting exists to avoid. All it does is
@@ -758,7 +756,7 @@ final class FileExchange implements RelayCoordinator.Host {
     }
 
     /**
-     * Shas with a debounced re-ask already armed — Python's {@code reask_pending}, by the same name.
+     * Shas with a debounced re-ask already armed, Python's {@code reask_pending}, by the same name.
      *
      * <p>One timer per file at a time, and that is the whole point of the set. Eight streams end
      * together in the ordinary case; one timer each would be eight WANTs for one file a moment
@@ -805,7 +803,7 @@ final class FileExchange implements RelayCoordinator.Host {
         Connection c = l.connection();
         // Only where WANT is our lever at all. When the peer drives, it opens the data connections
         // and a WANT asks it to do what it is already doing; when we drive there is no stall to
-        // clear either, because startDownload retries the transfer itself (DOWNLOAD_RETRIES) — which
+        // clear either, because startDownload retries the transfer itself (DOWNLOAD_RETRIES), which
         // is the phone's _pull_transfer. Same test as Python's on_stream_gone.
         if (c.drivesTransfer()) return;
         List<int[]> missing = p.missing();
@@ -824,7 +822,7 @@ final class FileExchange implements RelayCoordinator.Host {
         }
     }
 
-    /** Stream the chunks a peer asked for, then END — the far side of Transfer's pull worker. */
+    /** Stream the chunks a peer asked for, then END: the far side of Transfer's pull worker. */
     private void servePull(Connection c, String sha, JSONObject msg) throws Exception {
         // Streaming relay: if a Partial exists and the file is not yet in the cache, serve chunks as
         // they become available rather than waiting for the complete file.
@@ -876,7 +874,7 @@ final class FileExchange implements RelayCoordinator.Host {
                 }
                 // Outside the monitor on purpose. Files.Partial.write() is synchronized on the same
                 // object, so a send that blocks in here would stall every chunk the origin's push
-                // threads are trying to store for this file — a slow reader on one relayed copy
+                // threads are trying to store for this file, a slow reader on one relayed copy
                 // holding up the download itself. Nothing below needs the lock: the decision was
                 // made under it and `timedOut` carries it out.
                 if (timedOut) {
@@ -885,7 +883,7 @@ final class FileExchange implements RelayCoordinator.Host {
                     return;
                 }
                 if (!p.hasChunk(i)) {
-                    // complete() returned true but chunk is missing — should not happen, but guard
+                    // complete() returned true but chunk is missing; should not happen, but guard
                     c.sendJson(Connection.T_ABORT, Frames.shaMsg(sha).put("reason", "chunk not available"));
                     return;
                 }
@@ -936,8 +934,7 @@ final class FileExchange implements RelayCoordinator.Host {
      *
      * <p>Told through the transfer's own {@link PeerRoute} and never through a connection the caller
      * supplies: a transfer knows which link it is running on, so there is nothing for the caller to
-     * guess — and with several links a caller that guessed would tell the wrong peer. (The parameter
-     * that used to allow guessing was null at every call site it ever had.)
+     * guess, and with several links a caller that guessed would risk telling the wrong peer.
      *
      * @param except a hash to leave alone, or null. It is the hash of the clip that is causing the
      *               abort, in the case where the new clip <em>is</em> the file already moving.
@@ -964,7 +961,7 @@ final class FileExchange implements RelayCoordinator.Host {
      * The user copied something new: stop the transfer the new clip supersedes and withdraw every
      * open offer, which is now about content nobody is going to ask for.
      *
-     * @param hash the new clip's hash — the one transfer that must survive, for the case where the
+     * @param hash the new clip's hash, the one transfer that must survive, for the case where the
      *             new clip is the file that is already moving
      */
     void supersede(String hash) {
@@ -977,7 +974,7 @@ final class FileExchange implements RelayCoordinator.Host {
      *
      * <p>This is what holds the screen-off disconnect open. {@code pushing} counts too: a peer
      * streaming a file at us over connections it opened is a transfer this device is in the middle
-     * of, even though no {@link Transfer} of ours is tracking it — without it the burst would close
+     * of, even though no {@link Transfer} of ours is tracking it; without it the burst would close
      * the control link under a download in progress. A relay this device accepted counts as well:
      * the job is not ours, but dropping it mid-flight strands the peer that asked.
      */
@@ -994,11 +991,11 @@ final class FileExchange implements RelayCoordinator.Host {
      * A link is going: stop whatever <em>it</em> was carrying, and say what has to be tried again.
      *
      * <p>Transfers are still one at a time for the whole device, so this only has to tell the one in
-     * flight apart from nothing — but it does have to check whose it was, because with several links
+     * flight apart from nothing, but it does have to check whose it was, because with several links
      * a closing one must not abort a transfer another is running.
      *
      * <p>{@code offered} is deliberately NOT cleared. It is what answers a WANT, it is keyed by hash
-     * rather than by peer, and the same file is offered to every link — so clearing it when one link
+     * rather than by peer, and the same file is offered to every link, so clearing it when one link
      * dies would make the others' offers unanswerable. It is bounded at 8 and emptied by
      * HAVE / SKIP / ABORT, or wholesale by {@link #supersede}.
      *
@@ -1015,7 +1012,7 @@ final class FileExchange implements RelayCoordinator.Host {
         //
         // compareAndSet and not a bare null: between reading the slot and clearing it, another link
         // may have installed its own transfer, and clearing unconditionally would drop that one out
-        // of sight while it went on running — untracked by abortTransfers, transferBusy and the next
+        // of sight while it went on running, untracked by abortTransfers, transferBusy and the next
         // teardown alike.
         if (d != null && d.route().carriedBy(c)) { d.abort(); d.partial.keep(); download.compareAndSet(d, null); }
         if (u != null && u.route().carriedBy(c)) {

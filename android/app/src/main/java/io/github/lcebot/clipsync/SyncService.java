@@ -32,31 +32,28 @@ import java.util.concurrent.Executors;
  * Foreground service (specialUse) that keeps one connection to each peer while the screen is on.
  * Clipboard access in background works because Entry hooks ClipboardService in system_server.
  *
- * <p><b>What is left in here, and what is not.</b> This file used to be the whole device: the
- * clipboard, the file protocol, the relay election, the dialling, the status and the Android
- * service lifecycle, sharing sixty fields and one lock. Three subjects have moved out, each with an
- * explicit interface back to this class rather than a reach into its fields:
+ * <p><b>What is left in here, and what is not.</b> Three subjects each live behind an explicit
+ * interface back to this class rather than a reach into its fields:
  *
  * <ul>
- *   <li>{@link ClipboardBridge} — what this device holds, what it has sent, and what it is still
+ *   <li>{@link ClipboardBridge}: what this device holds, what it has sent, and what it is still
  *       trying to hand to its peers;
- *   <li>{@link FileExchange} — OFFER/WANT/CHUNK and everything that serves or receives a file,
+ *   <li>{@link FileExchange}: OFFER/WANT/CHUNK and everything that serves or receives a file,
  *       including the {@link RelayCoordinator} it owns;
- *   <li>{@link Link} and {@link Dialer} — one session and one target's persistence, which were
- *       already separated.
+ *   <li>{@link Link} and {@link Dialer}: one session and one target's persistence.
  * </ul>
  *
  * <p>What remains is the service itself: the Android lifecycle, the assembly of those parts, the
- * things that are genuinely per-device because the device has exactly one of them — one radio (so
+ * things that are genuinely per-device because the device has exactly one of them: one radio (so
  * one {@link #heartbeat()}), one network, one screen, one status file, one key schedule, one peer
- * map — and the control-frame switch, which is the only place that knows every frame type.
+ * map; and the control-frame switch, which is the only place that knows every frame type.
  *
- * <p><b>The lock.</b> There is still exactly one, {@link #lock}, and the split did not turn it into
- * three. It is held here and handed to {@link ClipboardBridge} at construction, because the two
- * halves of what it guards are one invariant: a dialler sleeps on this monitor until there is work,
- * and "is there work" is a question about the clipboard's pending slot. {@link FileExchange} and
- * {@link RelayCoordinator} do not take it at all — every clipboard question they have goes through a
- * ClipboardBridge method that takes it for them — so there is no lock ordering to get wrong.
+ * <p><b>The lock.</b> There is exactly one, {@link #lock}, held here and handed to
+ * {@link ClipboardBridge} at construction, because the two halves of what it guards are one
+ * invariant: a dialler sleeps on this monitor until there is work, and "is there work" is a
+ * question about the clipboard's pending slot. {@link FileExchange} and {@link RelayCoordinator} do
+ * not take it at all, because every clipboard question they have goes through a ClipboardBridge
+ * method that takes it for them, so there is no lock ordering to get wrong.
  */
 public class SyncService extends Service {
     private static final String CHANNEL = "clipsync";
@@ -78,12 +75,12 @@ public class SyncService extends Service {
     /**
      * Reconnect back-off (doubling), capped per transport.
      *
-     * <p>The two caps differ, and the split only earns its keep because they do — while both were
+     * <p>The two caps differ, and the split only earns its keep because they do; while both were
      * 60 s this was an abstraction that described nothing. What makes them different is what a retry
      * costs and what it is likely to buy. On Wi-Fi a connect is cheap and the peer is usually a
      * machine on the same LAN that will come back within the minute, so a minute is the right
      * ceiling. On cellular every attempt pulls the modem out of its idle state, and the thing on the
-     * other end is typically a PC at home that is off for the evening — so retrying it every minute
+     * other end is typically a PC at home that is off for the evening, so retrying it every minute
      * all evening buys nothing and costs battery all night. Five minutes is still prompt enough that
      * nobody watches for it, because a network change or the screen coming on resets the ladder to
      * {@link #BACKOFF_MIN_MS} anyway, and those are what actually end most waits.
@@ -94,11 +91,11 @@ public class SyncService extends Service {
     /**
      * The heartbeat has caught this process being frozen <em>while the device was awake</em>.
      *
-     * <p>The qualifier is the whole meaning of the flag, and it was missing: the check looked at the
-     * wall clock alone, so every deep sleep set it. It drives the app's battery card, which tells the
-     * user the system is still freezing ClipSync despite the exemption — advice that is right for a
-     * freeze the device was awake through and wrong for the one that happens every time the phone is
-     * locked, where being suspended is what the service asks for by idling. See {@link #heartbeat()}.
+     * <p>The qualifier is the whole meaning of the flag: only a freeze that happens while the device
+     * is awake is evidence of a problem. It drives the app's battery card, which tells the user the
+     * system is still freezing ClipSync despite the exemption, advice that is right for a freeze the
+     * device was awake through and wrong for the one that happens every time the phone is locked,
+     * where being suspended is what the service asks for by idling. See {@link #heartbeat()}.
      */
     private static volatile boolean suspendedOnce = false;
     private volatile String lastState = "stopped", lastDetail;
@@ -116,16 +113,15 @@ public class SyncService extends Service {
      *
      * <p>Five states, and the reason they are distinct is that the answer to "what do I do now"
      * differs for each: *Stopped* needs a button pressed, *No network* needs the network fixed,
-     * *Idle* needs nothing at all. The old *Disconnected* is folded into *Connecting…*: with one
-     * connection the difference between "never connected" and "connected, then lost" carried the
-     * retry information, and with several it carries none — which target failed and why is per
-     * target now, and lives in the sheet.
+     * *Idle* needs nothing at all. There is no separate *Disconnected* state: with several targets,
+     * "never connected" versus "connected, then lost" is not a fact about the device as a whole;
+     * which target failed and why is per target, and lives in the sheet.
      */
     private void refreshStatus() {
         if (!running) { setStatus("stopped"); return; }
         if (!hasNetwork) { setStatus("no network"); return; }
         if (!byPeer.isEmpty()) {
-            // "Relay (n)" when this device is actively relaying for others — asked of the waiters
+            // "Relay (n)" when this device is actively relaying for others; asked of the waiters
             // and not of the map, because a key with no waiters left is a relay that has finished.
             setStatus(relayingCount() == 0 ? "connected" : "relay");
             return;
@@ -138,13 +134,11 @@ public class SyncService extends Service {
      * Re-derive and re-write the status: liveness for the UI, and a fresh answer.
      *
      * <p>It re-derives rather than re-writing what was last said, and that is not an optimisation to
-     * skip. The state is computed from volatiles that change without anyone calling in here —
-     * `screenOn`, `hasNetwork`, `byPeer` — so re-writing the old string publishes a claim that has
-     * already stopped being true. Two of those were visible: the chip stuck on *Connecting…* for the
-     * whole time the screen was off, because nothing recomputed after SCREEN_OFF when no link had
-     * been up to die; and `Connected (0)`, from a stale "connected" written beside an emptied peer
-     * map. Deriving here means every caller of this is also a state transition, which is exactly
-     * what it should be.
+     * skip. The state is computed from volatiles that change without anyone calling in here, namely
+     * `screenOn`, `hasNetwork`, `byPeer`, so re-writing the last string risks publishing a claim
+     * that has already stopped being true, such as a chip stuck on *Connecting…* while the screen is
+     * off with no link left to die, or `Connected (0)` beside an emptied peer map. Deriving here
+     * means every caller of this is also a state transition, which is exactly what it should be.
      */
     private void touchStatus() {
         refreshStatus();
@@ -158,7 +152,7 @@ public class SyncService extends Service {
      *
      * <p>Not "forever", although nothing new is being said: the UI decides the service is alive from
      * the file's timestamp, with two minutes of slack. Staying under that is what makes skipping
-     * writes safe — the alternative is a chip that reads *Stopped* beside a service that is running
+     * writes safe, because the alternative is a chip that reads *Stopped* beside a service that is running
      * perfectly and a Start button that cold-starts a second copy.
      */
     private static final long STATUS_MAX_QUIET_MS = 60_000;
@@ -208,16 +202,15 @@ public class SyncService extends Service {
             Link l = d.live;
             if (l != null && l.isOpen()) continue;
             String name = isMdns(d.target) ? instanceOf(d.target) : d.target;
-            // Not listed at all when its peer is connected by another route — which is what happens
-            // every time a phone wakes up and dials us, leaving the dialler that used to reach it
-            // with nothing to do.
+            // Not listed at all when its peer is connected by another route, which is what happens
+            // every time a phone wakes up and dials us, leaving the dialler that would otherwise
+            // reach it with nothing to do.
             //
             // This section means "configured targets that are not connected", and a target whose
-            // device is connected is, in the only sense anyone opens this for, working. It had a
-            // *Same device as …* row for a while, on the grounds that "this address is not the one
-            // in use" is a fact. It is, and it is one the log already records — while in the sheet it
-            // sat directly under the same device's card in the group above, which reads as the sheet
-            // contradicting itself rather than as a footnote.
+            // device is connected is, in the only sense anyone opens this for, working. That the
+            // address is not the one in use is a fact, but it is one the log already records; a row
+            // for it here would sit directly under the same device's card in the group above, which
+            // reads as the sheet contradicting itself rather than as a footnote.
             //
             // Asked of the live map either way, never of what the dialler last wrote down: the peer
             // map is the truth about who is connected, and a dialler knows only about its own last
@@ -238,7 +231,7 @@ public class SyncService extends Service {
         // Nothing new to say, and something said recently enough: don't say it again. The heartbeat
         // calls in here every thirty seconds whether or not anything moved, and each call was a
         // synchronous file write plus an inotify event that woke the UI process to re-parse and
-        // re-render an identical snapshot — about 2 900 of each a day on an idle phone.
+        // re-render an identical snapshot, about 2 900 of each a day on an idle phone.
         int relaying = relayingCount();
         String sig = signature(peers, indirectPeers, targets, relaying);
         long now = System.currentTimeMillis();
@@ -316,7 +309,7 @@ public class SyncService extends Service {
     private Thread heart;
     private Thread browser;
 
-    /** Peer roster: indirect[sender_id] → reported peer entries (full snapshot, replaced on each T_PEERS). */
+    /** Peer roster: indirect maps each sender_id to its reported peer entries (full snapshot, replaced on each T_PEERS). */
     private final java.util.Map<String, org.json.JSONArray> indirect = new java.util.concurrent.ConcurrentHashMap<>();
 
     // ------------------------------------------------------------------ lifecycle
@@ -324,9 +317,8 @@ public class SyncService extends Service {
     public void onCreate() {
         super.onCreate();
         Logger.init(this);
-        // First line of every run. The id is per-process (see Node), so this is what ties every
-        // later "connected" line to the session it belongs to — the thing the old persisted id used
-        // to provide for free, and the only thing worth keeping from it.
+        // First line of every run. The id is per-process (see Node), so this line is what ties every
+        // later "connected" line to the session it belongs to.
         Logger.i("ClipSync " + Node.name() + ", node " + Node.shortId(Node.id())
                 + " (protocol " + Connection.PROTOCOL_VERSION + ")");
         startForegroundQuiet();             // must happen promptly after startForegroundService()
@@ -334,7 +326,7 @@ public class SyncService extends Service {
             cfg = Config.load(this);
             Node.setRelayOptOut(cfg.relayOptOut);
         } catch (RuntimeException e) {
-            Logger.w("invalid config: " + e.getMessage() + " — open the app and fix it");
+            Logger.w("invalid config: " + e.getMessage() + "; open the app and fix it");
             setStatus("stopped", "invalid config");
             disableAutoStart();
             stopSelf();
@@ -343,12 +335,23 @@ public class SyncService extends Service {
         started = true;
         // "I do not know when this key started" is read as NOW (see Config.schedule), which is the
         // safe reading but is not a durable one: it is re-decided at every launch, so a key whose
-        // psk_since was never written — one typed in by hand, or edited into the file — is zero days
+        // psk_since was never written, whether typed in by hand or edited into the file, is zero days
         // old at every launch and never reaches the rotation deadline at all. Recording the answer
         // once turns the guess into a fact, and the check costs one property read.
         if (!cfg.keys.psk.isEmpty() && storedKeyAge(this) == 0) {
-            persistSchedule(cfg.keys);          // its `since` is already this moment
-            Logger.i("key age was unknown; recorded as starting now");
+            persistSchedule(cfg.keys);          // its `since` is already the anchor Config chose
+            // Read back, and the read-back is not belt-and-braces. If the write silently does not
+            // land, this branch runs again at every launch, and the log line below has to say
+            // that plainly, rather than reporting the same "recorded it" every time, so a stuck
+            // write shows up in the log instead of quietly failing to reach a rotation that never
+            // happens.
+            long stored = storedKeyAge(this);
+            if (stored == 0) {
+                Logger.w("key age: psk_since is still unset after writing it, so rotation cannot"
+                        + " measure this key's age from the file. Falling back to " + FILE_AGE_NOTE);
+            } else {
+                Logger.i("key age was unknown; recorded it as " + new java.util.Date(stored));
+            }
         }
         cache = new FileCache(this);
         startupReport();
@@ -370,12 +373,12 @@ public class SyncService extends Service {
         screenOn = power.isInteractive();
 
         // The handle is seeded here, before the callback exists, and that ordering is the whole
-        // point. registerDefaultNetworkCallback delivers the current network immediately — so with
-        // netHandle still 0, that first delivery read as "the network changed" and re-advertised on
-        // top of the registration startListening() had just made. NsdManager's unregister is
-        // asynchronous, so the replacement raced a registration that was still live, mDNS resolved
-        // the name collision by suffixing, and the device ended up advertising as both "NAME" and
-        // "NAME (2)" — finding both, building a dialer for each, and recognising itself twice.
+        // point. registerDefaultNetworkCallback delivers the current network immediately, so an
+        // unseeded netHandle (0) would make that first delivery look like a network change and
+        // trigger a re-advertisement on top of the one startListening() just made. NsdManager's
+        // unregister is asynchronous, so the two registrations would race, mDNS would resolve the
+        // name collision by suffixing, and the device would end up advertising as both "NAME" and
+        // "NAME (2)", finding both, building a dialer for each, and recognising itself twice.
         Network active = connectivity.getActiveNetwork();
         netHandle = active == null ? 0 : active.getNetworkHandle();
         readNetwork(connectivity.getNetworkCapabilities(active));
@@ -402,13 +405,13 @@ public class SyncService extends Service {
      *
      * <p>Stopping ourselves is not enough. The xposed watchdog (see {@code xposed.Common}) polls
      * "is auto-start wanted and is the service not running?" every minute, and "wanted" means only
-     * that the {@link BootReceiver} component is enabled — it has no way to know that the last start
+     * that the {@link BootReceiver} component is enabled; it has no way to know that the last start
      * died on its own configuration. So an invalid config would give a process launch and a flash of
      * the foreground notification once a poll, forever, with nothing but the log to say why.
      *
      * <p>Disabling the component is the one signal the watchdog does read, and it is the same switch
      * the Stop button uses, so the state is not a new one: the app shows auto-start off, and Apply
-     * turns it back on once the configuration parses. Never called for a runtime failure — only for
+     * turns it back on once the configuration parses. Never called for a runtime failure, only for
      * a configuration that cannot start, which is exactly the case a retry cannot fix.
      */
     private void disableAutoStart() {
@@ -423,7 +426,17 @@ public class SyncService extends Service {
         }
     }
 
-    /** What the file itself says about when the key started — 0 for "it does not say". */
+    /**
+     * What the fallback is, for the one log line that has to explain it.
+     *
+     * <p>Named rather than inlined because it is the answer to "then how does the key ever age?":
+     * {@link Config} anchors an unwritten activation time to the configuration file's modification
+     * time, so even with this write failing forever the key still ages, just from the file rather
+     * than from the field. What it cannot do is age from a clock that restarts with the process.
+     */
+    private static final String FILE_AGE_NOTE = "the configuration file's modification time";
+
+    /** What the file itself says about when the key started; 0 means "it does not say". */
     private static long storedKeyAge(Context ctx) {
         try {
             return Long.parseLong(Config.raw(ctx).getProperty("psk_since", "0").trim());
@@ -450,7 +463,7 @@ public class SyncService extends Service {
      * Get the service running on whatever the configuration now says.
      *
      * <p>Two branches, and which one applies is not the caller's business: a running service takes a
-     * reload in place — no restart, no process churn, no reconnect storm — and one that was never
+     * reload in place (no restart, no process churn, no reconnect storm), and one that was never
      * started has to be started. Here rather than in an Activity because pairing reaches it from two
      * screens now, and a second copy would be a second thing to keep in step.
      *
@@ -495,7 +508,7 @@ public class SyncService extends Service {
         cfg = next;
         Node.setRelayOptOut(cfg.relayOptOut);
         Logger.i("config reloaded: " + targets(cfg)
-                + ", " + cfg.threads + " streams, files -> " + cfg.filesDir);
+                + ", " + cfg.threads + " streams, files in " + cfg.filesDir);
         files.abortAll("configuration changed");
         // The size limits may be exactly what just changed, so a clip already reported as stuck
         // deserves to be judged again rather than stay silently written off.
@@ -528,7 +541,7 @@ public class SyncService extends Service {
         }
         clipWorker.shutdownNow();
         pushWorker.shutdownNow();
-        // Stops the relay's background timer — which is also where FileExchange's debounced re-ask
+        // Stops the relay's background timer, which is also where FileExchange's debounced re-ask
         // runs, so this is the one call that has to be here for either of them not to outlive us.
         if (files != null) files.relay().shutdown();
         super.onDestroy();
@@ -570,7 +583,7 @@ public class SyncService extends Service {
                 screenOn = true;
                 // Like a network arriving: the user picking the phone up is a real new chance, and
                 // without this a target that had climbed to a 60 s back-off makes them wait it out
-                // while they are looking at the screen. wake() alone cannot do it — it notifies the
+                // while they are looking at the screen. wake() alone cannot do it, because it notifies the
                 // gate, deliberately not the back-off.
                 resetBackoff();
                 rebrowse();             // the LAN may be a different one since the screen went off
@@ -580,7 +593,7 @@ public class SyncService extends Service {
                 screenOn = false;
                 // On a worker, because saying goodbye is a socket write and this is the main thread.
                 // Worth saying: a link that simply closes leaves the peer unable to tell a device
-                // that went to sleep from one that crashed, for as long as its read timeout — and
+                // that went to sleep from one that crashed, for as long as its read timeout, and
                 // the two call for opposite responses, redial soon versus leave it alone.
                 try {
                     pushWorker.execute(() -> { goIdle(); refreshStatus(); });
@@ -613,15 +626,15 @@ public class SyncService extends Service {
             // A different handle is a different network, which is the only thing that matters here.
             //
             // This fires once with the current network as soon as the callback is registered, so
-            // netHandle is seeded in onCreate before that happens: an unseeded 0 made the very
-            // first delivery look like a move and cost a duplicate advertisement (see there).
+            // netHandle is seeded in onCreate before that happens: an unseeded 0 would make the very
+            // first delivery look like a move and trigger a duplicate advertisement.
             long handle = n == null ? 0 : n.getNetworkHandle();
             boolean moved = handle != netHandle;
             netHandle = handle;
             if (moved) {
                 // Our advertisement belongs to the network it was registered on. Without this, a
                 // phone that changed Wi-Fi went on browsing successfully and was never found by
-                // anybody again — no exception, no log line, nothing to notice.
+                // anybody again: no exception, no log line, nothing to notice.
                 republishAdvert("after a network change");
             }
             if (readNetwork(nc) || moved) {
@@ -732,8 +745,8 @@ public class SyncService extends Service {
      * screen-off burst.
      *
      * <p>It is the only one of the app's three read loops that understands the session: CLIP, KEYS,
-     * BYE and the roster exist nowhere else, and CHUNK/PULL/END — the entire vocabulary of the two
-     * data loops in {@link Frames#dataLoop} — cannot appear here at all, because a control
+     * BYE and the roster exist nowhere else, and CHUNK/PULL/END, the entire vocabulary of the two
+     * data loops in {@link Frames#dataLoop}, cannot appear here at all, because a control
      * connection never carries a byte of a file. The overlap is PING/PONG and ABORT, and only PING
      * is answered the same way twice (it is not: see {@link Frames#pong}).
      */
@@ -762,7 +775,7 @@ public class SyncService extends Service {
                 String why = Frames.json(f).optString("reason", "");
                 Logger.i(c.peer + " said goodbye: " + (why.isEmpty() ? "no reason given" : why));
                 // Marked, not just closed. Closing alone ends the session and the dialer redials on
-                // its usual back-off — handing the peer back exactly the link it discarded, which is
+                // its usual back-off, handing the peer back exactly the link it discarded, which is
                 // the loop BYE exists to prevent. The reason itself is logged above and, for the one
                 // reason anything acts on, carried to idlePeers below.
                 l.ended(Link.End.PEER_BYE);
@@ -786,13 +799,13 @@ public class SyncService extends Service {
      *
      * <p>Sent right after HELLO on every control connection (both sides), and whenever the schedule
      * changes (successor generated, promoted, or reconciled). The frame is cheap and harmless if the
-     * peer ignores it, so it is sent whether or not rotation is on — a device with rotation off
+     * peer ignores it, so it is sent whether or not rotation is on: a device with rotation off
      * still has a {@link Keys.Schedule} with a possibly non-empty ring, and a peer needs to hear
      * that to align its own.
      */
     private void sendKeys(Connection c) {
         Keys.Schedule s = cfg.keys;
-        if (s.psk.isEmpty()) return;       // no key yet — nothing to tell
+        if (s.psk.isEmpty()) return;       // no key yet, nothing to tell
         try {
             JSONObject msg = new JSONObject();
             msg.put("psk", s.psk);
@@ -810,7 +823,7 @@ public class SyncService extends Service {
      * Shortest gap between two key announcements.
      *
      * <p>A backstop, not a scheduler. Announcing is the response to a schedule that changed, and
-     * with an idempotent {@code agreed()} a settled pair changes nothing and says nothing — so in
+     * with an idempotent {@code agreed()} a settled pair changes nothing and says nothing, so in
      * ordinary running this limit is never reached. It is here because the failure it bounds is
      * expensive and self-feeding: an announcement provokes a reply, a reply that looks like a change
      * provokes another announcement, and every turn of that loop rewrites the file holding the PSK.
@@ -826,7 +839,7 @@ public class SyncService extends Service {
      * Send T_KEYS to every connected peer, unless this is the same thing said moments ago.
      *
      * <p>Both halves of that condition matter. Rate-limiting alone would swallow a real change that
-     * happened to follow a reconciliation closely — a generated successor announced nowhere waits
+     * happened to follow a reconciliation closely: a generated successor announced nowhere waits
      * until the next phase transition, which is a day away. Comparing alone would not bound a loop
      * that alternates between two schedules. Together they silence the repetition and nothing else.
      */
@@ -850,7 +863,7 @@ public class SyncService extends Service {
         String theirNext = msg.optString("next", "").trim().toLowerCase();
         if (theirPsk.isEmpty()) return;
         // Refused at the door, not at the file. A peer holding the PSK could otherwise name anything
-        // at all as the network's next key, and the value goes straight into the configuration —
+        // at all as the network's next key, and the value goes straight into the configuration,
         // where a `psk_next` that is not hex is read back on every inbound connection and makes all
         // of them fail. One malformed frame, and the device can never be reached again.
         if (Config.checkPsk(theirPsk) != null) {
@@ -864,7 +877,7 @@ public class SyncService extends Service {
         Keys.Schedule before = cfg.keys;
         // Which key let this connection in decides whether it may lead. A peer on the current key or
         // on the successor is where the network is going; one that authenticated with a superseded
-        // ring key is behind — and rotation exists precisely because a superseded key may have
+        // ring key is behind, and rotation exists precisely because a superseded key may have
         // leaked, so letting it nominate the next key would turn a past compromise into a present
         // takeover. Its right to *connect* is untouched: the ring still accepts it, and the "peer is
         // behind" branch of reconcile teaches it our schedule instead.
@@ -877,7 +890,7 @@ public class SyncService extends Service {
         Keys.Schedule after = before.reconcile(theirPsk, theirNext, System.currentTimeMillis(), trusted);
         // Spelled out rather than left to == or to equals(). Reference equality called every frame a
         // change, because `agreed()` returned a new object each time; equals() ignores `agreedAt`,
-        // which is right for the storm and wrong for the FIRST agreement — that one moves the phase
+        // which is right for the storm and wrong for the FIRST agreement, because that one moves the phase
         // from STRANDED to DUE and absolutely must be written down, or the promotion it unlocks is
         // forgotten at the next restart. Both facts are stated here so neither can be lost to a
         // later edit of either operator.
@@ -897,7 +910,7 @@ public class SyncService extends Service {
                     + ": psk=" + Node.shortKey(after.psk)
                     + (after.next.isEmpty() ? "" : " next=" + Node.shortKey(after.next)));
             persistSchedule(after);
-            // Tell every peer the result — including the one that triggered this, so it hears the
+            // Tell every peer the result, including the one that triggered this, so it hears the
             // outcome of the tie-break if there was one.
             announceKeys();
         }
@@ -964,8 +977,8 @@ public class SyncService extends Service {
      *
      * <p>Pure phase-based: at each tick it asks "what phase is the key in?" and does the one thing
      * that phase calls for, or nothing if no action is due. The design is intentionally incremental
-     * — generate now, announce on the next heartbeat (or sooner via onConnected), promote later —
-     * so a process that dies between ticks loses nothing.
+     * generating now, announcing on the next heartbeat (or sooner via onConnected), and promoting
+     * later, so a process that dies between ticks loses nothing.
      */
     private void checkRotation() {
         if (!cfg.rotate) return;
@@ -1005,7 +1018,7 @@ public class SyncService extends Service {
     // ------------------------------------------------------------------ peer roster
 
     /**
-     * Direct peers ∪ indirect peers — the full {@code to} set for OFFER and CLIP.
+     * Direct peers ∪ indirect peers: the full {@code to} set for OFFER and CLIP.
      *
      * <p>Indirect ones matter because the {@code to} list is what stops a file being fetched twice
      * and what a relay election is computed over: a node this device cannot reach but its peer can
@@ -1094,10 +1107,9 @@ public class SyncService extends Service {
         // Every live link, not the one: a clip has to reach every peer. Each decides for itself
         // whether it has already sent this one, so calling them all is safe however often it happens.
         //
-        // On a bounded pool, not a thread each. This is called on the main thread from the screen
-        // receiver, so `new Thread` here made NON-daemon threads, one per link per clipboard change,
-        // each blocking on a socket that may never drain — rapid copying multiplied them and they
-        // outlived the work.
+        // On a bounded pool, not a thread each: this is called on the main thread from the screen
+        // receiver, and delivery blocks on a socket that may never drain. A thread per link per
+        // clipboard change would be unbounded and could outlive the work it was doing.
         for (Link l : byPeer.values()) {
             if (!l.isOpen()) continue;
             try {
@@ -1127,7 +1139,7 @@ public class SyncService extends Service {
      *
      * <p>By <b>peer</b>, not by dialler, and that is the whole reason this map exists rather than a
      * field on the Dialer. Two devices that found each other over mDNS both dial, one of the two
-     * links is dropped as a duplicate, and the survivor may be the <em>inbound</em> one — so when
+     * links is dropped as a duplicate, and the survivor may be the <em>inbound</em> one, so when
      * that peer goes to sleep, the goodbye arrives on a link the dialler does not own and would
      * never hear about. The dialler asks this instead, and is told.
      *
@@ -1158,7 +1170,7 @@ public class SyncService extends Service {
      * Close the links on one network, or every link when {@code gone} is null.
      *
      * <p>Inbound links count as being on the network they were accepted from, which is the active
-     * one at that moment — near enough, and the alternative is to leave a link the peer cannot reach
+     * one at that moment, near enough, and the alternative is to leave a link the peer cannot reach
      * us on looking alive until its read times out.
      */
     private void dropConnection(Network gone) {
@@ -1179,8 +1191,8 @@ public class SyncService extends Service {
      * Does this link survive the loss of {@code gone}?
      *
      * <p>Only if it is demonstrably on another network. A link whose network is unknown is closed
-     * with the rest, because the failure that costs something here is keeping a dead link — it looks
-     * connected until a read times out ninety seconds later — and not closing a live one, which
+     * with the rest, because the failure that costs something here is keeping a dead link, which looks
+     * connected until a read times out ninety seconds later, and not closing a live one, which
      * costs a reconnect.
      */
     private static boolean spared(Link l, Network gone) {
@@ -1207,12 +1219,12 @@ public class SyncService extends Service {
             // Tell the peer our key schedule, so it can align its successor with ours. Both ends
             // send one if rotation is on; the frame is harmless either way (a peer without rotation
             // simply ignores it), so it goes out unconditionally when the schedule has anything to
-            // say — which is whenever a successor exists, because that is news the peer needs
+            // say, which is whenever a successor exists, because that is news the peer needs
             // whether or not it is rotating itself.
             sendKeys(c);
             broadcastPeers();
             // Both halves of the handshake carry clip_ts / clip_sha, so this runs on a link we
-            // dialled and on one we accepted alike — which is the point: the peer that is behind is
+            // dialled and on one we accepted alike, which is the point: the peer that is behind is
             // as often the one that called us as the one we called.
             Hello hello = l.peerHello();
             clip.catchUp(l, hello == null ? 0 : hello.clipTs,
@@ -1256,7 +1268,7 @@ public class SyncService extends Service {
      *
      * <p>Called at start-up and on every reload, because both halves depend on settings the user can
      * change: the port on one, the discovery switch on the other. Restarting them is cheap and is
-     * the only thing that is certainly correct — a port that did not change is rebound to itself.
+     * the only thing that is certainly correct: a port that did not change is rebound to itself.
      *
      * <p>Neither failure is fatal. A device that cannot listen can still dial out, and one that
      * cannot advertise can still be reached at a listed address; both are worth a line in the log
@@ -1269,7 +1281,7 @@ public class SyncService extends Service {
             Logger.i("listening on [::]:" + cfg.port);
         } catch (Exception e) {
             Logger.w("cannot listen on port " + cfg.port + ": " + e
-                    + " — this device can still reach peers, but no peer can reach it");
+                    + "; this device can still reach peers, but no peer can reach it");
         }
         republishAdvert(null);
     }
@@ -1278,9 +1290,9 @@ public class SyncService extends Service {
      * Drop the mDNS registration and make a new one, if this device should have one at all.
      *
      * <p>Two callers, which is why it is a method: start-up (and every reload, where the port or the
-     * discovery switch may have changed) and a network change. The second was missing entirely — a
-     * registration is made on one network and means nothing on the next, so a phone that moved to
-     * another Wi-Fi went on browsing perfectly and simply stopped being findable.
+     * discovery switch may have changed) and a network change. Both matter because a registration is
+     * made on one network and means nothing on the next; without re-registering here, a phone that
+     * moved to another Wi-Fi would go on browsing perfectly while being unfindable itself.
      *
      * <p>Tied to the same switch as browsing: "Local network discovery" is one idea to the user, and
      * a device that looks for peers on the LAN but hides from them is not one of the ways anybody
@@ -1320,7 +1332,8 @@ public class SyncService extends Service {
      *
      * <p>The mirror of {@link Dialer}'s body with everything about retrying removed, because there
      * is nothing to retry: we did not choose this link and cannot rebuild it. Past the handshake the
-     * two are the same thing — same {@link Link}, same registry, same broadcast — which is the
+     * two are the same thing, using the same {@link Link}, the same registry, and the same
+     * broadcast, which is the
      * property that makes a peer a peer regardless of who reached whom.
      */
     private void serveInbound(Connection c, Hello hello) throws Exception {
@@ -1357,7 +1370,7 @@ public class SyncService extends Service {
          *
          * <p>Dial-time suppression: once a handshake has proved that two targets are one machine,
          * there is no reason to keep proving it. Held as the winning Link rather than as a flag so
-         * it heals itself — the moment that link closes, this target starts dialling again, which is
+         * it heals itself: the moment that link closes, this target starts dialling again, which is
          * what makes it a suppression rather than a permanent surrender.
          */
         private volatile Link deferredTo;
@@ -1366,7 +1379,7 @@ public class SyncService extends Service {
         /**
          * What kind of reason {@link #lastError} is.
          *
-         * <p>Set only through {@link #note}, so the two cannot drift apart — which they would, being
+         * <p>Set only through {@link #note}, so the two cannot drift apart, which they would, being
          * assigned at seven different points in one loop. See {@link Status.Why}.
          */
         volatile Status.Why lastWhy = Status.Why.WAITING;
@@ -1374,7 +1387,7 @@ public class SyncService extends Service {
          * The node the last handshake on this target reached.
          *
          * <p>The link is gone by the time the dialler asks what its silence means, so the id has to
-         * outlive it — it is the only handle on {@link #idlePeers}, which is keyed by peer and not
+         * outlive it, because it is the only handle on {@link #idlePeers}, which is keyed by peer and not
          * by target precisely because a target is not who you reach.
          */
         private volatile String lastPeerId;
@@ -1391,12 +1404,11 @@ public class SyncService extends Service {
         /**
          * The back-off's own monitor, and the reason this class has two.
          *
-         * <p>It used to wait on {@code lock}, which is also what {@code wake()} notifies on every
-         * clipboard copy — so every copy cancelled every dialer's back-off. The log of that is
-         * unambiguous: "retry in 60s" followed four seconds later by a full connect and handshake,
-         * once per copy, forever. The two waits are asking different questions. The gate asks "is
-         * there work", which a new clip answers; the back-off asks "has the world changed", which
-         * only a network change or a shutdown answers.
+         * <p>Separate from {@code lock}, which is what {@code wake()} notifies on every clipboard
+         * copy: the two waits ask different questions, and sharing a monitor would answer one with
+         * the other. The gate asks "is there work", which a new clip answers; the back-off asks "has
+         * the world changed", which only a network change or a shutdown answers; a clipboard copy
+         * must not cancel every dialer's back-off and force an immediate reconnect.
          */
         private final Object retry = new Object();
 
@@ -1421,15 +1433,15 @@ public class SyncService extends Service {
         @Override public void run() {
             while (running && !stop) {
                 synchronized (lock) {
-                    // Hold a link while the screen is on, or while something is waiting to go out —
+                    // Hold a link while the screen is on, or while something is waiting to go out,
                     // and never try without a network (the callback wakes us when one appears).
                     //
-                    // No timeout. There was a 60 s one, and it was a pure cost: every waker of this
-                    // gate — wake(), resetBackoff(), the network callback, onDestroy — already
-                    // notifies, so the poll woke N threads a minute to discover nothing had changed,
-                    // and each then rewrote status.json. On a sleeping phone that is N CPU wakeups
-                    // and N file writes per minute, which is exactly what Doze batching exists to
-                    // prevent. The heartbeat keeps status.json fresh; this does not need to.
+                    // No timeout: every waker of this gate, namely wake(), resetBackoff(), the network
+                    // callback, and onDestroy, already notifies, so a poll would only wake every dialer
+                    // a minute to discover nothing had changed and rewrite status.json for no reason.
+                    // On a sleeping phone that is exactly the kind of CPU and file-write churn Doze
+                    // batching exists to prevent. The heartbeat keeps status.json fresh; this does
+                    // not need to.
                     while (running && !stop && ((!screenOn && !clip.worthWaking()) || !hasNetwork)) {
                         try { lock.wait(); } catch (InterruptedException ignored) {}
                     }
@@ -1440,8 +1452,8 @@ public class SyncService extends Service {
                 // another target already holds, stop proving it: a successful connect, handshake and
                 // BYE once per back-off is the most expensive way possible to learn something we
                 // already know. It lapses the moment the winning link closes, so this is a deferral
-                // and not a surrender — if the other route dies, this one takes over.
-                // Already connected by another route — most often because the peer dialled us while
+                // and not a surrender: if the other route dies, this one takes over.
+                // Already connected by another route, most often because the peer dialled us while
                 // this dialler was waiting out its back-off. Adopting that link as the one to defer
                 // to costs nothing and saves the round trip this would otherwise make to be told the
                 // same thing: connect, handshake, lose the dedup, BYE. The deferral lapses when that
@@ -1486,7 +1498,7 @@ public class SyncService extends Service {
                 } catch (Connection.SelfConnection e) {
                     // One rule for both kinds of target now. A listed address that is this device
                     // stays wrong until the user edits it; and an advertisement that is this device
-                    // is *our own*, which no amount of retrying will change either — the device
+                    // is *our own*, which no amount of retrying will change either, because the device
                     // advertises on the same LAN it browses, so it finds itself every time. Marking
                     // the target as self is what stops the discovery loop recreating this dialer.
                     Logger.i(e.getMessage());
@@ -1501,7 +1513,7 @@ public class SyncService extends Service {
                     if (l != null && !l.isOpen()) {
                         // We closed it: the screen went off, the network changed, the configuration
                         // was reloaded, or the heartbeat found it dead. The read failing afterwards
-                        // is the consequence, not the cause — and calling it a fault put a red
+                        // is the consequence, not the cause, and calling it a fault put a red
                         // "Socket closed" against every target every time the phone was locked.
                         // Only the catch can tell these apart, because by the time the finally runs
                         // the link has been closed either way.
@@ -1509,7 +1521,7 @@ public class SyncService extends Service {
                     } else {
                         Logger.i(target + ": " + e);
                         // The one branch that IS a fault: a timeout, a refusal, a name that will not
-                        // resolve. The message, not the class name — "Connection timed out" is what
+                        // resolve. The message, not the class name: "Connection timed out" is what
                         // the user can act on, "java.net.SocketTimeoutException" is not.
                         note(e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName(),
                                 Status.Why.FAULT);
@@ -1526,7 +1538,7 @@ public class SyncService extends Service {
                         teardown(l);
                     }
                     live = null;
-                    // A link that ended without an exception ended cleanly — the peer closed, or a
+                    // A link that ended without an exception ended cleanly: the peer closed, or a
                     // burst finished. Without a reason here the target shows in the sheet with a
                     // blank line and no account of the silence that follows. Not a fault: a clean
                     // close is the screen-off path working, and there is nothing to act on.
@@ -1553,8 +1565,8 @@ public class SyncService extends Service {
                     // The wait is long, not infinite, and that is deliberate: suppressing the dial
                     // outright would be cheaper still, and would leave a peer that was switched off
                     // while idle reading as *Idle* forever, since the only things that clear the
-                    // claim are a handshake and a failed dial. One connect per minute — and only
-                    // while this device's own screen is on, or the gate above stops it — buys a
+                    // claim are a handshake and a failed dial. One connect per minute, and only
+                    // while this device's own screen is on, or the gate above stops it, buys a
                     // state that corrects itself instead of one that needs a timeout to babysit it.
                     note(getString(R.string.peer_idle), Status.Why.ASLEEP);
                     backoff = backoffMax();
@@ -1563,13 +1575,13 @@ public class SyncService extends Service {
                     // away would rebuild exactly the link that was just discarded.
                     backoff = backoffMax();
                 } else if (burst) {
-                    // A burst ending is success, so no back-off ladder — but not *no delay*, and not
+                    // A burst ending is success, so no back-off ladder, but not *no delay*, and not
                     // the 1 s floor this had either. The gate normally closes right after, because
                     // the clip has been released; it does not when another live peer has yet to take
                     // the same clip, or when a send failed before it could be marked delivered. Then
                     // this spins: connect, burst, close, connect. At one second that is up to three
                     // hundred connects and handshakes per dialer across the five-minute window a
-                    // pending clip stays worth waking for — a bound in name only.
+                    // pending clip stays worth waking for, a bound in name only.
                     backoff = BURST_RETRY_MS;
                 }
                 waitBackoff(true);
@@ -1580,8 +1592,8 @@ public class SyncService extends Service {
             Network net = connectivity.getActiveNetwork();
             if (!isMdns(target)) return Link.toPeer(SyncService.this, linkOwner, target, net);
             Mdns.Instance inst = discovered.get(instanceOf(target));
-            // Gone since the last browse. Not an error to log loudly — a laptop leaving the network
-            // is the ordinary case — and the dialer dies with the target at the next syncDialers().
+            // Gone since the last browse. Not an error to log loudly, because a laptop leaving the network
+            // is the ordinary case, and the dialer dies with the target at the next syncDialers().
             if (inst == null) throw new java.io.IOException("no longer advertising on this network");
             return Link.viaMdns(SyncService.this, linkOwner, target, inst, net);
         }
@@ -1614,10 +1626,10 @@ public class SyncService extends Service {
      * what gives each of them its own dialer, its own back-off and its own line in the sheet.
      *
      * <p>Asterisks because they cannot appear in a host name, so these collide with nothing a user
-     * can type — and <b>not</b> a NUL (\\u0000) sentinel, which was the first choice and does not
+     * can type, and <b>not</b> a NUL (\\u0000) sentinel, which was the first choice and does not
      * compile: Java resolves backslash-u escapes before lexing, and it does so inside comments too,
      * so writing one puts a real NUL into the source file rather than into the string. Worth knowing
-     * before reaching for one again — including while writing the comment that explains why not to,
+     * before reaching for one again, including while writing the comment that explains why not to,
      * which is how this paragraph came to contain one.
      */
     private static final String MDNS = "*mdns*";
@@ -1634,11 +1646,11 @@ public class SyncService extends Service {
     /**
      * Claim this peer, or discover that we already hold it.
      *
-     * @return null when this link is now the one for its peer, or the link that already holds it —
+     * @return null when this link is now the one for its peer, or the link that already holds it,
      *         which the caller keeps, so the next round can skip the dial rather than repeat it
      *
-     * <p>Two targets can be two names for one machine — a listed address and its mDNS
-     * advertisement, or two listed addresses — and it is only here, with the handshake done and an
+     * <p>Two targets can be two names for one machine: a listed address and its mDNS
+     * advertisement, or two listed addresses; and it is only here, with the handshake done and an
      * id in hand, that this becomes knowable.
      *
      * <p>All three dedup rules in {@link #duplicateLoser} apply now that the device accepts as well
@@ -1654,20 +1666,20 @@ public class SyncService extends Service {
             if (other == null || other == l) return null;
             // It died between the handshake and now. replace() and not put(): a third link may have
             // registered in the meantime, and overwriting it unconditionally would lose it from the
-            // map while it went on running — invisible to the heartbeat, the broadcast and the status.
+            // map while it went on running, invisible to the heartbeat, the broadcast and the status.
             if (!other.isOpen()) {
                 if (byPeer.replace(id, other, l)) return null;
                 continue;                               // someone got there first; re-read and re-decide
             }
             if (duplicateLoser(other, l) == l) {
                 Logger.i(l.target + " is " + other.target + " by another name [" + Node.shortId(id)
-                        + "] — closing the new link");
+                        + "]: closing the new link");
                 l.bye("duplicate");
                 return other;                           // the caller defers to this link, not forever
             }
             if (!byPeer.replace(id, other, l)) continue;
             Logger.i(l.target + " and " + other.target + " are one peer [" + Node.shortId(id)
-                    + "] — closing the " + (other.connection().inbound ? "inbound" : "outbound") + " link");
+                    + "]: closing the " + (other.connection().inbound ? "inbound" : "outbound") + " link");
             other.ended(Link.End.SUPERSEDED);   // so its owner defers instead of redialling into this one
             other.bye("duplicate");
             return null;
@@ -1680,8 +1692,8 @@ public class SyncService extends Service {
      * <p>Three rules, in order: keep the one on the LAN; if the two were opened by different nodes,
      * close the one the larger node id opened; otherwise keep the older.
      *
-     * <p>Both ends compute this from the same three facts — whether each link is on-link, which node
-     * opened it, and which is older — so they reach the same verdict independently, which is the
+     * <p>Both ends compute this from the same three facts: whether each link is on-link, which node
+     * opened it, and which is older; so they reach the same verdict independently, which is the
      * property the rules exist for. A tiebreak the two ends can disagree about closes <em>both</em>
      * links and disconnects the pair entirely.
      *
@@ -1690,7 +1702,7 @@ public class SyncService extends Service {
      * a shared fact. An accepted link takes its {@code lanPeer} from the dialler's HELLO for exactly
      * this reason.
      *
-     * @param b the newer link — it is registering second, which is what makes rule 3 decidable
+     * @param b the newer link; it is registering second, which is what makes rule 3 decidable
      */
     private static Link duplicateLoser(Link a, Link b) {
         Connection ca = a.connection(), cb = b.connection();
@@ -1698,12 +1710,12 @@ public class SyncService extends Service {
         if (ca.inbound != cb.inbound) {
             // 2. opened by different nodes: the link opened by the larger id goes. The rule gives
             // that close to the larger node; doing it from whichever end notices first closes the
-            // same socket — both ends name the same loser — and does not wait on the other end
+            // same socket, because both ends name the same loser, and does not wait on the other end
             // having registered both links yet.
             boolean oursLoses = Node.id().compareTo(cb.peerId) > 0;
             return ca.inbound != oursLoses ? a : b;
         }
-        return b;   // 3. same opener — keep the older, which is the one already carrying traffic
+        return b;   // 3. same opener: keep the older, which is the one already carrying traffic
     }
 
     /**
@@ -1764,9 +1776,9 @@ public class SyncService extends Service {
     /**
      * Peers seen advertising on the LAN, by advertised name.
      *
-     * <p>This is what replaced the single cached mDNS address. A browse is a multicast round trip
-     * and a radio wake-up, so its result is kept rather than repeated per dial — but it is kept with
-     * a lifetime, because the old cache's 24 hours could not notice a laptop leaving the network.
+     * <p>A browse is a multicast round trip and a radio wake-up, so its result is kept rather than
+     * repeated per dial, but with a short lifetime ({@link #MDNS_FORGET_MS}), so a laptop leaving
+     * the network is noticed rather than believed for a whole day.
      */
     private final java.util.Map<String, Mdns.Instance> discovered = new java.util.concurrent.ConcurrentHashMap<>();
     /** Why nothing has been found, for the sheet; null once discovery has a peer of its own. */
@@ -1804,8 +1816,8 @@ public class SyncService extends Service {
         List<Mdns.Instance> found = Mdns.discover(this, net, cfg.mdnsTimeoutMs);
         for (Mdns.Instance i : found) {
             // Our own advertisement is on the same LAN we are browsing, so we find ourselves every
-            // time. The handshake is what proves it — the peer's HELLO comes back with our own node
-            // id — and this remembers the verdict so that the next browse does not rebuild a dialer
+            // time. The handshake is what proves it: the peer's HELLO comes back with our own node
+            // id; and this remembers the verdict so that the next browse does not rebuild a dialer
             // we already know leads back here.
             if (Connection.isKnownSelf(MDNS + i.name)) continue;
             discovered.put(i.name, i);
@@ -1848,9 +1860,10 @@ public class SyncService extends Service {
             // clock. That difference *is* the answer: uptime overshoot is time the device was
             // running and this process was not.
             //
-            // The old check looked only at the wall clock, so every lock screen reported a fault —
-            // and the fault it reported was the power saving the service asks for by dropping its
-            // links and idling. Screen state cannot answer this either: the case worth catching is
+            // Checking the wall clock alone would report a fault on every lock screen, since a
+            // locked screen means uptime and wall time drift apart by design, and that drift is the
+            // power saving the service asks for by dropping its links and idling, not a problem.
+            // Screen state cannot substitute for the uptime check either: the case worth catching is
             // precisely a vendor battery manager freezing us in the background with the screen off
             // and a clip still to deliver, which a screen-based test would silence along with the
             // rest.
@@ -1861,13 +1874,13 @@ public class SyncService extends Service {
                 // asleep, and printing it is what makes the reasoning above checkable against a real
                 // log rather than only against the documentation.
                 Logger.w("process was frozen for ~" + frozen / 1000 + " s while the device was awake"
-                        + " (" + late / 1000 + " s behind schedule in all) — exempt ClipSync from"
+                        + " (" + late / 1000 + " s behind schedule in all); exempt ClipSync from"
                         + " battery optimisation / background limits (see the app)");
                 suspendedOnce = true;
             }
             // Here rather than where the window lapses, because nothing runs there: the window
             // lapsing is the *absence* of an event. The heartbeat is the device's periodic look at
-            // itself, and it notices within one interval — in practice on the first tick after the
+            // itself, and it notices within one interval, in practice on the first tick after the
             // phone wakes, which is when someone is there to read the log.
             clip.reportStalePending();
             checkRotation();
@@ -1876,7 +1889,7 @@ public class SyncService extends Service {
                 Link l = e.getValue();
                 if (!l.isOpen()) { byPeer.remove(e.getKey(), l); continue; }
                 // A failed ping is a dead link. Closing it is what makes its own dialer's blocking
-                // recv() return, which is what gets it retried — so this is the path that notices a
+                // recv() return, which is what gets it retried, so this is the path that notices a
                 // peer that went away without closing, and it must also drop it from the map here
                 // rather than leave it looking connected until the dialer's finally runs.
                 try {

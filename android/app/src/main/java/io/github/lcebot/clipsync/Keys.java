@@ -7,7 +7,7 @@ import java.util.List;
 /**
  * The PSK's life: when it is replaced, what replaces it, and what is still accepted meanwhile.
  *
- * <p>Pure arithmetic and string handling — no I/O, no sockets, no Android. Everything about rotation
+ * <p>Pure arithmetic and string handling, with no I/O, no sockets, no Android. Everything about rotation
  * that can be reasoned about by reading lives here, so that the parts which cannot be (the handshake
  * accepting two keys at once, the frame that carries a schedule between devices) have nothing to
  * decide for themselves.
@@ -29,8 +29,8 @@ import java.util.List;
  *
  * <p><b>Which successor wins</b> when two devices were offline from each other, both passed 48h, and
  * both generated one. The rule is <b>the larger key, compared as text</b>. Not the earlier or the
- * later: that needs the two clocks to agree, and they do not — the offset exchange that would make
- * them agree is a clock-offset exchange between peers, which is designed but not built. Comparing
+ * later: that needs the two clocks to agree, and they do not, because the offset exchange that would
+ * make them agree is a clock-offset exchange between peers, which is designed but not built. Comparing
  * the key material needs no clock, no extra state
  * and no round trip, gives a total order, and has every device reach the same verdict from what it
  * already holds. The loser's key is discarded unused, which costs nothing: neither had been adopted.
@@ -38,9 +38,9 @@ import java.util.List;
  * <p><b>A keyring, not one previous key.</b> With a 48-hour cycle, a tablet left in a drawer for a
  * week comes back several keys behind, and accepting only the immediately previous one would lock it
  * out after a single missed rotation. {@link #KEYRING} past keys stay acceptable, so a device may
- * miss that many rotations and still be let in — at which point its peer teaches it the current
- * schedule and it catches up. Being locked out is recoverable — the device can be paired again from
- * scratch, see {@link Pairing} — but it is a
+ * miss that many rotations and still be let in, at which point its peer teaches it the current
+ * schedule and it catches up. Being locked out is recoverable, since the device can be paired again
+ * from scratch (see {@link Pairing}), but it is a
  * thing the user has to notice and act on, and a week in a drawer should not require it.
  *
  * <h2>What this cannot do</h2>
@@ -62,7 +62,7 @@ final class Keys {
     /**
      * How many superseded keys stay acceptable.
      *
-     * <p>Three, which is six days of missed rotations — longer than a weekend away, shorter than
+     * <p>Three, which is six days of missed rotations: longer than a weekend away, shorter than
      * "this key is never really gone". Each one is an extra decryption attempt on the first frame of
      * an unauthenticated connection and nothing more, so the cost of the ring is a few microseconds
      * per connection and the benefit is a device that can be away for most of a week.
@@ -81,8 +81,8 @@ final class Keys {
          * Past the deadline with nobody having agreed.
          *
          * <p>Not a promotion: swapping keys while no peer has ever acknowledged the successor is how
-         * a device rotates itself out of its own network. The deadline moves instead — see
-         * {@link #EXTEND_MS} — and keeps moving until something connects, however long that is.
+         * a device rotates itself out of its own network. The deadline moves instead, as described at
+         * {@link #EXTEND_MS}, and keeps moving until something connects, however long that is.
          */
         STRANDED,
     }
@@ -140,11 +140,11 @@ final class Keys {
         /**
          * A peer has acknowledged the successor, so the deadline may be honoured.
          *
-         * <p>Idempotent, and that is not a micro-optimisation. Every T_KEYS frame used to produce a
-         * schedule that differed from the last one in {@code agreedAt} alone, which the caller read
-         * as "something changed": it persisted the whole configuration and announced to every peer,
-         * the peer did the same back, and two devices whose successors already matched rewrote the
-         * one file that carries the PSK once per round trip for as long as they were connected.
+         * <p>Idempotent, and that is not a micro-optimisation: without it, every T_KEYS frame would
+         * produce a schedule differing from the last only in {@code agreedAt}, which the caller reads
+         * as "something changed", which means persisting the whole configuration and announcing it to every peer,
+         * which would do the same back, so two devices whose successors already match would rewrite
+         * the one file that carries the PSK once per round trip for as long as they stayed connected.
          * Recording a second agreement says nothing the first did not.
          */
         Schedule agreed(long now) {
@@ -174,7 +174,7 @@ final class Keys {
          * Following it is the only way back into the network.
          *
          * <p>Only ever reached for a peer that authenticated with the <b>current key or the
-         * successor</b> — see {@link #reconcile}'s {@code trusted}. "The peer holds a key, so it is
+         * successor</b>; see {@link #reconcile}'s {@code trusted}. "The peer holds a key, so it is
          * as trusted as we are" is true of the current key and false of a superseded one: rotation
          * exists precisely because an old key may have leaked, and letting a leaked key nominate the
          * network's next key turns a temporary compromise into a permanent takeover.
@@ -193,7 +193,7 @@ final class Keys {
          *
          * <p>Called when a T_KEYS frame arrives. The peer says "my current key is {@code theirPsk}
          * and my successor is {@code theirNext}"; this returns the schedule we should hold after
-         * hearing that. Pure — nothing is persisted here.
+         * hearing that. Pure, since nothing is persisted here.
          *
          * <p>Two things can happen:
          *
@@ -208,7 +208,7 @@ final class Keys {
          * @param trusted whether the connection this report arrived on authenticated with the key
          *                this device currently holds, or with its successor. Only such a peer may
          *                move us onto a key we have never seen; see {@link #adopt}. A peer let in on
-         *                a superseded ring key is still a peer — it is only its right to <em>lead</em>
+         *                a superseded ring key is still a peer; it is only its right to <em>lead</em>
          *                that is withheld, and the "peer is behind" branch below teaches it instead.
          * @return the reconciled schedule (may be {@code this} when nothing changed)
          */
@@ -217,12 +217,12 @@ final class Keys {
 
             // Step 1: align the current key.
             if (!next.isEmpty() && theirPsk.equals(next)) {
-                // The peer has promoted to our successor. Agreement in hand — and if the deadline has
+                // The peer has promoted to our successor. Agreement is in hand, and if the deadline has
                 // passed, this is the trigger to promote ourselves.
                 s = s.agreed(now);
                 if (s.phase(now) == Phase.DUE) s = s.promoted(now);
             } else if (trusted && wouldAdopt(theirPsk)) {
-                // Completely unknown key — the peer rotated past us. Adopt it.
+                // Completely unknown key: the peer rotated past us. Adopt it.
                 s = s.adopt(theirPsk, now);
             }
             // If theirPsk is in old: the peer is behind; our T_KEYS will teach it.
@@ -258,7 +258,7 @@ final class Keys {
         /**
          * Equal when the <b>keys and deadlines</b> are, ignoring {@link #agreedAt}.
          *
-         * <p>Ignored because "a peer said yes again" is not a change worth persisting or announcing —
+         * <p>Ignored because "a peer said yes again" is not a change worth persisting or announcing;
          * see {@link #agreed}. Note that the first agreement still is one, because it moves
          * {@code agreedAt} from 0 and therefore moves {@link #phase} from STRANDED to DUE; callers
          * that must not miss it compare phases rather than relying on this.

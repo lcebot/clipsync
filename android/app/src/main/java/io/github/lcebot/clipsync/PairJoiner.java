@@ -19,12 +19,12 @@ import java.util.Properties;
  * is an ordinary node.
  *
  * <p>Static, and deliberately so: unlike {@link PairProvider} there is no window to hold open and
- * nothing to close. A join is one attempt with one code — if it fails, the user tries again, and
+ * nothing to close. A join is one attempt with one code; if it fails, the user tries again, and
  * <b>that attempt is one of the provider's five</b>, which is where the brute-force bound lives.
  * Nothing on this side needs to remember anything between tries.
  *
  * <p>Every method here blocks, and blocks for seconds rather than for a moment: a browse runs for a
- * fixed window, the key derivation is slow on purpose (under a second — see
+ * fixed window, the key derivation is slow on purpose (under a second, see
  * {@link Pairing#SCRYPT_P}), and the wait for the provider's user to say yes is a person rather than
  * a network. Nothing in this class may be called from the main thread.
  */
@@ -44,7 +44,7 @@ final class PairJoiner {
     /** The key, the port it is used on, and who gave them. */
     static final class Result {
         final String pskHex, device, type;
-        /** The provider's service port, or 0 if it did not say — then ours is left alone. */
+        /** The provider's service port, or 0 if it did not say, in which case ours is left alone. */
         final int port;
 
         Result(String pskHex, int port, String device, String type) {
@@ -57,17 +57,17 @@ final class PairJoiner {
      *
      * <p>A wrong code does not produce a "wrong code" message, and cannot: the code <em>is</em> the
      * channel key, so getting it wrong fails at the first frame as a decrypt error. That is the
-     * design working — there is no cheaper way to test a guess than by spending one of the
-     * provider's attempts — and it is why the exception this throws says what the user can act on
+     * design working, because there is no cheaper way to test a guess than by spending one of the
+     * provider's attempts, which is why the exception this throws says what the user can act on
      * rather than what the cipher reported.
      *
-     * <p>The work is in two parts: stretching the code (under a second of native scrypt — see
+     * <p>The work is in two parts: stretching the code (under a second of native scrypt, see
      * {@link Pairing#SCRYPT_P}), and only then does a socket open. {@code derived} is called on this
      * thread between the two, which is the only point at which a caller can tell the user which of
      * the two it is waiting on. It exists because "Connecting" shown over a derivation is a lie
-     * about what the phone is doing, and the user's next move — assume it hung, press something —
-     * follows from believing it. <b>It is still worth having now that the first half is short</b>:
-     * "short" is a mid-range phone's ~0.5–1 s, the callback costs one post, and the two labels
+     * about what the phone is doing, and the user's next move, assuming it hung and pressing
+     * something, follows from believing it. <b>It is still worth having now that the first half is
+     * short</b>: "short" is a mid-range phone's ~0.5 to 1 second, the callback costs one post, and the two labels
      * are also what makes a slow device's long first half explicable rather than alarming.
      *
      * @param derived run when the key is ready and the first connect is about to be attempted;
@@ -78,7 +78,7 @@ final class PairJoiner {
             throws Exception {
         // Version first, because the cost of getting this wrong is paid by a person. On an ordinary
         // link a mismatch wastes one connection nobody is watching; here it wastes copying nine
-        // digits across the room, typing them, and waiting a second for the key to derive — to be
+        // digits across the room, typing them, and waiting a second for the key to derive, only to be
         // told "wrong code, or the window has closed" when the code was right. A missing `v` is not
         // a mismatch (an older provider may not send one) and is allowed through; the handshake
         // stays the authority either way. Mirrors clipsync_pair.find().
@@ -99,8 +99,8 @@ final class PairJoiner {
         try {
             return dial(ctx, provider, key);
         } finally {
-            // The stretched code, gone as soon as the attempt is over — whether it succeeded, was
-            // refused or never reached anyone. It is worth a line because it is the expensive half
+            // The stretched code, gone as soon as the attempt is over, whether it succeeded, was
+            // refused, or never reached anyone. It is worth a line because it is the expensive half
             // of the secret: reaching it from the digits again costs another full scrypt, and this
             // array is that payment sitting in the heap. Every Connection it was
             // handed to derived its own per-direction keys from it and is closed by now.
@@ -114,12 +114,12 @@ final class PairJoiner {
         IOException last = null;
         // The addresses of ONE provider, in the order OnLink put them: several routes to the same
         // device, not several devices. Tried in turn rather than raced, because a pairing attempt is
-        // not free — each failure that reaches the far end spends one of its five.
+        // not free, since each failure that reaches the far end spends one of its five.
         for (InetSocketAddress addr : provider.addrs) {
             // The connect is separated from everything after it, and the split is exactly where the
             // meaning changes. Only reaching the address can fail in a way another address might
             // fix; once the socket is open we are talking to the device, and the nonce exchange
-            // inside pairTo is plaintext — so a failure past this point is the code being wrong,
+            // inside pairTo is plaintext, so a failure past this point is the code being wrong,
             // which every address would report identically while spending one of the provider's
             // five attempts each time.
             Connection c;
@@ -147,11 +147,11 @@ final class PairJoiner {
                         + (port > 0 ? " (port " + port + ")" : ""));
                 return new Result(psk, port, m.optString("device", "?"), m.optString("type", "?"));
             } catch (Exception e) {
-                // Not split by exception type any more, and that was the bug: a provider that cannot
-                // decrypt closes the socket, so a wrong code surfaces here as an EOFException —
-                // an IOException, which the old catch read as "unreachable" and retried at the next
-                // address before reporting that nothing answered. A right code and a wrong one were
-                // indistinguishable in the message, and both spent every attempt.
+                // Not split by exception type: a provider that cannot decrypt closes the socket, so
+                // a wrong code surfaces here as an EOFException, indistinguishable from any other
+                // IOException a dropped connection could produce. Reporting them the same way is
+                // correct, because either way the attempt is spent and the user's only useful next move is
+                // the same.
                 throw new IOException("wrong code, or the pairing window has already closed", e);
             } finally {
                 c.close();
@@ -169,11 +169,11 @@ final class PairJoiner {
      * address, which is the point of the exercise.
      *
      * <p>Goes through {@link Config#save}, so the whole configuration is validated before a byte is
-     * written — a key that cannot be parsed never reaches the file.
+     * written, so a key that cannot be parsed never reaches the file.
      */
     static void apply(Context ctx, Result r) throws IOException {
         Properties v = new Properties();
-        // freshKey resets the whole schedule — activation time, successor, old-key ring — so the
+        // freshKey resets the whole schedule (activation time, successor, old-key ring), so the
         // paired key starts clean rather than inheriting the previous key's rotation state.
         Config.freshKey(v, r.pskHex);
         v.setProperty("discovery", "true");

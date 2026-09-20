@@ -27,11 +27,10 @@ import java.util.concurrent.TimeUnit;
  * this device one of the peers that can be found. The second is what a phone and a tablet need from
  * each other, neither of them having an address the other could be configured with.
  *
- * <p>Several services is the normal case now, not a conflict to arbitrate. The probe that used to
- * decide which PC was <em>the</em> server is gone with the hub it served — there is no server role
- * left in this protocol, only peers — and
- * what a service advertises is only a label: who a peer is comes from the node id in its HELLO, so a
- * rogue advertiser costs one failed handshake and nothing else.
+ * <p>Several services on the LAN at once is the normal case, not a conflict to arbitrate: there is
+ * no server role in this protocol, only peers. What a service advertises is only a label; who a
+ * peer is comes from the node id in its HELLO, so a rogue advertiser costs one failed handshake and
+ * nothing else.
  */
 public final class Mdns {
     static final String SERVICE_TYPE = "_clipsync._tcp.";
@@ -49,19 +48,19 @@ public final class Mdns {
      *
      * <p>Which is every phone and tablet: they have no stable name, and a user cannot type one into
      * the other's peer list. Only one of two devices has to find the other for both to be
-     * connected — this is the half that makes the finding possible.
+     * connected; this is the half that makes the finding possible.
      *
      * <p>Failures are logged and swallowed. A device that cannot advertise can still be reached at a
      * listed address and can still dial out; it is a degradation, not a fault worth stopping for.
      *
-     * <p><b>No TXT record on this service type</b>, deliberately — and note that the pairing type is
+     * <p><b>No TXT record on this service type</b>, deliberately, and note that the pairing type is
      * the opposite case, which is the whole of the reasoning. The Windows side advertises
      * {@code {"v": "5"}} here and nobody browses for it: neither this end nor clipsync.py has any
      * code that reads a peer's TXT on {@code _clipsync._tcp}. Matching it would look like a version
      * filter without being one, and a real one is not worth having here, because the version gate
      * belongs in the handshake ({@code Connection.readHello}) where both ends have said who they
-     * are. A pre-dial filter would trade one avoided connection to a peer that cannot talk to us —
-     * costing a single failed handshake nobody is watching — for the risk of silently skipping a
+     * are. A pre-dial filter would trade one avoided connection to a peer that cannot talk to us,
+     * costing a single failed handshake nobody is watching, for the risk of silently skipping a
      * good peer whose advertisement was cached, truncated or merely missing.
      *
      * <p>Pairing does the reverse: {@link PairProvider} sends {@code v} and {@link PairJoiner} (with
@@ -82,7 +81,7 @@ public final class Mdns {
      * @param type the service type; pairing advertises under its own ({@link Pairing#SERVICE_TYPE})
      *             so that ordinary discovery never has to filter it out and the pairing browse never
      *             turns up ordinary nodes
-     * @param txt  TXT record entries, or null. Pairing puts its salt here — public by design, since
+     * @param txt  TXT record entries, or null. Pairing puts its salt here, public by design, since
      *             a salt is not a secret and only has to be unique, and the joiner needs it before
      *             it can derive the key it would connect with.
      */
@@ -109,7 +108,7 @@ public final class Mdns {
      *
      * <p>Note that the name may come back changed: mDNS resolves a collision by suffixing, so two
      * devices that call themselves the same thing both keep advertising. That is the right outcome
-     * and the reason the advertised name is only ever a label — who a peer <em>is</em> comes from
+     * and the reason the advertised name is only ever a label; who a peer <em>is</em> comes from
      * the node id in its HELLO, never from what it advertises.
      */
     public static final class Advert implements NsdManager.RegistrationListener, AutoCloseable {
@@ -154,7 +153,7 @@ public final class Mdns {
      *
      * <p>The unit of discovery is the <b>instance</b> and not the address, which is the shape the
      * flat address list could not express. A machine typically advertises every adapter it has, so a
-     * list of addresses conflates "several ways to one peer" with "several peers" — and those are
+     * list of addresses conflates "several ways to one peer" with "several peers", and those are
      * exactly the two cases that have to be told apart now that there can be more than one peer on
      * the LAN. Racing the addresses of one instance is choosing a route; racing instances would be
      * choosing which peer to have, which is not a choice anyone wants made for them.
@@ -166,7 +165,7 @@ public final class Mdns {
          * The TXT record, never null. Empty for an ordinary Android node, which advertises none.
          *
          * <p>Read in exactly one place: {@code PairJoiner} takes the pairing salt out of it. A
-         * Windows peer also puts a {@code v} here and nothing on either side reads it — see
+         * Windows peer also puts a {@code v} here and nothing on either side reads it; see
          * {@link #advertise(Context, String, int)} for why this end neither sends nor consults one.
          */
         public final Map<String, String> attrs;
@@ -185,11 +184,11 @@ public final class Mdns {
     /**
      * Browse for the whole of {@code timeoutMs} and return every service found.
      *
-     * <p>The whole window, where this used to return the moment one service resolved. That was
-     * right while there was one peer to find and is wrong now: returning early means returning
-     * whichever peer answered first and never learning about the rest, and multicast replies from
-     * several devices do not arrive together. The window is the user's own setting, so its cost is
-     * visible and adjustable where the latency of a missed peer would not be.
+     * <p>The whole window is used deliberately, rather than returning as soon as one service
+     * resolves: multicast replies from several devices do not arrive together, and returning early
+     * would mean returning whichever peer answered first and never learning about the rest. The
+     * window is the user's own setting, so its cost is visible and adjustable where the latency of a
+     * missed peer would not be.
      *
      * <p>Blocking; call from a background thread only.
      */
@@ -197,7 +196,7 @@ public final class Mdns {
         return discover(ctx, net, SERVICE_TYPE, timeoutMs);
     }
 
-    /** @param type which service to browse for — ordinary nodes, or {@link Pairing#SERVICE_TYPE} */
+    /** @param type which service to browse for: ordinary nodes, or {@link Pairing#SERVICE_TYPE} */
     public static List<Instance> discover(Context ctx, Network net, String type, long timeoutMs) {
         NsdManager nsd = ctx.getSystemService(NsdManager.class);
         if (nsd == null) return new ArrayList<>();
@@ -230,9 +229,9 @@ public final class Mdns {
         final ExecutorService executor = SHARED_EXECUTOR;
         /** the type this browse asked for, minus its trailing dot, for matching what comes back */
         final String want;
-        /** advertised service name -> every address it resolved to, insertion-ordered */
+        /** maps an advertised service name to every address it resolved to, insertion-ordered */
         final Map<String, List<InetSocketAddress>> found = new LinkedHashMap<>();
-        /** advertised service name -> its TXT record, guarded by {@link #found} like the addresses */
+        /** maps an advertised service name to its TXT record, guarded by {@link #found} like the addresses */
         final Map<String, Map<String, String>> txt = new LinkedHashMap<>();
         /** Counted down only when the browse cannot start: otherwise the full window is the point. */
         final CountDownLatch done = new CountDownLatch(1);
@@ -241,9 +240,9 @@ public final class Mdns {
          * Set by {@link #close()}, and checked before registering another resolution callback.
          *
          * <p>NsdManager delivers {@code onServiceFound} on its own thread and does not stop at
-         * {@code stopServiceDiscovery}, so one arriving after close used to register a callback that
-         * nothing would ever unregister — a leak inside the system service, once per late discovery,
-         * for the life of the process.
+         * {@code stopServiceDiscovery}, so a discovery arriving after close must not register a
+         * resolution callback: nothing would ever unregister it, which would leak inside the system
+         * service for the life of the process.
          */
         private boolean closed;
 
@@ -261,7 +260,7 @@ public final class Mdns {
 
             @Override
             public void onServiceFound(NsdServiceInfo si) {
-                // Belt and braces — discovery is per-type, so nothing else should arrive. Note that
+                // Belt and braces: discovery is per-type, so nothing else should arrive. Note that
                 // the two types do not match each other by accident either: "_clipsync-pair._tcp"
                 // does not contain "_clipsync._tcp".
                 if (!si.getServiceType().contains(want)) return;

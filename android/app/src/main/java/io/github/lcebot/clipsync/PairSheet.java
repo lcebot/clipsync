@@ -25,28 +25,25 @@ import java.util.concurrent.Executors;
  * The two ends of pairing, on one surface: a device that already has the pre-shared key hands it to
  * one that does not, over mDNS, authorised by a short code the user carries across by eye.
  *
- * <p><b>Offering</b> — the device that has the key shows a nine-digit code, in groups of three, and
+ * <p><b>Offering</b>: the device that has the key shows a nine-digit code, in groups of three, and
  * waits.
- * <b>Joining</b> — the device that wants it browses, picks, and types the code it is being shown.
+ * <b>Joining</b>: the device that wants it browses, picks, and types the code it is being shown.
  * They are the same conversation from opposite sides, which is why they are one sheet and one file;
  * what differs is which pieces are visible and what the button does.
  *
- * <p>Everything the mechanism does blocks for <em>seconds</em> — a browse waits out its four-second
+ * <p>Everything the mechanism does blocks for <em>seconds</em>: a browse waits out its four-second
  * window, the key derivation is slow on purpose ({@link Pairing#channelKey}), and the provider's
- * user has twenty seconds to approve this device — so all of it runs on {@link #worker} and comes
+ * user has twenty seconds to approve this device, so all of it runs on {@link #worker} and comes
  * back through {@link #ui}. Off the main thread is only half of what that costs: a bottom sheet that
  * sits still for seconds is a bottom sheet the user believes has died, so every state that starts
- * such a call shows the progress row and says which of them it is in before handing the work over.
- * (The derivation used to be the longest of the three at around four seconds of PBKDF2; scrypt has
- * made it the shortest. The rule did not change with it — the browse and the approval wait were
- * always there, and they are not getting faster.) The
+ * such a call shows the progress row and says which of them it is in before handing the work over. The
  * rule in here is that no method touches a view except on the main thread, and none of the pairing calls
  * happen on it. {@link #askUser} is the one place that crosses in the other direction as well:
  * the question goes to the main thread and the answer is waited for on the caller's.
  *
  * <p><b>The caller must hold this and {@link #dismiss()} it when its Activity is destroyed.</b> A
- * rotation destroys and recreates the Activity while this object, its dialog and — the part that
- * matters — the {@link PairProvider} behind it carry on: an advertisement offering the key to the
+ * rotation destroys and recreates the Activity while this object, its dialog and, the part that
+ * matters, the {@link PairProvider} behind it carry on: an advertisement offering the key to the
  * network with nothing on screen to say so, and a code nobody can read any more.
  */
 final class PairSheet {
@@ -60,7 +57,7 @@ final class PairSheet {
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     /**
-     * One thread, not a pool: pairing is strictly sequential — browse, then connect, then write —
+     * One thread, not a pool: pairing is strictly sequential, browse, then connect, then write,
      * and a second one could only be doing something the user has already moved on from.
      */
     private final ExecutorService worker = Executors.newSingleThreadExecutor(r -> {
@@ -95,10 +92,9 @@ final class PairSheet {
      * What the screen behind the sheet wants to know.
      *
      * <p>The sheet runs over the settings page and over the welcome screen, and those want different
-     * things from it — one has fields showing the old key, the other has nothing to update and a
+     * things from it: one has fields showing the old key, the other has nothing to update and a
      * reason to close itself. An interface rather than an Activity type is what lets the same sheet
-     * serve both; before this it took a {@code MainActivity} and could only ever appear there, which
-     * is why the welcome screen used to have to finish first and hand the job back.
+     * serve both, appearing over whichever screen opened it.
      */
     interface Host {
         /** The key in the configuration has just changed. */
@@ -107,7 +103,7 @@ final class PairSheet {
         /**
          * The sheet has closed, however it ended.
          *
-         * <p>Reported unconditionally, and the host decides what it means — which is the division
+         * <p>Reported unconditionally, and the host decides what it means, which is the division
          * that matters here. The sheet cannot know: generating a key and then pairing nobody is a
          * *finished* setup on the welcome screen (there is a key now) and nothing at all on the
          * settings page. A sheet that only reported successful pairings left the welcome screen
@@ -159,7 +155,7 @@ final class PairSheet {
         this.a = a;
         sheet = new BottomSheetDialog(a);
         sheet.setContentView(R.layout.sheet_pair);
-        // The dialog's CoordinatorLayout, one level above the sheet frame — the same scene root the
+        // The dialog's CoordinatorLayout, one level above the sheet frame, the same scene root the
         // peer sheet uses, and for the same reason: a bottom sheet is anchored to the bottom edge,
         // so it changes height by moving its TOP edge, and inside the frame nothing moves at all.
         // Rooting the transition at the frame's parent is what lets that edge be animated instead of
@@ -174,49 +170,29 @@ final class PairSheet {
         codeLayout = sheet.findViewById(R.id.pair_code_layout);
         action = sheet.findViewById(R.id.pair_action);
         sheet.setOnDismissListener(d -> shut());
-        followKeyboard(sheet.findViewById(R.id.pair_root));
+        followKeyboard(sheet.getWindow());
         sheet.show();
     }
 
     /**
-     * Move the sheet's contents with the keyboard, in step with it.
+     * Keep the keyboard from covering the field by asking the window to resize, and by doing
+     * nothing else whatsoever.
      *
-     * <p>Two faults, and they look like one. The <b>gap</b> is a double inset: the sheet already
-     * pads itself clear of the navigation bar, and the keyboard covers the navigation bar, so adding
-     * both left exactly a navigation bar of empty space under the field. It is
-     * {@code max(ime, navigation)} that is wanted, never a sum — only one of the two is ever in
-     * front of the sheet.
+     * <p>This dialog's window already resizes when the keyboard appears, so the space the sheet has
+     * to live in has already shrunk by the keyboard's height before anything here runs. Padding the
+     * sheet's content by the keyboard height on top of that would double-count it: a sheet sized for
+     * {@code content + keyboard} inside a window already sized to {@code screen − keyboard} overflows
+     * its window and loses whatever does not fit off the bottom, in this layout, the Connect button.
      *
-     * <p>The <b>jump</b> is a timing fault. Insets are dispatched once, up front, with the value the
-     * keyboard will have when it has finished arriving — so padding applied there is applied whole,
-     * a frame before the keyboard has moved at all. {@code DISPATCH_MODE_STOP} holds that dispatch
-     * back until the animation is over and hands us {@code onProgress} instead, which is the
-     * keyboard's real position on every frame. Applying it there is what makes the sheet travel with
-     * the keyboard rather than beat it to the top.
+     * <p>So: state the resize rather than rely on it, and add nothing else. ADJUST_RESIZE is
+     * deprecated for activity windows under edge-to-edge, where the decor no longer fits system
+     * windows and the app is expected to consume insets itself, but a dialog window is not that
+     * window, and BottomSheetDialog leaves this one fitting them. Asking for it explicitly is how the
+     * behaviour this depends on stops being an accident.
      */
-    private void followKeyboard(View content) {
-        if (content == null) return;
-        final int base = content.getPaddingBottom();
-        content.setOnApplyWindowInsetsListener((v, insets) -> {
-            padBelow(v, insets, base);
-            return insets;
-        });
-        content.setWindowInsetsAnimationCallback(
-                new android.view.WindowInsetsAnimation.Callback(
-                        android.view.WindowInsetsAnimation.Callback.DISPATCH_MODE_STOP) {
-                    @Override
-                    public WindowInsets onProgress(WindowInsets insets,
-                                                   java.util.List<android.view.WindowInsetsAnimation> running) {
-                        padBelow(content, insets, base);
-                        return insets;
-                    }
-                });
-    }
-
-    private static void padBelow(View v, WindowInsets insets, int base) {
-        int ime = insets.getInsets(WindowInsets.Type.ime()).bottom;
-        int nav = insets.getInsets(WindowInsets.Type.navigationBars()).bottom;
-        v.setPadding(v.getPaddingLeft(), v.getPaddingTop(), v.getPaddingRight(), base + Math.max(ime, nav));
+    private void followKeyboard(android.view.Window w) {
+        if (w == null) return;
+        w.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
     }
 
     /**
@@ -245,7 +221,7 @@ final class PairSheet {
      *
      * <p>The one thing an Activity must do with the object these entry points return. Dismissing the
      * dialog runs {@link #shut()} through the dismiss listener, which is what stops the advertisement
-     * and the accept loop — a bottom sheet is not a child of the Activity's view tree and is not torn
+     * and the accept loop; a bottom sheet is not a child of the Activity's view tree and is not torn
      * down with it, so without this a rotation leaves a live pairing window with no UI attached.
      */
     void dismiss() {
@@ -265,10 +241,10 @@ final class PairSheet {
         // Everything that will ever be on this sheet is on it from the first frame, at its final
         // size: the code as a greyed placeholder in the same grouped nine digits, and the instruction in its
         // final wording rather than a short "Opening…" that is replaced by three lines a moment
-        // later. That swap was most of the height jump — the code line was only ever one of two.
+        // later. That swap was most of the height jump; the code line was only ever one of two.
         // The way out is on screen from the first frame, dimmed and reading "Cancel". A window that
         // stays open for two minutes waiting for somebody to walk over with a phone needs a way to
-        // say "never mind" that is not the back gesture — and putting it here from the start rather
+        // say "never mind" that is not the back gesture, and putting it here from the start rather
         // than growing it in later is the same argument as the code placeholder above: the sheet
         // measures once, at the size it is going to be.
         state(SHOW, SHOW, HIDE, HIDE, SHOW);
@@ -320,7 +296,7 @@ final class PairSheet {
         line.setPadding(gutter(), 0, gutter(), dp(4));
 
         // Its own transition, not state(): state() only starts one when a VISIBILITY changes, so the
-        // first device animated (the list appeared) and every one after it did not — the list was
+        // first device animated (the list appeared) and every one after it did not, because the list was
         // already visible, nothing it watches had changed, and the sheet grew in a single frame.
         // What is actually arriving is the line, so the line is what is named.
         //
@@ -334,7 +310,7 @@ final class PairSheet {
         list.setVisibility(View.VISIBLE);
         // Inside the transition begun above, so the button's change of width slides with the line
         // arriving rather than snapping beside it. The window is still open and the code is still
-        // valid — nothing here ends anything — but what leaving MEANS has changed: until now it
+        // valid; nothing here ends anything, but what leaving MEANS has changed: until now it
         // abandoned an attempt, and from now on it finishes one. Lighting the button up is how the
         // user is told that the thing they came to do is done, without taking the window away from
         // them while a second device might still be on its way over.
@@ -343,7 +319,7 @@ final class PairSheet {
     }
 
     /**
-     * "<i>Galaxy Tab wants the key. Give it?</i>" — asked on the main thread, answered on the
+     * "<i>Galaxy Tab wants the key. Give it?</i>", asked on the main thread, answered on the
      * provider's.
      *
      * <p>Called from {@link PairProvider}'s accept loop, which blocks until this returns. That is
@@ -353,7 +329,7 @@ final class PairSheet {
      *
      * <p>Three ways to reach "no", and they are deliberately the same answer: the button, dismissing
      * the dialog (Back, or the sheet going away under it), and the timeout. A refusal costs the
-     * caller nothing but its connection — see {@link PairProvider.Listener#onAskUser} — so erring
+     * caller nothing but its connection; see {@link PairProvider.Listener#onAskUser}, so erring
      * towards no has no cost the user can feel; erring towards yes gives away the key.
      */
     private boolean askUser(String device, String type) {
@@ -375,7 +351,7 @@ final class PairSheet {
                     // nobody thought of (Back, or shut() tearing the dialog down).
                     //
                     // The chain survives this call. MaterialAlertDialogBuilder overrides every
-                    // setter it inherits purely to narrow the return type — setOnDismissListener
+                    // setter it inherits purely to narrow the return type, setOnDismissListener
                     // included, declared as returning MaterialAlertDialogBuilder and not
                     // AlertDialog.Builder (its source at 1.14.0, under the comment "The following
                     // methods are all pass-through methods used to specify the return type for the
@@ -414,7 +390,7 @@ final class PairSheet {
     private void offering(PairProvider p) {
         provider = p;
         // Grouped for the eye and only here: Pairing.grouped inserts two spaces into a string that
-        // is nine digits everywhere else in this app. p.code — the ungrouped digits — is what
+        // is nine digits everywhere else in this app. p.code, the ungrouped digits, is what
         // PairProvider derived its channel key from, and nothing on this side ever feeds the
         // display string back into anything.
         //
@@ -481,7 +457,7 @@ final class PairSheet {
 
     private void askCode(Mdns.Instance device) {
         // The progress row is gone, not reserved. Holding it open through the whole code-entry
-        // screen — on top of two reserved lines of body text and a permanent error line — pushed
+        // screen, on top of two reserved lines of body text and a permanent error line, pushed
         // the field down and squeezed it, which is a worse thing to look at than an edge that
         // slides. Ui.visibilityMotion animates the row in when it is wanted.
         state(HIDE, HIDE, HIDE, SHOW, SHOW);
@@ -497,13 +473,12 @@ final class PairSheet {
      * <p>There is exactly one thing to do at this point and it needs nine keystrokes, so making the
      * user tap the field first is a tap that carries no decision. Posted rather than called inline:
      * the field has only just been made visible, and a view that has not been laid out cannot take
-     * focus — the request would be dropped and the keyboard would never come.
+     * focus, so the request would be dropped and the keyboard would never come.
      *
-     * <p>Re-checked when the progress row stopped being reserved: the field is set VISIBLE
-     * synchronously inside {@link #state}, before this posts, so the animation that now runs on the
-     * sheet's height is beside the point — it moves an edge, it does not delay the layout pass this
-     * waits for. The retry below is there anyway, because "focus failed" and "keyboard never came"
-     * look identical to a user and cost one frame to rule out.
+     * <p>The field is set VISIBLE synchronously inside {@link #state}, before this posts, so the
+     * transition animating the sheet's height is beside the point: it moves an edge, it does not
+     * delay the layout pass this waits for. The retry below is there anyway, because "focus failed"
+     * and "keyboard never came" look identical to a user and cost one frame to rule out.
      */
     private void typeCode() {
         EditText field = codeLayout.getEditText();
@@ -541,7 +516,7 @@ final class PairSheet {
         // Stripped first, and this is the one place it may be: the code is SHOWN in groups of three
         // on the other device, so it is copied down and typed with the spaces in it, and a user who
         // types what they were shown has made no mistake. The field's inputType="number" already
-        // drops them for most IMEs, which is exactly why this cannot be left to the field — "most"
+        // drops them for most IMEs, which is exactly why this cannot be left to the field: "most"
         // is not a thing to derive a key from, and a paste or an IME that lets one through would
         // otherwise be measured as ten characters and stretched as ten.
         //
@@ -559,29 +534,18 @@ final class PairSheet {
         // The button goes and the row arrives in its place. The sheet grows or shrinks by the
         // difference and Ui.visibilityMotion slides it there.
         state(HIDE, SHOW, HIDE, SHOW, HIDE);
-        // After state(), like every other text on this sheet — beginDelayedTransition has captured
+        // After state(), like every other text on this sheet, beginDelayedTransition has captured
         // the start scene by now, so whatever this does to the height is animated rather than
         // snapped. It should do nothing to it, the line being reserved, but the order is the rule.
         codeLayout.setError(null);
-        // Two labels for what used to be one, because the wait has two halves and no socket exists
-        // during the first: stretching the nine digits into a channel key (Pairing.SCRYPT_N), and
-        // only afterwards the network. Showing "Connecting" across all of it described something
-        // that had not started yet, over the exact stretch of time in which a silent sheet looks
-        // like a hung one — right after the user has finished typing and is watching for a reaction.
-        //
-        // THIS STATE IS BRIEF, AND IT STAYS. The derivation was four seconds of pure-Java PBKDF2
-        // when this label was added; native scrypt has taken it to something under one (see
-        // Pairing.SCRYPT_P — under one is an estimate, and p was chosen so that the pessimistic end
-        // of it is exactly one second). So on a decent phone the user sees "Checking the code"
-        // briefly before it becomes "Connecting". That is not a reason to delete it. It is the
-        // honest label for a slow or loaded device, where that second is two, and the sheet would
-        // otherwise be claiming to be on the network while it is not.
-        //
-        // Now that the derivation is usually a few frames rather than seconds, this label may come
-        // and go quickly. That is fine: the change swaps the button for the progress row, and
-        // Ui.visibilityMotion animates it. The sheet used to hold both spaces open so that nothing
-        // moved at all, which cost more in height than the movement was worth — see the note where
-        // KEEP used to be.
+        // Two labels rather than one, because the wait has two halves and no socket exists during
+        // the first: stretching the nine digits into a channel key (Pairing.SCRYPT_N), and only
+        // afterwards the network. A single "Connecting" label would describe something that has not
+        // started yet, over the exact stretch of time in which a silent sheet looks like a hung one,
+        // right after the user has finished typing and is watching for a reaction. The derivation is
+        // usually brief (see Pairing.SCRYPT_P, chosen so its pessimistic case is about one second),
+        // but it is the honest label for a slow or loaded device where that second becomes two, and
+        // the sheet would otherwise be claiming to be on the network while it is not.
         progressText.setText(R.string.pair_checking);
         worker.execute(() -> {
             try {
@@ -657,13 +621,10 @@ final class PairSheet {
     private static final int SHOW = View.VISIBLE;
     /** Off screen, and its space with it: the sheet is shorter by exactly this view. */
     private static final int HIDE = View.GONE;
-    // There was a third value here, KEEP = View.INVISIBLE, used on the joiner's code-entry screen so
-    // that the progress row and the button could trade places without the sheet's height moving.
-    // It is gone, and the reason is worth keeping: holding a row of space open for the whole of that
-    // screen — on top of the two lines pair_text reserves and the error line the field reserves —
-    // made the sheet tall and the field cramped. Three reservations stacked up to a worse result
-    // than the movement any one of them prevented. Ui.visibilityMotion animates the height change,
-    // so what is traded is a slide for a taller sheet, and the slide is the better half of that.
+    // Only these two values are used, never INVISIBLE: reserving space for a view that is not
+    // currently shown stacks up fast on this sheet, which already reserves two lines of body text
+    // and an error line under the code field. Ui.visibilityMotion animates the resulting height
+    // change instead, trading a taller sheet for a short slide.
 
     /**
      * The five pieces that come and go, set in one call so the sheet can animate between states.
@@ -678,7 +639,7 @@ final class PairSheet {
      *
      * <p>Call this first in a state, then set the text. {@code beginDelayedTransition} captures the
      * start values as it is called, so text set beforehand is text the transition thinks was always
-     * there — and the height change it causes would snap while everything around it slid.
+     * there, and the height change it causes would snap while everything around it slid.
      */
     private void state(int codeShown, int progressShown, int listShown,
                        int fieldShown, int actionShown) {
@@ -687,7 +648,7 @@ final class PairSheet {
         java.util.List<View> changing = new java.util.ArrayList<>();
         for (int i = 0; i < views.length; i++) {
             // Compared by value rather than by "is it VISIBLE", so that a state which changes
-            // nothing animates nothing — that is what keeps the once-a-second countdown from
+            // nothing animates nothing, which is what keeps the once-a-second countdown from
             // restarting the motion on every tick.
             if (views[i].getVisibility() != want[i]) changing.add(views[i]);
         }
@@ -705,7 +666,7 @@ final class PairSheet {
 
     // ------------------------------------------------------------------ first run
     /**
-     * Make a key, then hand it out — which is what "this is my first device" means: there is nothing
+     * Make a key, then hand it out, which is what "this is my first device" means: there is nothing
      * to pair with yet, so this device becomes the one the others join.
      *
      * <p>Discovery is turned on with it, because the next thing this device does is advertise.

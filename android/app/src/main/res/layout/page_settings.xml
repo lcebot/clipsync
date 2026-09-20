@@ -65,7 +65,7 @@
              Every group of controls on this page sits in one filled card, with the section title
              outside it. A card marks where one group ends and the next begins, which is what makes
              a switch and the controls it governs read as one thing rather than as neighbours that
-             happen to be adjacent. The cards holding a switch never hide — they hold the switch —
+             happen to be adjacent. The cards holding a switch never hide; they hold the switch,
              only the dependent content inside them does. -->
         <TextView style="@style/ClipSync.SectionTitle" android:text="@string/section_connection" />
 
@@ -112,14 +112,13 @@
                 </com.google.android.material.textfield.TextInputLayout>
 
                 <!-- Its own button under the field, not one of the field's icon slots. The trailing
-                     slot is the reveal toggle, and the leading slot — which does fit — puts an action
+                     slot is the reveal toggle, and the leading slot, which does fit, puts an action
                      where a text field's leading icon is read as decoration.
 
                      ClipSync.SettingsButton carries the geometry; themes.xml says why each of its
-                     items is there. Now that the button is outlined, its border lines up with the
-                     fields' borders and the icon is free to come back: the earlier problem — a Material
-                     Symbol's trim area putting the icon's ink ~4dp off a text column — only mattered
-                     while the label was the thing holding that column.
+                     items is there. Outlined, so its border lines up with the fields' borders, which
+                     is also what lets the icon sit beside the label without its trim area throwing
+                     the ink off a text column.
                      marginTop is 4dp, not 8dp: the button's background is drawn 4dp inside its view
                      box (containerInsetTop), so 4dp of margin reads as the same 8dp gap the fields
                      leave between each other. -->
@@ -145,14 +144,13 @@
                 <!-- The three ways to end up with a key, one per line, in the order of how much
                      work they are: make one, take one from a device that has it, or be walked
                      through the choice. They belong together because that is the decision the user
-                     is making at this field, which is also why pairing moved here out of the
-                     discovery card (it lived there because pairing *is* mDNS at both ends — true,
-                     and the weaker pull: a control belongs next to the thing it changes, and what
-                     pairing changes is the key). The switch it no longer sits under is handled
-                     in SettingsForm instead: tapping Pair turns discovery on rather than failing.
+                     is making at this field: a control belongs next to the thing it changes, and
+                     what pairing changes is the key, not the discovery switch (pairing is mDNS at
+                     both ends, but that is the weaker pull). SettingsForm turns discovery on when
+                     Pair is tapped with it off, rather than failing.
 
                      0dp between them, not 4dp: each carries its own 4dp container inset top and
-                     bottom, so consecutive buttons already stand 8dp apart — the same gap the text
+                     bottom, so consecutive buttons already stand 8dp apart, the same gap the text
                      fields leave. Adding margin here would make the group looser than the fields
                      above it and break the rhythm of the card. -->
                 <com.google.android.material.button.MaterialButton
@@ -177,14 +175,14 @@
              starts typing addresses into the list below it. It extends the "who we are" half that
              the port and PSK card began.
 
-             No switch, so it is a bare card in a column of switch-and-card pairs — the one place
+             No switch, so it is a bare card in a column of switch-and-card pairs, the one place
              that pattern does not hold, and it does not hold because there is nothing to turn off:
              an empty list already means "this device has no name of its own", and disabling such a
              list could only cause the mistakes it exists to prevent. Its label therefore lives
              inside the card; a fourth section heading would flatten the three the page has. -->
         <!-- The CARD is the touch target, not a rectangle inside it: MaterialCardView draws its
              ripple clipped to its own rounded shape, so the press lands on the shape the user sees.
-             A LinearLayout with selectableItemBackground cannot — its ripple is a rectangle inside a
+             A LinearLayout with selectableItemBackground cannot: its ripple is a rectangle inside a
              rounded card, and the corners give it away. -->
         <com.google.android.material.card.MaterialCardView
             android:id="@+id/own_card"
@@ -243,11 +241,11 @@
 
                 <!-- Collapsed by default: most devices have no name of their own, so this is a group
                      that exists for the minority who run a dynamic DNS client. SettingsForm expands
-                     it when the list is non-empty or carries an error — a setting the user cannot
+                     it when the list is non-empty or carries an error, because a setting the user cannot
                      see is worse than one that takes a tap. -->
                 <!-- clickable, and that is the whole trick: it swallows taps so that editing inside
-                     an open group never collapses it, while the header strip above — which is not
-                     inside this view — still reaches the card. No coordinate arithmetic, and it
+                     an open group never collapses it, while the header strip above, which is not
+                     inside this view, still reaches the card. No coordinate arithmetic, and it
                      stays right if the contents change height. -->
                 <LinearLayout
                     android:id="@+id/own_content"
@@ -279,11 +277,10 @@
              address is very often a LAN address too. Named that way, neither needs a subtitle.
 
              Spacing, three values and one rule each: **8dp between sub-groups** of a section (identity
-             card → own addresses → discovery → direct), **4dp** from a switch to the card it governs
-             — a seam, so the two read as one unit while staying two surfaces — and the section
-             title's own 6dp above the first card. The 8dp is the one to copy when a sub-group is
-             added; it was 6dp here and 8dp above, which read as this group belonging slightly more
-             to the one below it than to the one above.
+             card, then own addresses, then discovery, then direct), **4dp** from a switch to the card it governs,
+             a seam, so the two read as one unit while staying two surfaces, and the section
+             title's own 6dp above the first card. 8dp is the one to copy when a sub-group is added;
+             anything smaller reads as belonging more to the group below it than the one above.
              Those three are now @dimen/spacing_group, @dimen/spacing_seam and @dimen/spacing_heading,
              so the rule is the thing written at each call site and this paragraph is only its reason.
              values/dimens.xml carries the rest of the vocabulary.
@@ -295,7 +292,7 @@
              as a margin on the switch itself rather than padding on a wrapper: that puts the label on
              the fields' box-left edge and the track's right end on their box-right edge, for free.
              The gap ABOVE a switch card is the 6dp the section title already leaves above its own
-             card — the switch introduces a group, so it is spaced like a heading. Anything larger made
+             card: the switch introduces a group, so it is spaced like a heading. Anything larger made
              the groups inside Connection look further apart than Connection is from Transfer limits.
 
              gravity is still spelled out: MaterialSwitch inherits center_vertical|start from
@@ -336,7 +333,7 @@
                 <!-- labelFor is what ties this line to the slider under it for a screen reader, and
                      it is required here rather than merely encouraged: the slider's value is an
                      INDEX (0..6), so the only thing naming the setting is this TextView. Material's
-                     own guidance says exactly this — "If using a TextView to display the value of
+                     own guidance says exactly this: "If using a TextView to display the value of
                      the slider, you should set android:labelFor so that screen readers announce
                      that TextView refers to the slider"
                      (docs/components/Slider.md @ 1.14.0, "Making sliders accessible").
@@ -355,7 +352,7 @@
                      SettingsForm, not from the raw float: BaseSlider.onPopulateNodeForVirtualView
                      builds the node's description from formatValue(value), which returns the
                      formatter's output when one is set (BaseSlider.java @ 1.14.0). That is why the
-                     index never has to be explained to anybody — TalkBack says "4000 ms".
+                     index never has to be explained to anybody: TalkBack says "4000 ms".
 
                      tickVisibilityMode and not the old tickVisible, which 1.14 deprecates in favour
                      of it (slider/res/values/attrs.xml @ 1.14.0). autoLimit is the default and the
@@ -419,8 +416,8 @@
         <!-- Config.from() refuses a config with both switches off, so Apply has to refuse it too, and
              something has to say why: with both off, both group cards are hidden and there is no field
              left to hang an error on. Placed under the pair rather than on either switch, because
-             neither is wrong on its own. Styled as a TextInputLayout error would be — bodySmall on
-             colorError — and indented to the fields' label column so it reads as one. -->
+             neither is wrong on its own. Styled as a TextInputLayout error would be, bodySmall on
+             colorError, and indented to the fields' label column so it reads as one. -->
         <TextView
             android:id="@+id/paths_error"
             android:layout_width="match_parent"
@@ -522,7 +519,7 @@
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
-        <!-- Relay opt-out — declining to forward files between two peers that cannot reach each
+        <!-- Relay opt-out: declining to forward files between two peers that cannot reach each
              other. Its own card at the bottom of Transfer limits:
              relaying is bounded by the same size limits and costs the same bandwidth, so it belongs
              with the controls that govern how much data this device handles. -->

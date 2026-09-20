@@ -18,7 +18,7 @@
     android:orientation="vertical">
 
     <!-- Deliberately NOT fitsSystemWindows. A CoordinatorLayout that handles insets lays out every
-         child that does not handle them itself *inside* those insets — bottom included. The FABs
+         child that does not handle them itself *inside* those insets, bottom included. The FABs
          are such children, so the bottom inset would lift them off the navigation bar, and when the
          IME opens it would lift them by the whole keyboard a second time, on top of the resize that
          has already moved them. The top inset is what the app bar needs, and it takes that itself
@@ -61,7 +61,7 @@
 
                     <!-- Connection status. A direct Toolbar child, not a menu action view: the
                          Toolbar measures and lays out its children with their margins, so 16dp
-                         here is simply honoured — the line M3 puts a top app bar's trailing
+                         here is simply honoured: the line M3 puts a top app bar's trailing
                          element on, and the line the page content sits on. An action view would
                          instead be re-parented into the ActionMenuView, which builds fresh
                          LayoutParams and drops the margin. The dot is the chip's icon; it is
@@ -111,7 +111,7 @@
         </FrameLayout>
 
         <!-- ===== actions =====
-             Direct children of the CoordinatorLayout — the arrangement shrink()/extend() is built
+             Direct children of the CoordinatorLayout, the arrangement shrink()/extend() is built
              for, and where the component's own Behavior can see the app bar. Each pair is pinned to
              the bottom-end corner; the secondary one is slid left of the primary by a translation
              that follows its animated width (translation, so it costs no layout).

@@ -3,7 +3,7 @@
     <string name="app_name">ClipSync</string>
     <!-- Shown as the module description in the LSPosed manager and in the module repository:
          PackageManager reads it from android:description on <application>. -->
-    <string name="app_desc">Share one clipboard across your rooted Android devices and your Windows PC.</string>
+    <string name="app_desc">Keeps one clipboard in sync across your Android devices and your Windows PC, with text, images and files all supported.</string>
 
     <!-- actions -->
     <string name="action_stop">Stop</string>
@@ -28,7 +28,7 @@
          see happening: how often, that devices left off for a while are still let in, and what the
          one bad outcome is and how to recover from it. The hours are the real constants; if
          Keys.java changes, this changes with it. -->
-    <string name="psk_rotate_help">Every 48 hours this device makes a new key and passes it to the others, so a key that leaks is only useful for a few days. Devices that were switched off still connect — the last few keys keep working for about a week. A device left off longer than that has to be paired again.</string>
+    <string name="psk_rotate_help">Every 48 hours this device makes a new key and passes it to the others, so a key that leaks is only useful for a few days. Devices that were switched off still connect, because the last few keys keep working for about a week. A device left off longer than that has to be paired again.</string>
     <string name="psk_generate">Generate random PSK key</string>
     <string name="psk_replace_title">Replace the key?</string>
     <string name="psk_replace_body">Every other device is using the current key and will stop connecting until you set the new one there too.</string>
@@ -95,7 +95,7 @@
 
     <!-- Status chip in the app bar. Five states, distinct because the answer to "what do I do now"
          differs for each: Stopped needs a button, No network needs the network fixed, Idle needs
-         nothing. Disconnected is gone — with several peers it carried no information the sheet does
+         nothing. Disconnected is gone, because with several peers it carried no information the sheet does
          not carry better: the chip carries a COUNT, and which kind of link each peer has belongs
          beside that peer in the status sheet. -->
     <string name="state_stopped">Stopped</string>
@@ -104,12 +104,12 @@
     <string name="state_idle">Idle</string>
     <string name="state_connected">Connected (%1$d)</string>
     <string name="state_relay">Relay (%1$d)</string>
-    <string name="state_not_running">not running — restarting</string>
+    <string name="state_not_running">not running, restarting</string>
     <string name="state_autostart_off">auto-start off</string>
     <string name="target_discovery">Local network</string>
     <!-- Shown against "Local network" in the sheet while discovery is on and has found nothing. It
-         says what was looked for rather than just "nothing", because the three ordinary causes —
-         the other device asleep, mDNS blocked by the access point, client isolation — are all
+         says what was looked for rather than just "nothing", because the three ordinary causes,
+         the other device asleep, mDNS blocked by the access point, client isolation, are all
          invisible from here and none of them is a fault of this device. -->
     <string name="discovery_none">No other devices are advertising on this network</string>
 
@@ -128,8 +128,8 @@
     <!-- A peer that announced it was going idle, rather than one that simply went quiet. The same
          word the chip uses for this device in the same state, deliberately: it is the same state,
          and naming it twice would suggest otherwise. The half after the dash is what makes it
-         actionable — or rather, what makes it clearly *not* actionable. -->
-    <string name="peer_idle">Idle — screen off</string>
+         actionable, or rather, what makes it clearly *not* actionable. -->
+    <string name="peer_idle">Idle, screen off</string>
     <!-- No trailing full stop and no object: every user-facing string on this side is a short phrase,
          and "it" adds nothing a card the finger is already over does not say. -->
     <string name="dialog_tap_to_copy">Tap a card to copy</string>
@@ -157,8 +157,8 @@
     <string name="setup_button">Set up ClipSync</string>
     <!-- Pairing cannot run with local discovery off, at either end. Said rather than done silently:
          a control that quietly changes another one is worse than either refusing or asking. -->
-    <string name="pair_turned_discovery_on">Local network discovery turned on — pairing needs it</string>
-    <string name="pair_no_key">Set a PSK key first — there is nothing to share yet</string>
+    <string name="pair_turned_discovery_on">Local network discovery turned on, because pairing needs it</string>
+    <string name="pair_no_key">Set a PSK key first, because there is nothing to share yet</string>
 
     <!-- offering: this device has the key -->
     <string name="pair_offer_title">Pair new devices</string>
@@ -167,7 +167,7 @@
     <string name="pair_offer_body">On each new device, choose “I have another ClipSync device” and enter this code</string>
     <!-- Nine DIGITS, not nine dashes, and greyed rather than in the code's own colour. Digits
          because a dash and a digit do not draw to the same height, so a row of dashes still left the
-         line to grow when the real code replaced it — the one thing the placeholder exists to
+         line to grow when the real code replaced it, the one thing the placeholder exists to
          prevent. Grey because nine plausible digits in the code's colour are nine digits somebody
          will try to type.
 
@@ -178,12 +178,12 @@
     <string name="pair_code_placeholder">114 514 191</string>
     <!-- On screen for longer than "Starting" suggests: opening a window derives the channel key
          first (Pairing.SCRYPT_N), then binds a socket and registers an mDNS advertisement. It is
-         deliberately not more specific — unlike the joining side, nobody has just typed anything,
+         deliberately not more specific, unlike the joining side, nobody has just typed anything,
          so there is no action of the user's whose effect is in doubt. -->
     <string name="pair_opening">Starting</string>
     <!-- The countdown is the only "waiting" wording: a plain one would be replaced within a frame
          by this, and two strings for one moment is one too many. -->
-    <string name="pair_waiting_for">Waiting — %1$d s left</string>
+    <string name="pair_waiting_for">Waiting, %1$d s left</string>
     <!-- One line per device, appended under the code while the window stays open. -->
     <string name="pair_offer_gave">%1$s has the key</string>
     <!-- The three ways a window can end, told apart on purpose: a timer running out with nobody
@@ -191,19 +191,18 @@
          did its job should say so rather than report the clock. -->
     <string name="pair_offer_over">Finished. Every device that took the key is connecting now.</string>
     <string name="pair_expired">Nobody joined before the code expired.</string>
-    <string name="pair_burned">Too many wrong codes — the window was closed. Try again for a new code.</string>
+    <string name="pair_burned">Too many wrong codes, so the window was closed. Try again for a new code.</string>
     <string name="pair_cannot_open">Could not open a pairing window: %1$s</string>
 
     <!-- joining: this device wants the key -->
     <string name="pair_join_title">Pair with a device</string>
     <string name="pair_join_body">On the device that already works, open Settings and tap “Pair new devices”</string>
     <string name="pair_searching">Looking on this network</string>
-    <!-- Cut to the length of the two bodies above, and that is a layout decision as much as an
-         editorial one: this string replaces pair_join_body in the same TextView, and the version
-         before it ran to four lines against their two. pair_text reserves two lines (sheet_pair.xml
-         says why), so anything that fits in two leaves the sheet exactly where it was — and this is
-         a dead end with a button under it, which is the last moment to be moving the surface the
-         user is reading. Both checks survive the cut because both are things the user can act on. -->
+    <!-- Kept to two lines, and that is a layout decision as much as an editorial one: this string
+         replaces pair_join_body in the same TextView, which reserves two lines (sheet_pair.xml says
+         why), so anything that fits in two leaves the sheet exactly where it was, and this is a
+         dead end with a button under it, which is the last moment to be moving the surface the user
+         is reading. Both checks survive because both are things the user can act on. -->
     <string name="pair_none_found">Nothing is offering to pair. Check the other device\'s window, and that both are on one Wi-Fi.</string>
     <string name="pair_search_again">Look again</string>
     <string name="pair_pick">Found these. Pick the one showing a code.</string>
@@ -211,33 +210,32 @@
     <!-- "Nine-digit code", and it counts digits rather than characters on purpose: the other device
          shows "123 456 789", the field takes it either way (sheet_pair.xml says how), and telling
          the user the length in characters would make the spaces sound like part of the code. They
-         are not — they never leave the screen they are drawn on. -->
+         are not; they never leave the screen they are drawn on. -->
     <string name="pair_code_hint">Nine-digit code</string>
     <string name="pair_code_length">Nine digits</string>
     <string name="pair_connect">Connect</string>
     <!-- The way out of the offering window, and it is the same button throughout: "Cancel" while
          nothing has come of the window, "Done" once a device has the key. Two labels rather than one
-         neutral "Close" because the two moments are not the same moment — leaving before anything
+         neutral "Close" because the two moments are not the same moment: leaving before anything
          happened abandons the attempt, leaving after it succeeded finishes it, and a button that
          cannot tell the user which one they are doing is a button they hesitate over. -->
     <string name="pair_cancel">Cancel</string>
     <string name="pair_done">Done</string>
     <!-- Two labels for one button press, and the split is not cosmetic. Turning the nine digits
          into a channel key is a deliberately slow scrypt (Pairing.SCRYPT_N), and no socket is
-         opened until it is done — so "Connecting" was describing something that had not started, at
-         the exact moment the user is watching to see whether their typing did anything. This one
-         covers the derivation, pair_connecting covers the part that is actually on the network.
+         opened until it is done, so a single "Connecting" would describe something that had not
+         started, at the exact moment the user is watching to see whether their typing did anything.
+         This one covers the derivation, pair_connecting covers the part that is actually on the
+         network.
 
-         Kept, and less of a flicker than it was. The derivation was four seconds of pure-Java
-         PBKDF2 when this string was written and is something under a second of native scrypt now
-         (Pairing.SCRYPT_P, where the estimate and its uncertainty are written out) — long enough to
-         read on most phones, and on a slow or loaded one it is the only true thing the sheet could
-         be saying. PairSheet.connect has the argument for
-         why the flicker moves nothing in the layout.
+         Kept even though the derivation is usually brief (Pairing.SCRYPT_P, where the estimate and
+         its uncertainty are written out): on a slow or loaded phone it is the only true thing the
+         sheet could be saying. PairSheet.connect has the argument for why the flicker moves nothing
+         in the layout.
 
          Both are short on purpose, as are pair_opening, pair_searching and pair_waiting_for: they
          all land in the same one-line row beside the loading indicator, and one of them wrapping to
-         two would make the sheet grow in the middle of a wait — including the changeover from this
+         two would make the sheet grow in the middle of a wait, including the changeover from this
          one to pair_connecting, which happens on its own with nobody touching anything. Keep every
          string in that row to a few words, in every translation. -->
     <string name="pair_checking">Checking the code</string>
@@ -253,7 +251,7 @@
          the room, where this dialog is usually seen. "Give the key" rather than "OK": the button
          says what it does, because what it does cannot be undone. -->
     <string name="pair_ask_title">Give the key to this device?</string>
-    <string name="pair_ask_body">%1$s (%2$s) entered the code correctly.\n\nIf that is not a device of yours, say no — somebody else on this network guessed the code.</string>
+    <string name="pair_ask_body">%1$s (%2$s) entered the code correctly.\n\nIf that is not a device of yours, say no, because somebody else on this network guessed the code.</string>
     <string name="pair_ask_yes">Give the key</string>
     <string name="pair_ask_no">No</string>
 
@@ -280,6 +278,6 @@
     <string name="snack_save_failed">Save failed: %1$s</string>
     <!-- Substituted into the line above when the failure carried no message of its own. The
          exception itself goes to the log; a class name in a Snackbar is not something anyone can
-         act on, and it used to be the only record of what went wrong. -->
+         act on. -->
     <string name="save_failed_generic">could not write the settings file</string>
 </resources>

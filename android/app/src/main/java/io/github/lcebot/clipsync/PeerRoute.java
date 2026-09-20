@@ -5,26 +5,22 @@ import org.json.JSONObject;
 /**
  * Everything a file transfer needs to know about the peer it is moving bytes to, and nothing else.
  *
- * <p>{@link Transfer} used to hold the whole control {@link Connection} for this. It read five
- * fields off it — the address, the peer's <em>listening</em> port, whether the peer is on our LAN,
- * which network the session rides on, and how the link came up — and it kept the object so that the
- * service could later ask "whose transfer is this?". Holding a live session to answer those is
- * more coupling than the question deserves: a Transfer has no business being able to send a CLIP,
- * read a HELLO or close a peer's link, and while it could, every one of those was one careless line
- * away.
+ * <p>A {@link Transfer} needs to open a data connection to its peer and, if the transfer fails, say
+ * so on the control connection, but nothing more. Giving it the whole control {@link Connection} for
+ * that would let it send a CLIP, read a HELLO, or close a peer's link, none of which a transfer has
+ * any business doing; every one of those would be one careless line away. This type narrows the
+ * surface to exactly the two things a transfer is allowed to do.
  *
- * <p><b>Three methods, and no fields of its own.</b> It began as a snapshot — peer id, label, via,
- * lanPeer, drivesTransfer, all copied at construction — on the assumption that a transfer would
- * want to read them. None of them ever acquired a reader: the two callers that ask those questions
- * ({@code FileExchange}, {@code SyncService}) hold the control connection already and ask it
- * directly, and a transfer only ever needs to open a stream, say one thing out of band, and be
- * recognised. Fields nobody reads are worse than absent ones here, because each of them is a second
- * copy of a connection's state that looks authoritative and is not.
+ * <p><b>Three methods, and no fields of its own.</b> The two callers that need to know a peer's
+ * label, address, or how the link came up ({@code FileExchange}, {@code SyncService}) hold the
+ * control connection already and ask it directly; a transfer itself only ever needs to open a
+ * stream, say one thing out of band, and be recognised. Keeping no snapshot of the peer's state
+ * here avoids a second copy of it that could drift from the connection's own.
  *
  * <p><b>What it is not.</b> It is not a value type, and the one thing stopping it is
  * {@link Connection#data}, which takes the control connection to open a data one. Until that method
  * takes a route instead, the connection is held here, private, and reachable only through
- * {@link #data} and {@link #send} — so the coupling is one field in one class instead of a field on
+ * {@link #data} and {@link #send}, so the coupling is one field in one class instead of a field on
  * every transfer. It is also not an identity: two routes to one peer are two routes, and
  * {@link #carriedBy} asks about the connection rather than about the peer, because a link closing
  * must abort what <em>that link</em> was carrying and not what a second link to the same device is.
@@ -45,7 +41,7 @@ final class PeerRoute {
      * Is this route the one riding {@code c}?
      *
      * <p>Asked by identity and not by peer id on purpose. With several links a peer can be reachable
-     * twice, and a link that closes must stop only what it was itself carrying — matching on the id
+     * twice, and a link that closes must stop only what it was itself carrying; matching on the id
      * would let a target that merely failed to connect abort the transfer its twin is happily
      * running.
      */

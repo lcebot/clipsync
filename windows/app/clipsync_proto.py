@@ -3,8 +3,8 @@ The wire: frame types, the key schedule, and the channel that carries them.
 
 Extracted from clipsync.py for the same reason clipsync_config.py was, and the reason is worth
 stating once more because it is the only thing holding the three modules apart: **importing
-clipsync.py has side effects** — it configures logging into the service's own log file and registers
-a clipboard format — so anything that is not the service cannot import it.  The configurator needed
+clipsync.py has side effects**: it configures logging into the service's own log file and registers
+a clipboard format, so anything that is not the service cannot import it.  The configurator needed
 the validation rules; the pairing joiner needs the channel.  Restating either would mean two copies
 of a protocol, and the second copy is the one that drifts.
 
@@ -13,7 +13,7 @@ one, so the service's handlers apply when the service imports it and nothing is 
 configurator does.
 
 The Android side of all of this is Connection.java; the two files are read together, and between
-them they are the protocol's only specification — there is no separate document to consult, so a
+them they are the protocol's only specification, because there is no separate document to consult, so a
 rule that is not written down here or there is not written down anywhere.
 
 The shape of the thing, once, so the constants below have somewhere to hang:
@@ -33,8 +33,9 @@ The shape of the thing, once, so the constants below have somewhere to hang:
 * **Nothing is negotiated.** `PROTOCOL_VERSION` must match exactly and a mismatch is refused with a
   plain message; capabilities (`persistent`, `data_out`, `port`) are *declared* in HELLO and each
   end works out the consequences from the same declarations, so both reach the same answer without
-  exchanging a single decision.  Every asymmetry this project has had came from breaking that:
-  one end declared a field and the other never read it.
+  exchanging a single decision.  That guarantee only holds if both ends actually read every
+  declared field; one end declaring something the other never reads is a silent asymmetry, which
+  is what `audit_hello_sent` / `audit_hello` below exist to catch.
 """
 import hashlib
 import hmac
@@ -61,14 +62,14 @@ __all__ = [
 
 log = logging.getLogger("clipsync")
 
-# Frame types, grouped by purpose and renumbered for the draft protocol.  No external release has
-# ever shipped, so nothing reads the old numbers.
+# Frame types, grouped by purpose.  No external release has ever shipped, so the numbering is free
+# to be whatever groups most sensibly.
 
 # Session lifecycle.
 T_HELLO = 1
 # "I am closing this connection, and here is why" - {reason}.  A close without one becomes a loop,
 # and it needs no network trouble to happen: the side whose connection is closed sees nothing but a
-# drop, its reconnect logic fires, and it rebuilds exactly the link that was just discarded — to be
+# drop, its reconnect logic fires, and it rebuilds exactly the link that was just discarded, only to be
 # discarded again.  So the closing side says why first, and the peer that hears it does not schedule
 # a redial.  The reason is what tells the two long waits apart: another route won, or the device
 # went to sleep.
@@ -83,17 +84,17 @@ T_PING, T_PONG = 3, 4
 # *listens* and dials out itself the moment its screen comes on.  Redialling would buy nothing and
 # cost a wake-up on a phone that has just settled.  Android says it at the end of every screen-off
 # session and not only at the transition, because a sleeping device still accepts a connection,
-# delivers its burst and closes — and that close, unannounced, arrives as a reset and reads as a
+# delivers its burst and closes, and that close, unannounced, arrives as a reset and reads as a
 # fault.
 #
 # Recorded against the **peer**, not the link (SyncState.idle_peers / SyncService.idlePeers): two
 # devices that found each other over mDNS both dial, one of the two links is dropped as a duplicate,
-# and the survivor may be the inbound one — so the goodbye can arrive on a link the dialler does not
+# and the survivor may be the inbound one, so the goodbye can arrive on a link the dialler does not
 # own and would never hear about.
 BYE_IDLE = "idle"
 
 # Key rotation.  Sent after HELLO on every control connection, and again whenever the schedule
-# changes, carrying {psk, since, next} — the sender's current key, when it became active (epoch ms,
+# changes, carrying {psk, since, next}: the sender's current key, when it became active (epoch ms,
 # the *sender's* clock), and its successor if one exists yet.
 #
 # A device with rotation switched off still sends this when it has a non-empty schedule: a key set
@@ -115,31 +116,32 @@ T_KEYS = 5
 # compared lexicographically, and a node applies an incoming clip only if its version is greater
 # than what it holds.  Last writer wins.
 #
-# Clock skew is corrected, not tolerated — a device running 30 seconds fast would win every race it
-# should lose — so each node keeps a per-peer offset (see clock_offset below) and normalises an
+# Clock skew is corrected, not tolerated, because a device running 30 seconds fast would win every race it
+# should lose, so each node keeps a per-peer offset (see clock_offset below) and normalises an
 # incoming version into its own clock domain before comparing.  Ordering survives that because a
 # common shift preserves order: every node reaches the same verdict in its own domain.  A forwarder
-# must re-normalise on the way out, because the next hop has no offset for the *origin* — it has no
+# must re-normalise on the way out, because the next hop has no offset for the *origin*; it has no
 # connection to it, which is why the clip was forwarded at all.  Shifts compose, so the chain stays
 # consistent at any depth.
 #
 # `to` is who the sender already sent this to, and a receiver forwards to exactly
-# `my peers ∖ to` — the ones the origin could not reach itself.  Three rules keep that bounded:
+# `my peers ∖ to`, the ones the origin could not reach itself.  Three rules keep that bounded:
 # a forwarded frame carries `forwarded: true` and is never forwarded again (so depth is at most two
 # hops and no TTL is needed); a frame is never sent back down the link it arrived on; and every node
 # keeps the last 64 seen keys and drops repeats.  The third is the safety net that makes duplicate
 # delivery harmless whatever the topology, which is what lets the rest stay this simple.
 T_CLIP = 6
 
-# File transfer.  OFFER {seq,name,mime,size,sha256,from,to,forwarded} -> HAVE (already on disk,
-# nothing moves) | SKIP (over this link's size limit) | WANT {ranges of missing chunks}; then the
+# File transfer.  OFFER {seq,name,mime,size,sha256,from,to,forwarded} is answered with HAVE
+# (already on disk, nothing moves), SKIP (over this link's size limit), or WANT {ranges of missing
+# chunks}; then the
 # bytes over up to N parallel data connections, as CHUNK (u32 index || bytes) answered by PULL
 # {ranges}, ending in END or ABORT.
 #
 # Chunks are addressed **by index, not by byte offset**, and that is load-bearing rather than
 # cosmetic: they may arrive over eight connections in any order, be forwarded in that order by a
 # relay, and still be written positionally at the far end.  A byte-stream protocol could not relay
-# while receiving.  There are no per-chunk hashes on purpose — the receiver verifies the whole file
+# while receiving.  There are no per-chunk hashes on purpose, because the receiver verifies the whole file
 # when it reassembles it, so a corrupted chunk cannot escape, and a second layer of verification
 # would cost bandwidth on every transfer to save work on a failure that should not happen.
 T_OFFER, T_WANT, T_HAVE, T_SKIP = 7, 8, 9, 10
@@ -157,28 +159,28 @@ T_PAIR_ASK, T_PAIR_KEY = 15, 16
 # **Receivers coordinate; the sender does not.**  The sender states who it offered to, and each
 # receiver computes `(OFFER.to ∩ my LAN peers) ∪ {me} ∪ {origin, if on my LAN}` and takes the
 # highest-priority member: itself or the origin means WANT as usual, anyone else means RELAY_ASK
-# {sha256, size} to that one node and wait.  No topology protocol, no election messages — the
+# {sha256, size} to that one node and wait.  No topology protocol, no election messages: the
 # priority order is total, so every node derives the same answer from the same inputs.
 #
 # RELAY_OK accepts; RELAY_NO declines with a reason that says whether to come back: `busy`
-# (retryable — the relay is itself waiting for this file, which caps the depth at one hop by
-# construction rather than by assumption) or `refused` (final — over its size limit, or opted out).
+# (retryable, because the relay is itself waiting for this file, which caps the depth at one hop by
+# construction rather than by assumption) or `refused` (final, because it is over its size limit, or opted out).
 # On acceptance the relay sends a normal OFFER when it has the data, and the waiter answers with a
 # normal WANT: there is deliberately no READY frame, because OFFER already means "I have this, do
 # you want it" and reusing it puts the second half of the transfer on the existing, debugged path.
 #
 # A relay that fails is not a jump back to the origin: the waiter walks *down* its candidate list,
 # which it fixed when the OFFER arrived and never recomputes.  Jumping to the origin would throw the
-# whole optimisation away at the first failure — three waiters on a dead relay would send three
+# whole optimisation away at the first failure, because three waiters on a dead relay would send three
 # WANTs up the expensive link, which is the exact thing this exists to prevent.  A fixed descending
 # walk over a finite totally-ordered list terminates at the origin by construction.
 T_RELAY_ASK, T_RELAY_OK, T_RELAY_NO = 17, 18, 19
 # Peer roster exchange: {peers: [{id, name, type, persistent, battery}]}, sent after HELLO and again
 # whenever a direct peer connects, disconnects or changes a relay-relevant property.
 #
-# Each node otherwise knows only the peers it has a TCP connection to.  In `A —internet— B —LAN— C`
-# neither A nor C knows the other exists, so the `to` list A builds is {B} and C — receiving B's
-# re-announcement rather than A's original OFFER — cannot make a sound relay decision from it.  The
+# Each node otherwise knows only the peers it has a TCP connection to.  In a chain where A reaches B over the
+# internet and B reaches C over the LAN, neither A nor C knows the other exists, so the `to` list A builds is {B}, and C, receiving B's
+# re-announcement rather than A's original OFFER, cannot make a sound relay decision from it.  The
 # roster gives every node the 2-hop neighbourhood, which is what the relay election needed all
 # along.
 #
@@ -198,7 +200,7 @@ T_PEERS = 20
 # connection with a plain message instead of a feature that silently does the wrong thing.
 #
 # 2: HELLO is exchanged in both directions and carries the node id, type, persistence and battery
-# bucket. A clean break — a version 1 peer is refused rather than tolerated, because a peer that
+# bucket. A clean break: a version 1 peer is refused rather than tolerated, because a peer that
 # cannot name itself cannot be deduplicated or recognised as self.
 # 3: HELLO also carries `port` and `data_out`, and every device listens.  The bump is not
 # bookkeeping: both new fields have defaults, so a version-2 peer would connect and work, and then
@@ -215,9 +217,9 @@ T_PEERS = 20
 # would read the declaration correctly, so this alone would not need a bump; the sha rule above is
 # why the version moves, and the two ship together.
 PROTOCOL_VERSION = 5
-READ_TIMEOUT = 90          # seconds without any frame -> drop client
+READ_TIMEOUT = 90          # seconds without any frame before the client is dropped
 # Until a peer has authenticated one frame, everything it says is an unauthenticated stranger's
-# claim — including the length prefix.  A HELLO is a dozen short JSON fields, so this is several
+# claim, including the length prefix.  A HELLO is a dozen short JSON fields, so this is several
 # times what the largest legitimate one needs, and it is the difference between "a stranger can
 # make us allocate 8 KiB" and "a stranger can make us allocate max_frame".  Mirrors
 # Connection.PAIR_MAX_FRAME on the Android side, raised to 8192 for room for long device names.
@@ -241,13 +243,12 @@ def hkdf_sha256(ikm: bytes, salt: bytes, info: bytes, length: int = 32) -> bytes
 
 # ----------------------------------------------------------------------------- HELLO field contract
 # The two halves of the declaration, written down so they can be compared against what actually
-# arrives. Every asymmetry this project has had looked the same from the inside: one end put a field
-# in HELLO and the other end simply never read it, with no exception, no timeout and no log line.
-# `data_out` was sent for two protocol versions before anyone noticed nothing consumed it.
+# arrives. A field one end puts in HELLO and the other simply never reads produces no exception, no
+# timeout and no log line on its own; it just silently does nothing, for as long as nobody notices.
 #
 # Keep these in lockstep with the HELLO that clipsync.py builds (both the dialling and the accepting
-# path) and with read_hello() below. Costs one set lookup per session and catches a whole class of
-# bug at the moment it is introduced rather than the week a file will not transfer.
+# path) and with read_hello() below. Costs one set lookup per session and catches that class of bug
+# at the moment it is introduced rather than the week a file will not transfer.
 HELLO_SENT = frozenset({"v", "id", "device", "type", "persistent", "battery",
                         "clip_ts", "clip_sha", "lan", "port", "data_out"})
 HELLO_READ = frozenset({"v", "id", "device", "type", "persistent", "battery",
@@ -304,13 +305,13 @@ class SecureChannel:
     One TCP connection with per-direction AEAD keys and nonce counters.
 
     `initiator` says which half of the nonce exchange to perform. The two key labels are named for
-    who opened the connection, not for who is a server — this PC now dials as well as accepts, and a
+    who opened the connection, not for who is a server, because this PC now dials as well as accepts, and a
     channel it dialled is the "c" side of its own link. Getting this backwards does not fail at the
     handshake, which exchanges plaintext nonces; it fails at the first frame, as a decrypt error.
 
     `psk` is whatever secret this channel is keyed on, and it is not always the PSK: a pairing
-    channel passes a key derived from the nine-digit code instead, and everything below — the nonces,
-    the per-direction keys, the AEAD, the replay resistance — comes along unchanged.  That is the
+    channel passes a key derived from the nine-digit code instead, and everything below (the nonces,
+    the per-direction keys, the AEAD, the replay resistance) comes along unchanged.  That is the
     whole of what makes pairing possible without new machinery, and a caller without the code fails
     here in exactly the way a wrong PSK does.
 
@@ -333,17 +334,17 @@ class SecureChannel:
         # The peer's *listening* port and whether it can open data connections of its own. Both come
         # from HELLO because neither is observable: an accepted socket's remote port is the peer's
         # ephemeral source port and reaches nothing, and "can you dial out?" is a capability, not a
-        # property of the socket. Together they decide which end opens data connections — see
+        # property of the socket. Together they decide which end opens data connections; see
         # drives_transfer().
         self.peer_port = 0
         self.peer_data_out = False
         self.limit = 0                 # file size limit for this client (set after HELLO)
-        # Which of two links to one peer is the older. Only needed for the third duplicate rule —
+        # Which of two links to one peer is the older. Only needed for the third duplicate rule,
         # when both links were opened by the *same* node, two names for one machine, the older one
         # is kept because it is the one already carrying traffic.
         self.opened = time.monotonic()
         # Set when this link lost a duplicate tiebreak and was closed from another thread. The owning
-        # thread sees only a closed socket, which is indistinguishable from the peer going away —
+        # thread sees only a closed socket, which is indistinguishable from the peer going away,
         # and a dialler that cannot tell those apart redials into the link it just lost.
         self.superseded = False
         self.matched_secret = None     # the secret that authenticated (set on first recv)
@@ -353,7 +354,7 @@ class SecureChannel:
         # Measured with a round trip and not a single reading: `peer clock − my clock` taken on
         # arrival is wrong by about half the round-trip time, while the NTP form
         # `((t2 − t1) + (t3 − t4)) / 2` costs the same two messages. Re-measured continuously,
-        # because phones jump when NTP corrects them — PING/PONG is already a round trip on a timer,
+        # because phones jump when NTP corrects them; PING/PONG is already a round trip on a timer,
         # so carrying the four timestamps on it makes this nearly free.
         self.clock_offset = 0
         self.send_lock = threading.Lock()
@@ -363,7 +364,7 @@ class SecureChannel:
         #
         # A channel we opened is exempt from both, because there is no unauthenticated party on it:
         # we chose the address, we hold the key, and the first frame we read may legitimately be a
-        # 512 KiB CHUNK on a data connection — which a HELLO-sized cap would reject and a 15-second
+        # 512 KiB CHUNK on a data connection, which a HELLO-sized cap would reject and a 15-second
         # deadline would kill while the peer was still seeking to the right offset. Android draws
         # the same line: its cap keys off `keyResolved`, which an outbound single-key connection has
         # from the moment it is constructed.
@@ -483,10 +484,9 @@ class SecureChannel:
         try:
             pt = self.rx.decrypt(self._nonce(self.rx_ctr), ct, None)
         except InvalidTag:
-            # Said out loud, because `InvalidTag` says nothing: its str() is the empty string, so
-            # letting it escape produced log lines that ended in "dropped: " with the reason
-            # missing. The multi-key arm above has always named this failure; this one did not, and
-            # the two arms are the same event.
+            # Named explicitly rather than left to propagate, because `InvalidTag`'s str() is the
+            # empty string: letting it escape unhandled would produce a log line that ends in
+            # "dropped: " with no reason attached.
             #
             # On the FIRST frame it means the peer holds a different key -- the frame arrived whole
             # and did not authenticate -- which is the only common cause and the only one the user
@@ -519,7 +519,7 @@ class SecureChannel:
         The BYE is the whole point: a close without one becomes a loop. The far side would see only
         a disconnect, reconnect, and rebuild exactly the link that was discarded.
 
-        Closing the socket is what ends the link — the owning thread is blocked in `recv()` and
+        Closing the socket is what ends the link; the owning thread is blocked in `recv()` and
         unwinds through its own `finally`, so this is safe to call from another thread and needs no
         co-operation from the one that owns the channel.
         """

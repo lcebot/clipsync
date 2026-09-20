@@ -28,13 +28,13 @@ import java.util.Set;
  *
  * <p>The boundary is the file format on one side and a boolean on the other. This class knows every
  * property name, every unit conversion, every check and every group that hides when a switch turns
- * off — and it knows nothing about the service, the app bar, the FABs or the other page. It never
+ * off, and it knows nothing about the service, the app bar, the FABs or the other page. It never
  * saves: {@link #values()} hands out what the user typed and the Activity decides what to do with
  * it, which is also why a save that fails comes back through {@link #showSaveProblem} rather than
  * being caught here.
  *
  * <p>Motion belongs to the page, not to any one control, so every reflow on this page runs through
- * {@link Ui#visibilityMotion} against a single scene root — the settings column. The two address
+ * {@link Ui#visibilityMotion} against a single scene root, the settings column. The two address
  * lists are given that same root through {@link AddressList.Host}.
  */
 final class SettingsForm {
@@ -43,7 +43,7 @@ final class SettingsForm {
         /** The form's validity changed, or was re-asserted. Gates Apply. */
         void onValidity(boolean valid);
 
-        /** Say something to the user — the form has no Snackbar anchor of its own. */
+        /** Say something to the user, because the form has no Snackbar anchor of its own. */
         void snack(int textRes);
     }
 
@@ -56,7 +56,7 @@ final class SettingsForm {
     private final MaterialSwitch discovery, direct, relayOptOut;
     private final CheckBox pskRotate;
     /**
-     * The Direct connections list, and this device's own addresses — one class, twice. The second
+     * The Direct connections list, and this device's own addresses: one class, twice. The second
      * list is the set of names and IPs by which other devices reach THIS one, which is how a
      * configured target is recognised as being this device rather than a peer.
      */
@@ -64,12 +64,12 @@ final class SettingsForm {
     private final MaterialButton pskRandom;
     /** The group each switch governs. Whole cards now, because the switches sit outside them. */
     private final View discoveryCard, directCard;
-    /** Shown under the pair when both switches are off — see {@link #validate()}. */
+    /** Shown under the pair when both switches are off; see {@link #validate()}. */
     private final View pathsError;
 
     /** The collapsible own-addresses group: the card that is pressed, its body, and the chevron. */
     private final View ownCard, ownContent, ownChevron;
-    /** Whether that group currently holds a bad address — see the card's click listener. */
+    /** Whether that group currently holds a bad address; see the card's click listener. */
     private boolean ownHasError;
     private final Slider browse, threads;
     private final TextView browseLabel, threadsLabel;
@@ -128,7 +128,7 @@ final class SettingsForm {
             boolean open = ownContent.getVisibility() != View.VISIBLE;
             // Never close over an error. The message is inside the group, and hiding it would leave
             // Apply disabled with nothing on screen to say why. Doing nothing is not a dead end
-            // either — the reason the tap was refused is the red line the user is looking at.
+            // either: the reason the tap was refused is the red line the user is looking at.
             if (!open && ownHasError) return;
             setOwnExpanded(open, true);
         });
@@ -155,12 +155,12 @@ final class SettingsForm {
         });
         Haptics.onClick(pskRandom, this::newPsk);
         // Both sliders run over an INDEX into a step table, not over the value they configure, so
-        // the formatter is not decoration — it is the only place the number a user cares about is
-        // produced. It is also what a screen reader speaks, which was the open question here and is
-        // now settled: BaseSlider.onPopulateNodeForVirtualView composes the node's description as
+        // the formatter is not decoration: it is the only place the number a user cares about is
+        // produced. It is also what a screen reader speaks:
+        // BaseSlider.onPopulateNodeForVirtualView composes the node's description as
         // "<type>, <value>" with the value coming from formatValue(), and formatValue() returns the
         // LabelFormatter's output whenever hasLabelFormatter() (BaseSlider.java @ 1.14.0). So
-        // TalkBack says "4000 ms", never "3". The other half — WHICH slider is being read out —
+        // TalkBack says "4000 ms", never "3". The other half, which slider is being read out,
         // does not come from here at all; it comes from android:labelFor on the label above each
         // slider in page_settings.xml, which is the pairing Material's own docs prescribe.
         threads.setLabelFormatter(v -> String.valueOf(Ui.snap(Config.THREAD_STEPS, v)));
@@ -175,7 +175,7 @@ final class SettingsForm {
         @Override public void afterTextChanged(Editable s) { validate(); }
     };
 
-    // ------------------------------------------------------------------ values <-> fields
+    // ------------------------------------------------------------------ converting between values and fields
     void loadFields() {
         Properties p = Config.raw(a);
         discovery.setChecked(bool(p.getProperty("discovery", "true")));
@@ -215,7 +215,7 @@ final class SettingsForm {
         v.setProperty("psk_rotate", String.valueOf(pskRotate.isChecked()));
         v.setProperty("relay_opt_out", String.valueOf(relayOptOut.isChecked()));
         // A key typed or generated here is a NEW key, so its clock starts now. Without this, Apply
-        // would write a fresh key over an old activation time — and rotation would pre-retire it
+        // would write a fresh key over an old activation time, and rotation would pre-retire it
         // within minutes, on the strength of how long the one it replaced had been in use.
         //
         // Only when it changed: pressing Apply after editing a limit must not keep resetting the age
@@ -286,15 +286,15 @@ final class SettingsForm {
      * Open or close the own-addresses group.
      *
      * <p>Built from a card, a clickable header and the transition machinery that is already here,
-     * because Material's View library has no expandable *container* — {@code ExpandableWidget} is
+     * because Material's View library has no expandable *container*; {@code ExpandableWidget} is
      * an interface the FAB and the Chip implement for themselves, not something a group of settings
      * can be. So the M3 parts are used and the assembly is local: a list-item-height header with the
      * platform ripple, a chevron that turns, and the same fade-and-reflow every other group on this
      * page uses when it appears.
      */
     private void setOwnExpanded(boolean open, boolean animate) {
-        // Before the guard below, because the first call is usually a no-op — the group starts
-        // collapsed in the layout and is asked to be collapsed — and a screen reader would then
+        // Before the guard below, because the first call is usually a no-op: the group starts
+        // collapsed in the layout and is asked to be collapsed, and a screen reader would then
         // never be told the state at all.
         ownCard.setStateDescription(a.getString(open ? R.string.own_state_expanded : R.string.own_state_collapsed));
         // Nothing to do is not the same as doing nothing cheaply: validate() runs on every keystroke
@@ -304,7 +304,7 @@ final class SettingsForm {
         if (animate) TransitionManager.beginDelayedTransition(
                 settingsRoot, Ui.visibilityMotion(Ui.turning(ownContent, open ? View.VISIBLE : View.GONE)));
         ownContent.setVisibility(open ? View.VISIBLE : View.GONE);
-        // The chevron turns over exactly the span the group takes to reflow — Ui.REFLOW_MS is the one
+        // The chevron turns over exactly the span the group takes to reflow; Ui.REFLOW_MS is the one
         // ChangeBounds is pinned to. A rotation on its own timing would either finish early, over a
         // card that is still moving, or lag one that has already settled.
         float to = open ? 180f : 0f;
@@ -366,7 +366,7 @@ final class SettingsForm {
     /**
      * Map a rejected save back onto the field that caused it.
      *
-     * <p>Should not happen — live validation runs the same checks on every keystroke — but
+     * <p>Should not happen, since live validation runs the same checks on every keystroke, but
      * {@link Config#save} is the authority and an exception from it has to land somewhere the user
      * can act on rather than in a Snackbar that names a property key.
      */
@@ -387,7 +387,7 @@ final class SettingsForm {
 
     // ------------------------------------------------------------------ what the page asks of it
     /**
-     * Pairing is mDNS at both ends, so it cannot run with local discovery off — turn it on.
+     * Pairing is mDNS at both ends, so it cannot run with local discovery off; turn it on.
      *
      * <p>Rather than refusing. The switch is a preference about finding peers; pairing is a thing
      * the user has just asked for explicitly, and the only reading of "Pair" with discovery off is
@@ -395,10 +395,10 @@ final class SettingsForm {
      * than either refusing or asking.
      *
      * <p>Applied to the form, not the file: Apply is what writes, everywhere on this page, and
-     * pairing itself does not need the setting saved to work — {@link PairProvider} advertises on
+     * pairing itself does not need the setting saved to work; {@link PairProvider} advertises on
      * its own. What this buys is the state after pairing being the one the user can see.
      *
-     * @return true always, so callers read as "if we may, go" — the false case would be a refusal,
+     * @return true always, so callers read as "if we may, go"; the false case would be a refusal,
      *         and there is no case in which this refuses
      */
     boolean ensureDiscovery() {
@@ -420,7 +420,7 @@ final class SettingsForm {
                 basePad + right, settingsRoot.getPaddingBottom());
     }
 
-    // ------------------------------------------------------------------ text <-> stored units
+    // ------------------------------------------------------------------ converting between text and stored units
     private static boolean bool(String s) {
         String t = s.trim().toLowerCase();
         return t.equals("true") || t.equals("1") || t.equals("yes") || t.equals("on");

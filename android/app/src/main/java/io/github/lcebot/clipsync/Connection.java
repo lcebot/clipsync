@@ -37,18 +37,19 @@ import org.json.JSONObject;
  * One authenticated TCP session with one peer, dialled or accepted. Wire format in clipsync.py.
  */
 public final class Connection implements AutoCloseable {
-    // ---- frame types, grouped by purpose and renumbered for the draft protocol.
-    // No external release has ever shipped, so nothing reads the old numbers.
+    // ---- frame types, grouped by purpose.
+    // No external release has shipped, so the numbering is free to be organised by purpose rather
+    // than by the order types were added.
 
     // Session lifecycle.
     public static final int T_HELLO = 1;
     /**
-     * "I am closing this connection, and here is why" — {@code {reason}}.
+     * "I am closing this connection, and here is why", followed by {@code {reason}}.
      *
      * <p>It exists because <b>a close without one becomes a loop</b>, and that failure needs no
      * network trouble to trigger. When a duplicate link is dropped, the far side sees nothing but a
-     * disconnect, its reconnect logic fires, and it rebuilds exactly the link that was discarded — to
-     * be discarded again. A peer that receives BYE does not schedule a redial.
+     * disconnect, its reconnect logic fires, and it rebuilds exactly the link that was discarded, so
+     * that link can then be discarded again. A peer that receives BYE does not schedule a redial.
      */
     public static final int T_BYE = 2;
     public static final int T_PING = 3, T_PONG = 4;
@@ -82,23 +83,24 @@ public final class Connection implements AutoCloseable {
     // Pairing: getting the PSK onto a second device without typing 64 hex characters into it. The
     // channel is an ordinary one keyed by a nine-digit code instead of the PSK; see Pairing.
     /**
-     * {@code PAIR_ASK} joiner → provider, "give me the key", and {@code PAIR_KEY} back with it.
+     * The joiner sends {@code PAIR_ASK} to the provider, "give me the key", and the provider sends
+     * {@code PAIR_KEY} back with it.
      *
      * <p>Ordinary frames on an ordinary channel, reached after an ordinary handshake and an ordinary
-     * {@code HELLO} — only the key differs. The first sketch had the joiner send a special frame
-     * <em>instead of</em> HELLO, which would have created a parsing path that runs before any key
-     * has been proven; that one rule is what makes an open port safe to expose, and varying the key
-     * and adding a role costs nothing by comparison.
+     * {@code HELLO}; only the key differs. Nothing here is allowed to be parsed before a key has
+     * been proven: a pairing frame sent instead of HELLO, ahead of any authentication, would open a
+     * parsing path an unproven caller could reach on an open port. Varying the key and adding a role
+     * costs nothing by comparison, and keeps that one rule intact.
      */
     public static final int T_PAIR_ASK = 15, T_PAIR_KEY = 16;
 
     // Relay coordination: a node that cannot reach a sender directly asks a peer that can to hold
     // the file and offer it on.
     /**
-     * {@code RELAY_ASK} waiter → relay, "I am waiting for this sha; offer it to me when you have it."
-     * {@code RELAY_OK} relay → waiter, "accepted."
-     * {@code RELAY_NO} relay → waiter, "declined" — with a reason: {@code busy} (retryable) or
-     * {@code refused} (final: opted out, over the size limit, or battery too low).
+     * The waiter sends {@code RELAY_ASK} to the relay, "I am waiting for this sha; offer it to me
+     * when you have it." The relay sends {@code RELAY_OK} back to the waiter, "accepted." The relay
+     * sends {@code RELAY_NO} back to the waiter, "declined", with a reason: {@code busy} (retryable)
+     * or {@code refused} (final: opted out, over the size limit, or battery too low).
      */
     public static final int T_RELAY_ASK = 17, T_RELAY_OK = 18, T_RELAY_NO = 19;
 
@@ -108,7 +110,7 @@ public final class Connection implements AutoCloseable {
     /**
      * 2: HELLO is exchanged in both directions and carries the node id, type, persistence and
      * battery bucket (see {@link Hello}). A clean break rather than a tolerated one, which is this
-     * project's standing rule for protocol changes — the two ends ship together, so a version
+     * project's standing rule for protocol changes, because the two ends ship together, so a version
      * mismatch is refused with a plain message instead of being worked around. A version 1 peer
      * cannot name itself, and a peer that cannot name itself cannot be deduplicated or recognised
      * as self.
@@ -116,7 +118,7 @@ public final class Connection implements AutoCloseable {
      * <p>3: HELLO also carries {@code port} and {@code data_out}, and every device listens.
      *
      * <p>The bump is not bookkeeping. The two new fields have defaults, so a version-2 peer would
-     * connect and work — and then answer a WANT by opening its own data connections at the same
+     * connect and work, and then answer a WANT by opening its own data connections at the same
      * moment as this end opens its, because the rule that stops that is the field it does not send.
      * Every file would move twice. A failure a version check turns into one refused connection with
      * a plain message is worth a version number; both ends are updated together regardless.
@@ -124,7 +126,7 @@ public final class Connection implements AutoCloseable {
      * <p>5: the clipboard hash is taken over <b>newline-normalised</b> text (CRLF read as LF), OFFER
      * headers carry {@code forwarded}, and RELAY_ASK carries {@code size}. The first of those is why
      * this is a version and not three optional fields: the sha is a value on the wire that both ends
-     * compute independently, so a peer using the other rule does not degrade, it disagrees — every
+     * compute independently, so a peer using the other rule does not degrade, it disagrees; every
      * clip containing a Windows line ending would be dropped as corrupt, silently from the user's
      * side. The two ends ship together, so a refused handshake with a plain message is the cheapest
      * way for a mismatched pair to say so.
@@ -150,10 +152,9 @@ public final class Connection implements AutoCloseable {
      */
     private static final int HANDSHAKE_TIMEOUT_MS = 15_000;
 
-    // The single "last mDNS address that worked" cache is gone, along with the single LAN peer it
-    // assumed. What replaces it is the service's own map of discovered instances, refreshed by a
-    // browse on a schedule: a cache of one address could not hold two peers, and a cache with a
-    // 24-hour life could not notice one of them leaving.
+    // Discovered LAN instances live in the service's own map, refreshed by a scheduled browse, not
+    // cached here: a single cached address could not represent several peers at once, and could not
+    // notice one of them leaving.
 
     /**
      * Targets a handshake has proved to be this device.
@@ -184,11 +185,11 @@ public final class Connection implements AutoCloseable {
     /**
      * The two halves of the channel, one per direction.
      *
-     * <p>Stateful on purpose. They own the nonce counters that used to be {@code txCtr}/{@code
-     * rxCtr} here, which turned "a nonce is never reused under one key" from a convention this class
-     * had to keep into something it cannot break: there is no way from outside to set a counter, and
-     * no way to seal a frame without advancing one. {@code tx} is touched only under
-     * {@link #sendLock}; {@code rx} only on the single thread that reads this connection.
+     * <p>Stateful on purpose. They own the nonce counters themselves, which turns "a nonce is never
+     * reused under one key" from a convention this class would otherwise have to keep into something
+     * it cannot break: there is no way from outside to set a counter, and no way to seal a frame
+     * without advancing one. {@code tx} is touched only under {@link #sendLock}; {@code rx} only on
+     * the single thread that reads this connection.
      */
     private Crypto.Sealer tx;
     private Crypto.Opener rx;
@@ -199,14 +200,14 @@ public final class Connection implements AutoCloseable {
     /**
      * Candidate channels for an inbound connection that has not yet identified its peer's key.
      *
-     * <p>Null once the key is resolved — either immediately for outbound connections (which always
+     * <p>Null once the key is resolved: either immediately for outbound connections (which always
      * use the current PSK) or on the first {@link #recv()} for inbound ones. The candidate list is
      * {@link Keys.Schedule#accepted()}, so every key the device considers valid is tried, in the
      * order worth trying: current first, then successor, then the ring.
      *
      * <p>One {@link Crypto.Opener} per candidate rather than one shared counter, which is what makes
      * trial decryption safe to write: an Opener that fails has not advanced, so every loser is still
-     * at frame 0 and the winner is at frame 1 — exactly the state the connection needs to keep.
+     * at frame 0 and the winner is at frame 1, which is exactly the state the connection needs to keep.
      */
     private Crypto.Sealer[] candidateSealers;
     private Crypto.Opener[] candidateOpeners;
@@ -217,7 +218,7 @@ public final class Connection implements AutoCloseable {
      * Whether the peer has proved it holds a key we accept, by sending one frame that decrypts.
      *
      * <p>Not the same question as {@link #keyResolved}, which is only "do we know <em>which</em> of
-     * several keys to use" and is true from the start whenever there is exactly one candidate — the
+     * several keys to use" and is true from the start whenever there is exactly one candidate, the
      * ordinary case, which is precisely the case the limits below exist for. True from the start for
      * a connection we opened: we chose the address, and a data connection's first inbound frame is a
      * 512 KiB chunk, which no pre-auth cap may refuse.
@@ -243,7 +244,7 @@ public final class Connection implements AutoCloseable {
      */
     public byte[] matchedSecret;
     private final Object sendLock = new Object();
-    /** "direct", "mdns" or "inbound" — which path this session came up on (for logs and the UI). */
+    /** "direct", "mdns" or "inbound": which path this session came up on (for logs and the UI). */
     public final String via;
     /**
      * True when the peer opened this connection, not us.
@@ -253,8 +254,8 @@ public final class Connection implements AutoCloseable {
      * the peer's link. Getting that backwards does not fail at the handshake, which exchanges
      * plaintext nonces; it fails at the first frame, as a decrypt error.
      *
-     * <p>It is also half of {@link #drivesTransfer()} — the other half being what the peer declares
-     * it can do — and it is why {@link #peerPort} exists: an accepted socket's remote port is the
+     * <p>It is also half of {@link #drivesTransfer()}, the other half being what the peer declares
+     * it can do, and it is why {@link #peerPort} exists: an accepted socket's remote port is the
      * peer's ephemeral source port, so the listening port has to be declared rather than observed.
      */
     public final boolean inbound;
@@ -286,7 +287,7 @@ public final class Connection implements AutoCloseable {
      * The network this session rides on, or null if it could not be established.
      *
      * <p>Two things need it. A socket <b>bound</b> to a network fails immediately when that network
-     * goes away, instead of hanging until the 90-second read timeout — switching between Wi-Fi and
+     * goes away, instead of hanging until the 90-second read timeout; switching between Wi-Fi and
      * cellular does not close a TCP socket, it leaves it half-open, and that delay was the whole of
      * what "the drop is noticed at once" asks for. And with several peers, "which connections died"
      * is a question that cannot be answered at all while sockets ride the default network
@@ -299,7 +300,7 @@ public final class Connection implements AutoCloseable {
     public String peerId;
     /** {@code pc} | {@code tablet} | {@code phone}. */
     public String peerType = "?";
-    /** Whether the peer can hold a connection while idle — a capability it declares, not a guess. */
+    /** Whether the peer can hold a connection while idle, a capability it declares, not a guess. */
     public boolean peerPersistent;
     /** {@code mains} | {@code high} | {@code medium} | {@code low}. */
     public String peerBattery = "medium";
@@ -317,12 +318,11 @@ public final class Connection implements AutoCloseable {
      *
      * <p>A file's bytes move over separate connections, and <b>exactly one</b> of the two nodes must
      * open them: both opening transfers the file twice, neither opening transfers it not at all.
-     * While a phone only ever dialled a PC that only ever accepted, the answer was structural and
-     * needed no field. It stopped being structural the moment the PC gained a client role. Both
-     * ends now declare {@code true} — the PC opens its own data connections as of the release that
-     * fixed PC-to-PC transfers — so the rule is simply "whoever dialled drives", which is what
-     * {@link #drivesTransfer()} computes. The field stays because the rule is a negotiation, not a
-     * constant: an end that cannot dial out says so and the other one takes the job.
+     * Which end that is is not a structural constant, since every node can in principle dial and
+     * accept, so it is a negotiation rather than a fixed role: both ends declare {@code true} here, and the
+     * rule that actually decides who opens the connection is "whoever dialled drives", computed by
+     * {@link #drivesTransfer()}. The field stays because the negotiation is real: an end that cannot
+     * dial out says so, and the other one takes the job.
      */
     public boolean peerDataOut;
 
@@ -353,12 +353,11 @@ public final class Connection implements AutoCloseable {
      * in. Which key matched is exposed via {@link #matchedSecret} once the first frame lands.
      */
     public static Connection accept(Context ctx, Config cfg, Socket s, Network net) throws Exception {
-        // One unusable entry skipped, not the whole ring abandoned. The hex parse used to throw from
-        // here, so a single malformed key anywhere in the ring made every inbound connection fail
-        // before a byte was read, permanently and across restarts. Crypto.fromHex answers null
-        // instead, which is what makes skipping the bad entry the natural thing to write. The
-        // validation in Config should keep one out; this is what stops a value that got in anyway
-        // from taking the listening socket down with it.
+        // One unusable entry skipped, not the whole ring abandoned: Crypto.fromHex answers null for
+        // a malformed key rather than throwing, which is what makes skipping just that entry the
+        // natural thing to do here. The validation in Config should keep a bad value out in the first
+        // place; this is what stops one that got in anyway from taking the listening socket down
+        // with it; a single bad ring entry must not make every inbound connection fail.
         List<byte[]> usable = new ArrayList<>();
         for (String h : cfg.keys.accepted()) {
             byte[] k = Crypto.fromHex(h);
@@ -413,13 +412,13 @@ public final class Connection implements AutoCloseable {
                 control.via, "data"}, null, control.network, false);
         // Copied from the control connection rather than left to the constructor's guess. A data
         // connection is built with ctx == null, so the constructor can only fall back to "did the
-        // link come up over mDNS" — which says true for an mdns link and false for a `direct` or
+        // link come up over mDNS", which says true for an mdns link and false for a `direct` or
         // `inbound` one even when the peer is a hop away on the same LAN. Nothing reads it on a data
         // connection today, and a wrong answer waiting for its first reader is worse than no answer:
         // the control connection settled this during its handshake, so take its verdict.
         c.lanPeer = control.lanPeer;
         // The id is here so an accepting peer can tell whose transfer this is; the sha names which
-        // file. Everything a peer link declares is deliberately absent — see Hello.data.
+        // file. Everything a peer link declares is deliberately absent: see Hello.data.
         c.sendJson(T_HELLO, Hello.data(Node.id(), device, sha256).toJson());
         return c;
     }
@@ -427,7 +426,7 @@ public final class Connection implements AutoCloseable {
     /**
      * The two ends of a pairing channel: the same machinery with a code-derived key.
      *
-     * <p>Neither takes a {@link Config}, and that is not tidiness — a device being paired has no
+     * <p>Neither takes a {@link Config}, and that is not tidiness; a device being paired has no
      * usable configuration yet, which is the whole reason it is being paired. The three things a
      * channel actually needs are a secret, a frame cap and, for HELLO, a port; a Config is merely
      * where an ordinary link finds them.
@@ -458,7 +457,7 @@ public final class Connection implements AutoCloseable {
      * The most an <b>unauthenticated</b> caller may make this end allocate.
      *
      * <p>The same rule the pairing channel has always had, applied where it was missing. Until the
-     * first frame decrypts, nothing about the peer is known — the length prefix is plaintext and
+     * first frame decrypts, nothing about the peer is known; the length prefix is plaintext and
      * anybody who can reach the port can write one, so the ordinary frame cap (a chunk, over half a
      * megabyte) times the inbound worker limit is what an attacker gets to allocate for the cost of
      * a TCP handshake. A real HELLO is a dozen short fields; 8 KiB leaves room for a long device
@@ -470,7 +469,7 @@ public final class Connection implements AutoCloseable {
      * Our half of a pairing declaration: who is asking, and nothing that only a configured node has.
      *
      * <p>Deliberately not {@link #sendHello}: that one carries a node id, a sequence cursor and the
-     * capability flags of a peer, none of which a device without a key has any business claiming —
+     * capability flags of a peer, none of which a device without a key has any business claiming,
      * and the id is what the self-check and the dedup map key on, so an unpaired device offering one
      * would be enrolling itself into machinery it is not part of yet.
      */
@@ -481,20 +480,20 @@ public final class Connection implements AutoCloseable {
     /**
      * The control handshake: declare ourselves, then read what the peer declares back.
      *
-     * <p>Protocol 2 made this an exchange. Before it, only the PC learned anything — the phone sent
-     * its name and never heard a reply — which left no way to tell two peers apart, to notice that
-     * two addresses lead to one machine, or to notice that one of them leads here.
+     * <p>Both directions matter: each end has to learn who the other is in order to tell two peers
+     * apart, to notice that two addresses lead to one machine, or to notice that one of them leads
+     * back here.
      *
      * <p>Which is the last thing this does: **if the peer's id is ours, the connection is dropped.**
      * Both ends hold the same PSK, so the handshake succeeds and the node would otherwise enrol
-     * itself as a peer — broadcasting to itself and comparing versions against its own clips. The
+     * itself as a peer, broadcasting to itself and comparing versions against its own clips. The
      * user's declared own-addresses list catches the common spellings before a socket is ever
      * opened; this catches everything else, and is the authority.
      *
-     * @return the peer's HELLO — the dialler's half of catch-up reads {@link Hello#clipTs} and
-     *         {@link Hello#clipSha} from it to decide whether the peer is behind. Discarding it was
-     *         how two phones could reconnect and stay out of step: the fields were sent by both ends
-     *         and consumed by neither.
+     * @return the peer's HELLO: the dialler's half of catch-up reads {@link Hello#clipTs} and
+     *         {@link Hello#clipSha} from it to decide whether the peer is behind. Both ends send
+     *         these fields, so both must consume them, or two devices can reconnect and never
+     *         converge.
      * @throws SelfConnection when the peer turns out to be this device
      */
     public Hello hello(Context ctx, long clipTs, String clipSha) throws Exception {
@@ -507,14 +506,14 @@ public final class Connection implements AutoCloseable {
      *
      * <p>Separate from {@link #readHello()} because the two ends do them in opposite orders, and
      * the order is not a detail: the dialler declares first because it has nothing to wait for,
-     * and the accepter answers — which means an accepted connection knows who the peer is
+     * and the accepter answers, which means an accepted connection knows who the peer is
      * <em>before</em> it has to say anything, and can therefore send a sequence cursor that is
      * actually about that peer rather than a zero.
      */
     public void sendHello(Context ctx, long clipTs, String clipSha) throws Exception {
         // Values, not a Context: Hello is the semantic layer and knows nothing about Android. The
-        // two fields nothing else could supply are listenPort — an accepted connection cannot see
-        // our listening port any other way — and lanPeer, which is this end's verdict on whether the
+        // two fields nothing else could supply are listenPort (an accepted connection cannot see
+        // our listening port any other way) and lanPeer, which is this end's verdict on whether the
         // two are on one LAN and which the accepter takes as final.
         Hello mine = Hello.control(Node.id(), Node.name(), Node.type(ctx),
                 Node.persistent(ctx), Node.battery(ctx), clipTs, clipSha, lanPeer, listenPort);
@@ -529,7 +528,7 @@ public final class Connection implements AutoCloseable {
      * Read what the peer declares, and refuse it here if it cannot be talked to.
      *
      * <p>Parsing is {@link Hello#parse}'s job; what is left here is everything that is about
-     * <em>this connection</em> rather than about the message — the version gate, the fields that
+     * <em>this connection</em> rather than about the message: the version gate, the fields that
      * become connection state, the self-check, and raising the read timeout now that the peer has
      * proved it is one.
      *
@@ -558,12 +557,12 @@ public final class Connection implements AutoCloseable {
         // A stream or a pairing exchange, not a peer: neither enrols anything, so neither needs the
         // node checks below. Both still filled peerLabel and peerType above, and on the pairing path
         // those two are the only description of the caller the provider has to put in front of the
-        // user before it hands the key over — the joiner has no node id to show.
+        // user before it hands the key over; the joiner has no node id to show.
         if (Hello.ROLE_DATA.equals(theirs.role) || Hello.ROLE_PAIR.equals(theirs.role)) return theirs;
         theirs.audit(peerLabel);
         // Protocol 2's premise is that a peer can name itself, and everything downstream assumes it:
         // a link with no id cannot be deduplicated, cannot be recognised as this device, and would
-        // sit outside the map that the heartbeat, the broadcast and the status all iterate — running
+        // sit outside the map that the heartbeat, the broadcast and the status all iterate, running
         // but reaching nobody. Refusing here is much easier to diagnose than that.
         if (peerId == null || peerId.isEmpty()) throw new IOException("peer sent no node id");
         if (peerId.equals(Node.id())) throw new SelfConnection(peerName);
@@ -591,7 +590,7 @@ public final class Connection implements AutoCloseable {
      * Single-key constructor: outbound connections, pairing, and data channels.
      *
      * @param secret the shared key this channel's per-direction keys are derived from. The PSK for
-     *               an ordinary link and a code-derived key for a pairing one — which is the whole
+     *               an ordinary link and a code-derived key for a pairing one, which is the whole
      *               of what makes pairing possible without new machinery: confidentiality,
      *               authentication and replay resistance all come along unchanged, and a caller
      *               without the code fails at the handshake exactly as a wrong PSK does today.
@@ -637,9 +636,9 @@ public final class Connection implements AutoCloseable {
         in = new DataInputStream(socket.getInputStream());
         out = socket.getOutputStream();
 
-        // handshake: Nc -> ; <- Ns ; keys = HKDF(psk, Nc||Ns, info).
+        // handshake: this side sends Nc, then receives Ns; keys = HKDF(psk, Nc||Ns, info).
         //
-        // The labels are named for who OPENED the connection, not for who is a server — a device
+        // The labels are named for who OPENED the connection, not for who is a server; a device
         // now both dials and accepts, so an accepted connection is the "s" side of the peer's link
         // and must read the client nonce first. Getting this backwards does not fail at the
         // handshake, which exchanges plaintext nonces; it fails at the first frame, as a decrypt
@@ -681,8 +680,8 @@ public final class Connection implements AutoCloseable {
     }
 
     /**
-     * Resolve fresh every time — the address behind a name can move, which is the whole point of a
-     * dynamic one — prefer IPv6, try each address. A literal is returned by getAllByName without a
+     * Resolve fresh every time, because the address behind a name can move, which is the whole point
+     * of a dynamic one; prefer IPv6, try each address. A literal is returned by getAllByName without a
      * lookup, so an address entered directly costs nothing extra here.
      */
     private static Socket connectDirect(String host, int port, Network net) throws IOException {
@@ -743,11 +742,11 @@ public final class Connection implements AutoCloseable {
                     return new Won(s, c);
                 }));
             }
-            // One deadline for the whole race, not one per candidate. The poll used to take the
-            // full bound each time round the loop, so the "≈ stagger·n + timeout" above was the
-            // bound on a *single* wait and the real worst case was that figure times the number of
-            // addresses — eight adapters on one PC is forty-eight seconds with the dialler thread
-            // blocked throughout, for a peer that is simply not there.
+            // One deadline for the whole race, not one per candidate: polling with a fresh full
+            // timeout on every iteration would let the total wait grow with the number of
+            // candidates instead of staying near the "≈ stagger·n + timeout" bound above: eight
+            // adapters on one PC would be forty-eight seconds with the dialler thread blocked
+            // throughout, for a peer that is simply not there.
             long until = System.currentTimeMillis()
                     + (long) RACE_STAGGER_MS * cands.size() + timeoutMs + 1000;
             for (int done = 0; done < cands.size() && won == null; done++) {
@@ -855,7 +854,7 @@ public final class Connection implements AutoCloseable {
      * <p>Exactly one of the two must, and this is the rule that decides it:
      *
      * <ul>
-     *   <li>if the peer <b>cannot</b> open them, we do, whoever dialled — the PC is in exactly this
+     *   <li>if the peer <b>cannot</b> open them, we do, whoever dialled, since the PC is in exactly this
      *       position, having gained a client role for control connections and none for data ones;
      *   <li>otherwise <b>the node that dialled</b> does. It has proved it can reach the other's
      *       listening port, which is precisely what a data connection needs, and the far end reaches
@@ -887,7 +886,7 @@ public final class Connection implements AutoCloseable {
      *
      * <p>Through two buffers held for the life of the connection, rather than three allocations per
      * frame. A data connection sends nothing but chunks, so the buffers are as long-lived as it is
-     * and are allocated on first use — an ordinary control connection never sends a chunk and never
+     * and are allocated on first use, since an ordinary control connection never sends a chunk and never
      * pays for them. Both are written only under {@link #sendLock}, which is what makes holding them
      * on the connection safe.
      *
@@ -963,7 +962,7 @@ public final class Connection implements AutoCloseable {
                     System.arraycopy(pt, 1, payload, 0, payload.length);
                     return new Frame(pt[0] & 0xff, payload);
                 } catch (GeneralSecurityException ignored) {
-                    // Wrong key — try the next candidate.
+                    // Wrong key: try the next candidate.
                 }
             }
             throw new IOException("no accepted key could authenticate this peer");

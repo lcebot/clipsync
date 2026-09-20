@@ -2,10 +2,8 @@
 <!-- One device in the peer sheet: a peer that is up, or a target that is not.
 
      A card, and the same filled card the settings page uses, so the two surfaces read as one app.
-     What it replaces was a two-line row whose second line packed three unrelated values into one
-     string separated by middle dots — id, type and address run together, none of them labelled, and
-     nothing to tell the eye where one ended and the next began. A card per device with a labelled
-     field per value says the same thing without the reader having to parse it.
+     A labelled field per value, such as id, type, address, lets the eye compare cards at a glance instead
+     of parsing a string where several values run together.
 
      The whole card is the touch target and copies the device's details (see StatusSheet.makeCard),
      and StatusSheet labels that click action for a screen reader, since nothing in the card's own

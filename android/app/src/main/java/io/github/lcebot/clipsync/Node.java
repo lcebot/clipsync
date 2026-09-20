@@ -19,10 +19,10 @@ import java.util.UUID;
  * arrived in a HELLO on a connection that is currently open. Nothing compares an id against one from
  * last week.
  *
- * <p>So the file that used to hold it bought one thing — a restart being recognised as the same node
- * — and charged for it in atomic writes, a half-written-id failure mode, and, worst, a value people
- * could edit into a collision. Two nodes sharing one id breaks dedup and relay selection in ways
- * that are very hard to trace back to their cause. A fresh UUID per start cannot collide at all.
+ * <p>Persisting the id would only buy one thing, a restart being recognised as the same node, at
+ * the cost of atomic writes, a half-written-id failure mode, and, worst, a value people could edit
+ * into a collision. Two nodes sharing one id breaks dedup and relay selection in ways that are very
+ * hard to trace back to their cause. A fresh UUID per start cannot collide at all.
  *
  * <p>What that costs, accepted deliberately: after an <em>unclean</em> restart, a peer that has not
  * yet noticed the old TCP connection is dead sees the returning node as a new one, so for up to one
@@ -31,7 +31,7 @@ import java.util.UUID;
  */
 final class Node {
     /**
-     * Generated when this class is first touched, which is once per process — the sync service and
+     * Generated when this class is first touched, which is once per process; the sync service and
      * the UI run in separate processes and therefore have separate ids, which is correct: only the
      * service opens connections, and only its id is ever declared.
      */
@@ -85,7 +85,7 @@ final class Node {
      *
      * <p><b>A declaration of capability, not an inference from type</b>. It is true only when the
      * device is charging <em>and</em> has the exemptions it needs to survive being idle, because a
-     * non-rooted phone on charge still gets frozen — and electing it as the LAN's relay would elect a
+     * non-rooted phone on charge still gets frozen, and electing it as the LAN's relay would elect a
      * node that silently stops relaying. Saying "yes" here when the answer is "no" is worse than
      * saying "no": the network would route through it and lose the traffic.
      */
@@ -95,7 +95,7 @@ final class Node {
     }
 
     /**
-     * {@code mains} | {@code high} | {@code medium} | {@code low} — four buckets and not a
+     * {@code mains} | {@code high} | {@code medium} | {@code low}: four buckets and not a
      * percentage, because this is compared between nodes to pick a relay and a total order over
      * four names is stable where a comparison of two battery readings is noise.
      */

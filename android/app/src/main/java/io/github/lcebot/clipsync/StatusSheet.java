@@ -19,7 +19,7 @@ import java.util.List;
 /**
  * The connection-details bottom sheet: what is connected, what is not, and why.
  *
- * <p>Everything about that one surface lives here — building it, keying its rows, diffing it against
+ * <p>Everything about that one surface lives here: building it, keying its rows, diffing it against
  * each new snapshot, and shutting it down with the Activity. The boundary is a snapshot in and a
  * dialog on screen: this class never reads the status file, never decides when to refresh, and owns
  * nothing on the page behind it. Its owner reads the file (so that the chip and the sheet are always
@@ -31,7 +31,7 @@ import java.util.List;
 final class StatusSheet {
     /** What this sheet needs from the page it opens over. */
     interface Host {
-        /** Confirm something to the user — the sheet's own surface is too small to say it there. */
+        /** Confirm something to the user, because the sheet's own surface is too small to say it there. */
         void snack(int textRes);
     }
 
@@ -41,9 +41,8 @@ final class StatusSheet {
     /**
      * The open sheet's list, or null. Held so every status refresh can keep it current.
      *
-     * <p>It used to be built once and left to go stale, which is exactly wrong for the thing it
-     * exists to show: someone opens it *because* a peer is missing, and then watches for it to come
-     * back. A sheet that cannot change is a sheet you have to close and reopen to use.
+     * <p>Kept current rather than built once: someone opens this sheet *because* a peer is missing,
+     * and then watches for it to come back, so every status refresh has to reach whatever is open.
      */
     private ViewGroup list;
     /** The transition's scene root, which is why it is a ViewGroup and not a View. */
@@ -70,7 +69,7 @@ final class StatusSheet {
      * in {@code Connected (2)}, and finding out which one is precisely why someone opens this.
      *
      * <p>A BottomSheetDialog: supplementary content rather than a decision, and the only surface
-     * here that Material gives predictive back to for free — the gesture walks the sheet back down
+     * here that Material gives predictive back to for free, since the gesture walks the sheet back down
      * instead of previewing an exit from the app.
      */
     void show(Status.Snapshot s) {
@@ -81,14 +80,14 @@ final class StatusSheet {
         if (title == null || body == null) return;
         title.setText(R.string.sheet_title);
         list = body;
-        // The scene root is the dialog's CoordinatorLayout, one level above the sheet frame — not the
+        // The scene root is the dialog's CoordinatorLayout, one level above the sheet frame, not the
         // sheet's own content, which is where this started and which is not enough.
         //
         // A bottom sheet is anchored to the bottom edge, so when a card goes the frame gets shorter
         // by moving its TOP edge down. Inside that frame nothing moves: the title is still at y=0 of
         // its parent, and ChangeBounds on the content therefore has nothing to animate for it. The
         // view whose bounds actually change is the frame, and to capture that the scene root has to
-        // be its parent. With the coordinator as the root, one transition carries the whole thing —
+        // be its parent. With the coordinator as the root, one transition carries the whole thing:
         // the sheet's top edge, and the cards reflowing inside it, on the same clock.
         //
         // Falls back to the content root if the id ever moves: a sheet that animates its cards and
@@ -135,7 +134,7 @@ final class StatusSheet {
      * What the sheet should contain, in order, for this snapshot.
      *
      * <p>Keys are the point of this list. A heading is keyed by its own string, a peer by its node
-     * id, a target by its name — so a refresh can tell "this card is still the same device" from
+     * id, a target by its name, so a refresh can tell "this card is still the same device" from
      * "a different device now occupies that position", which is the difference between reflowing a
      * list and rebuilding it under the reader's eyes.
      */
@@ -187,7 +186,7 @@ final class StatusSheet {
      * card's and the two fade together.
      *
      * <p>The new views are created <b>before</b> the transition begins and while they are still
-     * detached, because {@link Ui#visibilityMotion} needs to name the views that fade — and a view
+     * detached, because {@link Ui#visibilityMotion} needs to name the views that fade, and a view
      * that is not in the start scene is one that appears. The ones that are leaving are named from
      * the container as it stands.
      */
@@ -302,13 +301,13 @@ final class StatusSheet {
             String addr = p.addr == null ? "?" : p.addr;
             Ui.setTextIfChanged(card.findViewById(R.id.card_name), name);
             // A connected peer's own facts are never a verdict on anything, so they take the plain
-            // role — the grading in `value` is for the reasons a target is *not* connected.
+            // role, because the grading in `value` is for the reasons a target is *not* connected.
             value(card, 0, Node.shortId(p.id), Status.Why.WAITING);
             value(card, 1, p.type == null ? "?" : p.type, Status.Why.WAITING);
             value(card, 2, addr, Status.Why.WAITING);
             // The copied text is unchanged: name, then the FULL id, then the address, one per line.
             // The card shows the id's first 8 characters because 36 are unreadable at a glance, and
-            // copying is how you get the rest — so the two must not be the same string.
+            // copying is how you get the rest, so the two must not be the same string.
             clickToCopy(card, name + "\n" + (p.id == null ? "" : p.id) + "\n" + addr);
         } else if (r.indirect != null) {
             Status.IndirectPeer ip = r.indirect;
@@ -336,7 +335,7 @@ final class StatusSheet {
      * Copy this text when the card is tapped, re-binding only when the text actually changed.
      *
      * <p>{@code bindCard} runs on every status refresh, per card, for as long as the sheet is open, and a fresh
-     * listener each time is a fresh lambda holding a fresh string — garbage produced by a sheet that
+     * listener each time is a fresh lambda holding a fresh string, garbage produced by a sheet that
      * is simply sitting there. The text doubles as the memo of what is already bound; the tag key is
      * an id from this layout, which is the usual way to keep a view's own bookkeeping on the view.
      */
@@ -361,17 +360,17 @@ final class StatusSheet {
     /**
      * Set one field's value by position, in the colour its kind of reason calls for.
      *
-     * <p>Four roles, loudest first, and each one answers "so what do I do?" differently — a colour
+     * <p>Four roles, loudest first, and each one answers "so what do I do?" differently: a colour
      * that does not change what the reader does next is decoration:
      *
      * <ul>
-     *   <li>{@code FAULT} → <b>colorError</b>. Something to fix.
-     *   <li>{@code ASLEEP} → <b>colorTertiary</b>. The peer said so itself, which makes this the one
+     *   <li>{@code FAULT} maps to <b>colorError</b>. Something to fix.
+     *   <li>{@code ASLEEP} maps to <b>colorTertiary</b>. The peer said so itself, which makes this the one
      *       row carrying positive knowledge rather than the absence of it. Tertiary is already this
-     *       app's colour for the chip's *Connecting…* — a state the system is passing through on
-     *       purpose — so the vocabulary is the same in both places.
-     *   <li>{@code WAITING} → <b>colorOnSurface</b>. The plain default: wait.
-     *   <li>{@code NOTED} → <b>colorOnSurfaceVariant</b>. A footnote about the setup, quietest,
+     *       app's colour for the chip's *Connecting...*, a state the system is passing through on
+     *       purpose, so the vocabulary is the same in both places.
+     *   <li>{@code WAITING} maps to <b>colorOnSurface</b>. The plain default: wait.
+     *   <li>{@code NOTED} maps to <b>colorOnSurfaceVariant</b>. A footnote about the setup, quietest,
      *       because it explains why a row exists and asks for nothing.
      * </ul>
      *

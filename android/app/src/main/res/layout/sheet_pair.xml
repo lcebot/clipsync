@@ -7,7 +7,7 @@
      button. The provider shows a code and waits; the joiner looks, picks, and types the code it is
      being shown. PairSheet turns the pieces on and off.
 
-     The same surface as the peer sheet — a bottom sheet, which also means predictive back for free.
+     The same surface as the peer sheet: a bottom sheet, which also means predictive back for free.
      24dp gutters, matching it, so the two read as one app. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
@@ -31,8 +31,8 @@
 
     <!-- The one line of explanation, rewritten at every state. minLines, and this is the reason it
          is here rather than left to wrap_content: this view carries eight different strings over the
-         life of the sheet — the two bodies, "Found these…", "Enter the code shown on…", and four
-         endings — and they are not the same number of lines. Left to itself the sheet grew and shrank
+         life of the sheet, the two bodies, "Found these...", "Enter the code shown on...", and four
+         endings, and they are not the same number of lines. Left to itself the sheet grew and shrank
          by a line of body text every time one replaced another, which on the joining side is three
          times in the few seconds between picking a device and being paired. Two lines is what the
          longest of the ordinary ones takes on a narrow phone, so reserving two costs nothing in the
@@ -40,7 +40,7 @@
 
          minLines and not a fixed height: it is a reservation, not a cap. Anything longer still wraps,
          and the blank line a shorter string leaves behind is part of the same TextView, so TalkBack
-         reads the string and nothing else — there is no empty view here to focus. -->
+         reads the string and nothing else; there is no empty view here to focus. -->
     <TextView
         android:id="@+id/pair_text"
         android:layout_width="match_parent"
@@ -53,7 +53,7 @@
         android:textColor="?attr/colorOnSurfaceVariant" />
 
     <!-- The code, on the device that holds the key: nine digits, shown as "123 456 789". The spaces
-         are decoration and nothing else — Pairing.grouped puts them in for this view alone, and what
+         are decoration and nothing else; Pairing.grouped puts them in for this view alone, and what
          is generated, compared and fed to the key derivation is the nine digits. Read aloud across a
          room and typed on a phone in the other hand, and a nine-digit run with nothing to hold onto
          is a nine-digit run said out loud wrong. Monospace so every character takes the same width
@@ -66,18 +66,18 @@
          tracking, the width that just fit a narrow phone inside the 24dp gutters. Everything below
          is held under 10.35 × 36sp ≈ 373sp. The gutters are not negotiable.
 
-           * grouped, n = 11 (nine digits + two spaces), tracking 0.25 — 13.75 em, far over. The
+           * grouped, n = 11 (nine digits + two spaces), tracking 0.25: 13.75 em, far over. The
              tracking is what has to go: two spaces separate the groups better than tracking ever
-             separated the digits, so it buys nothing now and costs 11 × 0.25 = 2.75 em.
-           * grouped, n = 11, tracking 0, at displaySmall (36sp) — 11.0 em × 36 = 396sp. STILL 6%
+             separated the digits, so it buys nothing now and costs 11 x 0.25 = 2.75 em.
+           * grouped, n = 11, tracking 0, at displaySmall (36sp): 11.0 em x 36 = 396sp. STILL 6%
              over the proven width. Tracking alone does not pay for the spaces.
-           * grouped, n = 11, tracking 0, at headlineLarge (32sp) — 11.0 em × 32 = 352sp, i.e. 5.5%
+           * grouped, n = 11, tracking 0, at headlineLarge (32sp): 11.0 em x 32 = 352sp, i.e. 5.5%
              INSIDE the 373sp already proven to fit. This is what is set below.
 
          One step down the type scale and no further, and no dp anywhere: a hardcoded size would be a
          guess that survives the next font-scale setting only by luck, whereas headlineLarge is still
          display type and still scales with the user's own text size, which 373sp was measured under.
-         A narrower blank — U+2009 thin space instead of U+0020 — was the other way to buy the 6%,
+         A narrower blank, U+2009 thin space instead of U+0020, was the other way to buy the 6%,
          and it is not taken: in a monospace font a space has the same one-em advance as a digit if
          the font has the glyph at all, and if it does not the line falls back to another font and
          the arithmetic above stops being arithmetic.
@@ -89,8 +89,8 @@
          eleven characters at the same size as the real code.
 
          It starts as nine greyed digits, grouped the same way, rather than empty, and that is what
-         stops the sheet jumping open. The code cannot exist yet when this is laid out — deriving it
-         is a deliberately slow scrypt on a worker — so an empty view meant the sheet measured itself
+         stops the sheet jumping open. The code cannot exist yet when this is laid out, because deriving it
+         is a deliberately slow scrypt on a worker, so an empty view meant the sheet measured itself
          without a line of display type and then grew by exactly that much a moment later. Digits and
          not dashes because the two do not draw to the same height: a row of dashes reserved the
          width but not the line. -->
@@ -111,20 +111,19 @@
     <!-- Waiting. Indeterminate is honest about a browse: nothing here knows how long a multicast
          answer takes, and a determinate bar would be inventing one.
 
-         LoadingIndicator, which is M3 Expressive's own — a morphing sequence of shapes rather than
+         LoadingIndicator, which is M3 Expressive's own: a morphing sequence of shapes rather than
          the spinning arc of CircularProgressIndicator. The arc is the Material 2 shape that M3
          inherited, and next to Expressive's springy motion everywhere else on this surface it reads
          as a different app's idea of waiting. Left on its default style deliberately: its size and
          colours come from the theme, which is the whole point of using the component instead of
          drawing one.
 
-         GONE when it is not wanted, like everything else here. It was INVISIBLE for a while so that
-         this row and the button below could trade places without the sheet's height moving — but
-         holding a row of space open through the whole of the code-entry screen cost more than the
-         movement did. It pushed the field down into a sheet that had already reserved two lines of
-         body text and a permanent error line, and what the user got was a tall sheet with a
-         squeezed field in it, which is worse than an edge that slides. Ui.visibilityMotion animates
-         the height either way, so the row growing in is a slide and not a jump. -->
+         GONE when it is not wanted, like everything else here, rather than INVISIBLE: reserving a
+         row of space for it through the whole of the code-entry screen would push the field down
+         into a sheet that already reserves two lines of body text and a permanent error line,
+         leaving a tall sheet with a squeezed field, worse than an edge that slides.
+         Ui.visibilityMotion animates the height change, so the row growing in is a slide and not a
+         jump. -->
     <LinearLayout
         android:id="@+id/pair_progress"
         android:layout_width="match_parent"
@@ -165,7 +164,7 @@
     <!-- errorEnabled up front, which is the opposite of what Ui.showError does elsewhere in this app
          and is the point: there the error line is collapsed when the complaint goes, because a
          settings form has a dozen fields and a dozen permanent gaps. Here there is one field, and
-         everything it can be told — "Nine digits", or what the connection failed with — arrives
+         everything it can be told, such as "Nine digits", or what the connection failed with, arrives
          while the user is staring at the sheet waiting for a verdict. Enabling the line from the
          start reserves it once, so a wrong code adds a message instead of adding a message AND a row
          of height. The reserved line is empty text in a view with no content, so it is not announced
@@ -186,22 +185,19 @@
 
         <!-- number, not numberPassword or text: the code is not a secret from the person holding the
              phone, and a digits-only keyboard is the whole point. It is also what makes a typed
-             space harmless — inputType="number" installs a digits-only filter, which drops spaces
-             from typing and from a paste alike — but that is a convenience and NOT the guarantee.
+             space harmless: inputType="number" installs a digits-only filter, which drops spaces
+             from typing and from a paste alike, but that is a convenience and NOT the guarantee.
              PairSheet.connect strips every non-digit before it measures or derives anything, because
              "most IMEs filter it" is not a thing to derive a key from.
 
              maxLength is 11 and not Pairing.CODE_DIGITS, and the difference is the grouping: the
              other device SHOWS "123 456 789", so that is what gets copied down and typed, and nine
              digits plus two spaces is eleven characters. A cap of nine would silently swallow the
-             last two digits of a code the user typed exactly as they were shown — the worst of the
+             last two digits of a code the user typed exactly as they were shown, the worst of the
              possible failures, because what is left looks complete. Eleven is a bound on the field,
              not a definition of the code: PairSheet strips the spaces and then requires exactly
              Pairing.CODE_DIGITS digits, so eleven digits is refused like anything else that is not
-             nine.
-
-             (This comment used to sit between the attributes of the tag below, where XML does not
-             allow one.) -->
+             nine. -->
         <com.google.android.material.textfield.TextInputEditText
             android:id="@+id/pair_code_input"
             android:layout_width="match_parent"
@@ -214,8 +210,8 @@
     </com.google.android.material.textfield.TextInputLayout>
 
     <!-- The one button, GONE while a code is being checked: there is nothing to press then, and the
-         progress row above takes its place. The two used to hold each other's space open (see the
-         note on pair_progress for why that was given up). -->
+         progress row above takes its place (see pair_progress for why neither reserves space for
+         the other). -->
     <com.google.android.material.button.MaterialButton
         android:id="@+id/pair_action"
         android:layout_width="wrap_content"

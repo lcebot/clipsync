@@ -15,8 +15,8 @@ import java.util.List;
  * <p>The problem it exists for: a PC on the internet offers a file to a phone and a tablet that sit
  * beside each other on Wi-Fi. Without this, both pull the whole file over the slow link and the PC
  * uploads it twice. With it, both ends of the LAN compute the <em>same</em> priority order from
- * fields that were already in HELLO — mains power beats battery, a PC beats a tablet beats a phone,
- * a node that can hold a connection while idle beats one that cannot, and the node id breaks ties —
+ * fields that were already in HELLO: mains power beats battery, a PC beats a tablet beats a phone,
+ * a node that can hold a connection while idle beats one that cannot, and the node id breaks ties,
  * so the winner pulls from the origin and the losers ask the winner to pass it on. The order is
  * total and computed identically everywhere, which is what lets them agree without an election
  * message.
@@ -28,14 +28,14 @@ import java.util.List;
  *       with a timeout per step and one retry for a candidate that says "busy", falling back to the
  *       origin when the list runs out;
  *   <li><b>accepting</b> ({@code relayAccepted}): a set of waiting links per hash, which this device
- *       will OFFER the file to — as soon as the <em>first chunk</em> lands, not when the file is
+ *       will OFFER the file to, as soon as the <em>first chunk</em> lands, not when the file is
  *       complete, so a relayed file moves through rather than being stored and forwarded;
  *   <li><b>saying so</b>: {@link #relayingCount()} is what the UI shows as "Relay (n)", and
  *       {@link #busy()} is what stops a screen-off disconnect dropping a relay mid-flight.
  * </ul>
  *
  * <p><b>What it does not do.</b> It never touches a chunk, a Partial or the cache directly, it never
- * decides whether a file is wanted, and it does not own the pull that streams a relayed file out —
+ * decides whether a file is wanted, and it does not own the pull that streams a relayed file out;
  * all of that is {@link FileExchange}, which it reaches through {@link Host}. It also holds no clip
  * state at all: a relay is about bytes, and whether those bytes end up on the clipboard is somebody
  * else's decision.
@@ -43,8 +43,8 @@ import java.util.List;
  * <p><b>Locking.</b> It does not take the device lock and must not: every map here is a concurrent
  * one, every field of a {@link RelayWait} is touched only from the walk (the control-frame thread
  * that owns the wait, or the single {@code clipsync-relay} timer thread), and nothing in here is
- * part of an invariant that spans another class. The one invariant that does span — "a hash with an
- * empty waiter set is a finished relay, not a busy one" — is stated in {@link #busy()} and in
+ * part of an invariant that spans another class. The one invariant that does span, that a hash with an
+ * empty waiter set is a finished relay and not a busy one, is stated in {@link #busy()} and in
  * {@link #onLinkGone} and is maintained entirely inside this file.
  */
 final class RelayCoordinator {
@@ -65,7 +65,7 @@ final class RelayCoordinator {
         /** Remember this file as offered, so a WANT for it can be answered. */
         void rememberOffered(String sha, Files.Ref f);
 
-        /** The OFFER header this file arrived with, or null — for its originator's seq and from. */
+        /** The OFFER header this file arrived with, or null, for its originator's seq and from. */
         JSONObject inboundOffer(String sha);
 
         /** Is the complete file already in the cache? */
@@ -166,20 +166,19 @@ final class RelayCoordinator {
 
     /** Files we are waiting on a relay to provide, keyed by sha256. */
     private final java.util.Map<String, RelayWait> relayWaits = new java.util.concurrent.ConcurrentHashMap<>();
-    /** Relay requests we accepted: sha → set of waiter Links that will receive the OFFER. */
+    /** Relay requests we accepted: sha mapped to the set of waiter Links that will receive the OFFER. */
     private final java.util.Map<String, java.util.Set<Link>> relayAccepted = new java.util.concurrent.ConcurrentHashMap<>();
-    /** Timeout for a single step of the relay fallback walk (generous — it is a backstop, not a scheduler). */
+    /** Timeout for a single step of the relay fallback walk (generous, because it is a backstop, not a scheduler). */
     private static final long RELAY_ASK_TIMEOUT_MS = 30_000;
 
     /**
      * Where the relay's delayed work runs. <b>Not the main looper.</b>
      *
      * <p>Both the step timeout and the busy retry end in a socket write, and a socket write on the
-     * main thread throws NetworkOnMainThreadException. Both call sites caught Exception and said
-     * nothing, so the effect was that every relay that reached its timeout or was told "busy" —
-     * which is to say every relay that needed the fallback walk at all — marked every remaining
-     * candidate failed and then failed the fall back to the origin too. The feature could only work
-     * when it never had to try twice.
+     * main thread throws NetworkOnMainThreadException. Every candidate in the walk after the first,
+     * and the origin fallback itself, depends on this timer running off the main looper, because a relay
+     * that had to retry or fall back at all would otherwise fail silently right when the fallback
+     * path is what it needs most.
      *
      * <p>It is also the phone's only background timer for file work, which is why
      * {@link FileExchange}'s debounced re-ask runs on it through {@link #schedule} rather than
@@ -225,16 +224,17 @@ final class RelayCoordinator {
     /**
      * Is a relay this device accepted still outstanding?
      *
-     * <p>A non-empty <em>set</em>, not a non-empty map — a key whose waiters have all gone is a
-     * finished relay, and reading it as an outstanding one is what kept the phone awake.
-     * {@link #onLinkGone} removes those keys; this is the belt to that pair of braces.
+     * <p>A non-empty <em>set</em>, not a non-empty map, because a key whose waiters have all gone is a
+     * finished relay, not an outstanding one, and treating it as outstanding would hold the device
+     * "busy" indefinitely. {@link #onLinkGone} removes those keys; this is the belt to that pair of
+     * braces.
      */
     boolean busy() {
         for (java.util.Set<Link> w : relayAccepted.values()) if (!w.isEmpty()) return true;
         return false;
     }
 
-    /** Are there waiters for this hash — i.e. is this device relaying it? */
+    /** Are there waiters for this hash, i.e. is this device relaying it? */
     boolean hasWaiters(String sha) {
         return relayAccepted.containsKey(sha);
     }
@@ -243,7 +243,7 @@ final class RelayCoordinator {
      * A RELAY_ASK: the hash, and how big the thing is.
      *
      * <p>The size is what lets a candidate say no <em>now</em>. Without it a relay that could never
-     * accept the file — over its own limit — has nothing to answer until it has seen the file, so
+     * accept the file, because it is over its own limit, has nothing to answer until it has seen the file, so
      * the asker waits out the full {@link #RELAY_ASK_TIMEOUT_MS} before moving to the next
      * candidate: thirty seconds of silence per candidate, ninety for a list of three, all of it
      * avoidable by sending a number that is already in the OFFER header.
@@ -258,16 +258,16 @@ final class RelayCoordinator {
      * <p>This is the whole of the election as {@code FileExchange.onOffer} sees it.
      *
      * @return true when a RELAY_ASK has gone out and the caller must do nothing further; false when
-     *         the ordinary WANT path applies — either because no election is called for, or because
+     *         the ordinary WANT path applies, either because no election is called for, or because
      *         this device won it, or because this OFFER <em>is</em> the relay answering.
      */
     boolean intercept(Link l, String sha, String name, JSONObject hdr) throws Exception {
         Connection c = l.connection();
         RelayWait rw = relayWaits.get(sha);
         if (rw != null && l.peerId() != null && l.peerId().equals(currentRelayFor(rw))) {
-            // This OFFER is from the relay we asked — skip election, WANT directly.
+            // This OFFER is from the relay we asked, so skip election and WANT directly.
             relayWaits.remove(sha);
-            Logger.i("offer: " + name + " from relay " + Node.shortId(l.peerId()) + " -> want directly");
+            Logger.i("offer: " + name + " from relay " + Node.shortId(l.peerId()) + ", want directly");
             return false;
         }
         String offerFrom = hdr.optString("from", "");
@@ -327,7 +327,7 @@ final class RelayCoordinator {
                 rw.nextIdx++;
             }
         }
-        // Exhausted the candidate list — WANT from origin.
+        // Exhausted the candidate list, so WANT from origin.
         relayWaits.remove(rw.sha256);
         if (rw.origin == null || !rw.origin.isOpen()) return;
         try {
@@ -391,14 +391,14 @@ final class RelayCoordinator {
             host.finishDownload(null, p);
             // finishDownload calls offerToWaiters
         }
-        // Otherwise, the offer will come when our own download completes (finishDownload → offerToWaiters)
-        // or via streaming relay once the first chunks arrive (endPush → offerToWaiters).
+        // Otherwise, the offer will come when our own download completes (finishDownload calls offerToWaiters)
+        // or via streaming relay once the first chunks arrive (endPush calls offerToWaiters).
     }
 
-    /** Relay accepted our request — wait for its OFFER. */
+    /** Relay accepted our request; wait for its OFFER. */
     void onRelayOk(Link l, JSONObject msg) {
         String sha = msg.optString("sha256");
-        // Only that we are still waiting on this sha matters — an OK for a wait that has since been
+        // Only that we are still waiting on this sha matters; an OK for a wait that has since been
         // satisfied or abandoned is stale and says nothing worth logging.
         if (!relayWaits.containsKey(sha)) return;
         Logger.i("relay: " + Node.shortId(l.peerId()) + " accepted relay for " + Frames.shortSha(sha));
@@ -406,7 +406,7 @@ final class RelayCoordinator {
         // recognises the relay as the source and WANTs directly.
     }
 
-    /** Relay declined — walk to the next candidate. */
+    /** Relay declined; walk to the next candidate. */
     void onRelayNo(Link l, JSONObject msg) {
         String sha = msg.optString("sha256");
         String reason = msg.optString("reason", "");
@@ -500,7 +500,7 @@ final class RelayCoordinator {
 
     /**
      * Streaming relay: send OFFER to waiters as soon as we have the first chunk, so they can
-     * start pulling while we are still receiving.  Does NOT remove from relayAccepted — that stays
+     * start pulling while we are still receiving.  Does NOT remove from relayAccepted; that stays
      * so the pull-serving path knows to use the streaming path, and {@link #offerToWaiters} cleans
      * it when the file completes.
      */
@@ -537,9 +537,9 @@ final class RelayCoordinator {
      * as a waiter if it was one.
      *
      * <p>Removing the empty sets is not tidiness. {@link #busy()} asks whether any hash still has a
-     * waiter, so one finished relay used to pin the device as "busy" for the life of the process —
-     * the screen-off disconnect never fired again and the phone held its links, and its radio, all
-     * night.
+     * waiter, so a finished relay left as an empty set would read as "busy" for the life of the
+     * process, and the screen-off disconnect would never fire again, so the phone would hold its
+     * links, and its radio, indefinitely.
      */
     void onLinkGone(Link l, String peerId) {
         if (peerId == null) return;

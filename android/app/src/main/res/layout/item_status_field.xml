@@ -2,7 +2,7 @@
 <!-- One labelled value inside a device card: "ID   1a2b3c4d".
 
      Two columns rather than one "ID: value" string, so the values line up down the card and can be
-     compared between cards at a glance — which is the whole reason for labelling them.
+     compared between cards at a glance, which is the whole reason for labelling them.
 
      The label column is minWidth and not a fixed width: at a large font scale a fixed one clips the
      label, and a label pushing its own value right is a smaller problem than a label that cannot be

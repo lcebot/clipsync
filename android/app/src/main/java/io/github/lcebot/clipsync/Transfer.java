@@ -13,9 +13,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 /**
  * One file moving between phone and PC over N parallel data connections.
  *
- * <p>Upload (phone -> PC): the PC's WANT names the missing chunk ranges; they are striped across
- * N workers, each opening its own data connection (HELLO role=data) and pushing CHUNK frames.
- * Download (PC -> phone): each worker sends PULL for its stripe and writes the CHUNKs it gets
+ * <p>Upload, from the phone to the PC: the PC's WANT names the missing chunk ranges; they are
+ * striped across N workers, each opening its own data connection (HELLO role=data) and pushing
+ * CHUNK frames. Download, from the PC to the phone: each worker sends PULL for its stripe and writes the CHUNKs it gets
  * into the shared {@link Files.Partial}.  {@link #abort()} stops every worker at the next chunk;
  * whatever was written stays on disk for a later resume.
  */
@@ -31,10 +31,9 @@ public final class Transfer {
     /**
      * Where this transfer's bytes are going, and how to reach that peer again.
      *
-     * <p>It used to be the whole control {@link Connection}. {@link PeerRoute} is the three things
-     * anything here turned out to need — open a data connection, say one thing out of band, and
-     * answer "is this the transfer that link was carrying?" — and nothing else, so a transfer can no
-     * longer reach past its own job into a peer session.
+     * <p>{@link PeerRoute} exposes only the three things a transfer needs: open a data connection,
+     * say one thing out of band, and answer "is this the transfer that link was carrying?", and
+     * nothing else, so a transfer cannot reach past its own job into a peer session.
      */
     private final PeerRoute route;
     private final List<int[]> ranges;
@@ -75,11 +74,10 @@ public final class Transfer {
      * Called once, on whichever worker writes the first chunk of a download.
      *
      * <p>It exists for the relay: a node that is forwarding a file offers it to its waiters as soon
-     * as the first chunk lands, so they pull while it is still receiving rather than after. That was
-     * already true when a peer <em>pushed</em> at us, because the service does that write itself and
-     * can see it; when this end drives the download the write happens in here, out of the service's
-     * sight, and the relay silently degraded to store-and-forward — doubling the end-to-end time for
-     * every file that crossed an Android relay, with no way to tell from either log.
+     * as the first chunk lands, so they pull while it is still receiving rather than after. When a
+     * peer <em>pushes</em> at us, the service performs that write itself and can see it directly; when
+     * this end drives the download instead, the write happens inside {@code Transfer}, out of the
+     * service's sight, so this callback is what surfaces the event to the relay.
      *
      * <p>A bare Runnable rather than a handle on the service's state, because the only thing worth
      * reporting up is that the event happened.
@@ -210,7 +208,7 @@ public final class Transfer {
 
             // PING is not answered here, and cannot arrive: this end opened the stream and is
             // pulling on it, so the peer is serving chunks and never has a reason to poll a socket
-            // it is actively writing to. A stream the PEER opened can sit idle and does answer —
+            // it is actively writing to. A stream the PEER opened can sit idle and does answer;
             // see FileExchange.serveData.
         });
     }

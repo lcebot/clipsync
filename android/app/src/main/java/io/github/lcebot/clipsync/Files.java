@@ -28,7 +28,7 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * Clipboard URIs <-> chunks.  Nothing here holds a whole file in memory.
+ * Converts between clipboard URIs and chunks.  Nothing here holds a whole file in memory.
  *
  * <p>Sending: a clip item may carry a {@code content://} URI (image copied from the gallery, a
  * browser, a file manager, a screenshot's "copy"), rarely a {@code file://} one. We ask the
@@ -37,8 +37,8 @@ import java.util.Locale;
  * chunks through {@link ChunkSource} (positional reads when the provider gives us a seekable
  * descriptor, a sequential skip otherwise).
  *
- * <p>Receiving: {@link Partial} assembles chunks — arriving on several connections, in any
- * order — into a pending MediaStore row under {@code Download/ClipSync} (clipboard content is
+ * <p>Receiving: {@link Partial} assembles chunks, which arrive on several connections in any
+ * order, into a pending MediaStore row under {@code Download/ClipSync} (clipboard content is
  * transient and must not litter Pictures/), with a persisted chunk map in files/partial/ so an
  * interrupted transfer resumes with only the missing chunks. Housekeeping lives in {@link FileCache}.
  */
@@ -55,16 +55,15 @@ public final class Files {
     /**
      * Replace a file's contents, or leave the old contents untouched. Never anything in between.
      *
-     * <p>Three files needed this and only two of them had it, which is exactly the kind of drift a
-     * rule written in a comment invites: {@code cache.json} and {@code status.json} wrote beside and
-     * renamed, while {@code clipsync.conf} — the one that carries the PSK, and the one rewritten
-     * most often — wrote in place. A process killed mid-write left a truncated key file, and the
-     * service then refused to start until the user re-paired every device.
+     * <p>Used by every file that must not be left half-written if the process dies mid-save:
+     * {@code cache.json}, {@code status.json}, and {@code clipsync.conf}, which carries the PSK and
+     * is rewritten most often: a truncated key file would leave the service unable to start until
+     * the user re-paired every device.
      *
      * <p>The {@code sync()} is not optional. A rename is atomic with respect to the directory, but
      * it says nothing about whether the new file's <em>blocks</em> have reached the disk; without
      * the flush a power loss can leave the rename durable and the contents not, which is the
-     * failure the rename was supposed to make impossible.
+     * failure the rename is meant to prevent.
      *
      * @param dst the file to replace; the temporary lives beside it, so both are on one filesystem
      *            and the rename cannot degrade into a copy
@@ -347,12 +346,12 @@ public final class Files {
         public synchronized boolean isFinalized() { return finalized; }
 
         /**
-         * "I may send one more WANT for this file" — the re-ask budget, spent one call at a time.
+         * "I may send one more WANT for this file": the re-ask budget, spent one call at a time.
          *
          * <p>Named and counted here rather than in {@link FileExchange} because the budget belongs to
          * the file, not to the connection that happens to be carrying it: a transfer that is picked
          * up by a second peer offering the same hash must not get a fresh three re-asks for the same
-         * stall. Python keeps it in the same place and for the same reason — {@code Partial.retries},
+         * stall. Python keeps it in the same place and for the same reason: {@code Partial.retries},
          * tested against {@code WANT_RETRIES} inside {@code SyncState._reask}.
          *
          * <p>Test and increment are one operation on the Partial's own monitor for the same reason
@@ -371,13 +370,13 @@ public final class Files {
         /**
          * A fresh OFFER for this file arrived and was answered with a WANT: the peer is driving it
          * again, so the budget starts over. Mirrors {@code pt.retries = 0} in Python's
-         * {@code _want_from_peer} — without it a file that stalls once an hour is unresumable after
+         * {@code _want_from_peer}; without it a file that stalls once an hour is unresumable after
          * the third hour, because the counter is in the Partial and the Partial survives on disk.
          */
         public synchronized void resetReasks() { reasks = 0; }
 
         /**
-         * "Nothing had landed yet, and I am the one who gets to say so" — asked once, by whoever
+         * "Nothing had landed yet, and I am the one who gets to say so": asked once, by whoever
          * writes the first chunk of this file, and answered true to exactly one caller.
          *
          * <p>It exists because {@code haveCount() == 0} followed by {@link #write} is <em>two</em>
@@ -387,11 +386,10 @@ public final class Files {
          * waiter gets N identical OFFERs for one file. Folding the test and the flag into one
          * method on the monitor that {@code write} already holds makes that unrepresentable.
          *
-         * <p>The pull side has always enforced this, as {@code Transfer.firstChunkFired} — which is
-         * now this method, called from {@link Transfer}'s chunk callback. One rule with one
-         * implementation, because the last time it had two only one of them was right: the push
-         * path in {@code FileExchange.serveData} had no guard at all. Python's
-         * {@code Partial.claim_first_chunk} is the same method for the same reason.
+         * <p>Both the push and pull paths call this one method, the pull side from {@link Transfer}'s
+         * chunk callback, so the guard is enforced identically regardless of which direction the
+         * file is moving. Python's {@code Partial.claim_first_chunk} is the same method for the same
+         * reason.
          *
          * <p>Cleared by {@link #keep()}: a transfer that stopped and is resumed later must be able
          * to announce its first chunk again, or a file whose first attempt died before a single
@@ -430,7 +428,7 @@ public final class Files {
          * <p>For forwarding a file while it is still arriving: it is being written by another set of
          * threads, but
          * chunks occupy disjoint ranges, so a chunk that {@link #hasChunk} reports as present is safe
-         * to read.  Opens a separate read descriptor each call — not the fastest path, but correct
+         * to read.  Opens a separate read descriptor each call; not the fastest path, but correct
          * without sharing the write channel's fd ownership, and the overhead is negligible next to
          * the 512 KiB chunk on the wire.
          */

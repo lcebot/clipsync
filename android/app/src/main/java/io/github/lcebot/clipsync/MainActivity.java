@@ -37,7 +37,7 @@ import com.google.android.material.snackbar.Snackbar;
 import com.google.android.material.transition.MaterialFadeThrough;
 
 /**
- * Two pages behind a bottom navigation bar — Settings and Log — cross-faded into each other under
+ * Two pages behind a bottom navigation bar, Settings and Log, cross-faded into each other under
  * an M3 collapsing top app bar. The connection status is the bar's only menu action, a
  * Chip whose icon is the pulsing dot; tapping it opens the peer and address in full. The actions
  * are extended FABs bottom-right, a different pair per page: Settings gets "Start", or "Stop" plus
@@ -49,17 +49,17 @@ import com.google.android.material.transition.MaterialFadeThrough;
  * elsewhere and are reached only through their own small interfaces:
  *
  * <ul>
- *   <li>{@link SettingsForm} — the form, its validation and everything the config file means. Every
+ *   <li>{@link SettingsForm}: the form, its validation and everything the config file means. Every
  *       field is validated live; Apply is enabled only when all of them are valid and sends a
  *       RELOAD to the running service (no restart).
- *   <li>{@link LogPane} — the log tail, its poll and its follow-the-bottom rule.
- *   <li>{@link StatusSheet} — the connection-details bottom sheet and its keyed diff.
+ *   <li>{@link LogPane}: the log tail, its poll and its follow-the-bottom rule.
+ *   <li>{@link StatusSheet}: the connection-details bottom sheet and its keyed diff.
  * </ul>
  *
  * <p>The split is by surface and not by kind on purpose: each of those three owns a set of views
  * nothing else touches, which is what lets them be reasoned about one at a time. Anything that has
- * to see two of them at once — which page is in front, where an inset lands, what the service is
- * doing — is here, because that is the only place it can be true.
+ * to see two of them at once, such as which page is in front, where an inset lands, or what the service is
+ * doing, is here, because that is the only place it can be true.
  */
 public class MainActivity extends AppCompatActivity implements SettingsForm.Host, StatusSheet.Host {
     private SettingsForm form;
@@ -85,8 +85,8 @@ public class MainActivity extends AppCompatActivity implements SettingsForm.Host
     private Chip statusChip;
     private int shownDot, shownLabel;                       // colours already on the chip
     private OnBackPressedCallback backToSettings;
-    // The chip's own mirror of the peer list is gone with the single connection it described: the
-    // sheet reads the snapshot when it opens, so there is nothing to keep in step here.
+    // The chip does not keep its own copy of the peer list: the sheet reads the snapshot when it
+    // opens, so there is nothing to keep in step here.
     private boolean wasConnected;
     private ValueAnimator pulse;
     // action state: which of Start / Stop + Apply is shown, and what we are waiting for
@@ -111,7 +111,7 @@ public class MainActivity extends AppCompatActivity implements SettingsForm.Host
      */
     private final Runnable statusChanged = this::refreshStatus;
     /**
-     * Coalesces a burst. One event on the service side — a network change, a reload — makes several
+     * Coalesces a burst. One event on the service side, such as a network change or a reload, makes several
      * threads rewrite the file within a few milliseconds of each other, and rendering each of those
      * would start a transition and cancel it with the next.
      */
@@ -120,9 +120,9 @@ public class MainActivity extends AppCompatActivity implements SettingsForm.Host
      * The backstop, and it cannot be removed however good the watch is, because two of the things
      * this render decides are <b>timeouts</b>: {@code Snapshot.alive()}, which is how a service that
      * was killed is noticed, and {@link #WAIT_TIMEOUT_MS}, which hands the buttons back when a start
-     * never arrives. Neither has an event — they are both the absence of one — so something has to
-     * look. Five seconds is fine against a 120 s liveness window and a 12 s wait, and it is a
-     * twentieth of the work the old one-second poll did.
+     * never arrives. Neither has an event; they are both the absence of one, so something has to
+     * look. Five seconds is fine against a 120 s liveness window and a 12 s wait, and is a fraction
+     * of the work a one-second poll would do.
      */
     private static final long STATUS_POLL_MS = 5_000;
     private final Runnable statusPoll = new Runnable() {
@@ -152,8 +152,9 @@ public class MainActivity extends AppCompatActivity implements SettingsForm.Host
             appbar.setExpanded(true, false);
         } else if (savedInstanceState.getBoolean(KEY_LOG_TAB)) {
             // Views do not save their own visibility, so after a recreate both pages come back at
-            // their XML defaults — while the bottom bar does restore its selection, which is how
-            // a rotation on the Log tab used to land on Settings with "Log" still highlighted.
+            // their XML defaults, while the bottom bar restores its own selection independently,
+            // without this, a rotation on the Log tab would land on Settings with "Log" still
+            // highlighted.
             showPage(true, false);
             nav.setSelectedItemId(R.id.nav_log);             // no-op if it restored by itself
         }
@@ -173,8 +174,8 @@ public class MainActivity extends AppCompatActivity implements SettingsForm.Host
         // the very fields behind it, and a dialog racing the first layout pass would be reloading a
         // form that had not finished being filled.
         //
-        // Only on a cold start. A recreate — a rotation, a theme change, the system rebuilding the
-        // task — runs onCreate again while the welcome screen is already on top of this activity,
+        // Only on a cold start. A recreate, such as a rotation, a theme change, or the system rebuilding the
+        // task, runs onCreate again while the welcome screen is already on top of this activity,
         // and an unconditional call launched a second copy of it onto the stack every time.
         if (savedInstanceState == null) offerFirstRunIfUnconfigured();
     }
@@ -226,8 +227,8 @@ public class MainActivity extends AppCompatActivity implements SettingsForm.Host
         // do is start out disagreeing with the view, which is one frame of wrong state and, worse, a
         // bug that appears when someone edits the layout and not this file.
         //
-        // So the three that the layout does state are READ from it, and the three it does not —
-        // the chip's icon tint, the chip's label colour, the Apply FAB's icon — are WRITTEN here and
+        // So the three that the layout does state are READ from it, and the three it does not,
+        // the chip's icon tint, the chip's label colour, the Apply FAB's icon, are WRITTEN here and
         // recorded in the same breath. Either way the field and the view cannot be out of step.
         stopShown = stopFab.getVisibility() == View.VISIBLE;
         applyShown = applyFab.getVisibility() == View.VISIBLE;
@@ -270,7 +271,7 @@ public class MainActivity extends AppCompatActivity implements SettingsForm.Host
         //
         // This cannot be left to ExtendedFloatingActionButtonBehavior, which is checked here
         // because the reason is not the obvious one. That Behavior has no nested-scroll hooks at
-        // all — it reacts only in onDependentViewChanged — and shouldUpdateVisibility() returns
+        // all; it reacts only in onDependentViewChanged, and shouldUpdateVisibility() returns
         // early unless the FAB's layout_anchor IS the AppBarLayout. These FABs sit in the corner
         // with no anchor, so it never runs. (Anchoring them would move them onto the app bar,
         // which is the whole point of not doing it.)
@@ -284,8 +285,8 @@ public class MainActivity extends AppCompatActivity implements SettingsForm.Host
         //
         // The horizontal pair is only non-zero beside a display cutout, and M3's rule there is that
         // a container may run under the cutout while anything readable or touchable steps aside. So
-        // it is never applied to a view that paints a surface — not the CoordinatorLayout, not the
-        // app bar, not the log pane — only to the content inside them. BottomNavigationView already
+        // it is never applied to a view that paints a surface, not the CoordinatorLayout, not the
+        // app bar, not the log pane, only to the content inside them. BottomNavigationView already
         // does exactly this for itself, which is why its bar spans the screen while its items sit
         // clear of the camera; everything else here now matches it.
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.root), (v, insets) -> {
@@ -293,7 +294,7 @@ public class MainActivity extends AppCompatActivity implements SettingsForm.Host
                     WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout());
             // Insets are absolute (left/right) and half of what they are applied to is relative
             // (Start/End). The two coincide in LTR, which is why mixing them went unnoticed, and are
-            // swapped in RTL — so a cutout on the physical left was being stepped around on the
+            // swapped in RTL, so a cutout on the physical left was being stepped around on the
             // right. setPadding below is absolute and takes the insets as they come; everything
             // named Start/End takes these two instead.
             boolean rtl = v.getLayoutDirection() == View.LAYOUT_DIRECTION_RTL;
@@ -305,15 +306,15 @@ public class MainActivity extends AppCompatActivity implements SettingsForm.Host
             logPane.applyInsets(bars.left, bars.right);
             toolbar.setPadding(bars.left, toolbar.getPaddingTop(), bars.right, toolbar.getPaddingBottom());
             // the expanded title is drawn by the CollapsingToolbarLayout itself and never sees the
-            // toolbar's padding, so it needs the same offset stated separately — without it the
+            // toolbar's padding, so it needs the same offset stated separately; without it the
             // title jumps sideways between its expanded and collapsed positions beside a cutout
             collapsing.setExpandedTitleMarginStart(baseTitleStart + startInset);
             collapsing.setExpandedTitleMarginEnd(baseTitleEnd + endInset);
             // setLayoutParams always requests a layout, and this listener also runs whenever the
-            // IME opens or closes — so only when the value really changed, or a keyboard appearing
+            // IME opens or closes, so only when the value really changed, or a keyboard appearing
             // mid-animation would drop a stray measure into a shrink or extend.
             // The FABs are gravity=bottom|end, so the inset that matters to them is the one on
-            // their own end — the right in LTR, the left in RTL.
+            // their own end: the right in LTR, the left in RTL.
             int margin = baseFabMargin + endInset;
             for (ExtendedFloatingActionButton f : new ExtendedFloatingActionButton[]{applyFab, stopFab, copyFab, clearFab}) {
                 ViewGroup.MarginLayoutParams lp = (ViewGroup.MarginLayoutParams) f.getLayoutParams();
@@ -366,7 +367,7 @@ public class MainActivity extends AppCompatActivity implements SettingsForm.Host
      * Swaps the visible page.
      *
      * <p>The two pages want different app bars. Settings gets the collapsing one: open on a cold
-     * start, then free to follow the scroll — and reopened on the way back whenever the page is at
+     * start, then free to follow the scroll, and reopened on the way back whenever the page is at
      * the top, since a collapsed bar over un-scrolled content reads as broken. The Log wants every
      * pixel it can get, so it arrives collapsed and stays that way (nested scrolling is switched off
      * on that page in {@link LogPane}, which is the whole of the "always collapsed" rule).
@@ -388,7 +389,7 @@ public class MainActivity extends AppCompatActivity implements SettingsForm.Host
         refreshActions();
         // The poll follows the page: reading the log file while Settings is in front is work whose
         // result nothing displays. showPage also runs from onCreate, before onResume, which is why
-        // this is gated on `resumed` as well — onResume starts it.
+        // this is gated on `resumed` as well: onResume starts it.
         logPane.setPolling(toLog && resumed);
         if (toLog) logPane.follow();
     }
@@ -396,7 +397,7 @@ public class MainActivity extends AppCompatActivity implements SettingsForm.Host
     /**
      * Keeps {@code second} pinned 12dp <em>before</em> {@code first}, whatever width it animates to.
      *
-     * <p>Translation, so the pairing stays out of the layout pass entirely — but translation is in
+     * <p>Translation, so the pairing stays out of the layout pass entirely, but translation is in
      * absolute pixels while the FABs are placed with {@code gravity=bottom|end}, and those two only
      * agree in a left-to-right layout. In RTL the primary FAB sits at the left edge and a negative
      * translation moved the secondary one off the screen entirely. The sign is the whole fix: "12dp
@@ -406,23 +407,19 @@ public class MainActivity extends AppCompatActivity implements SettingsForm.Host
      * Material 1.14.0 rather than assumed, because both halves of the answer turned out to matter:
      *
      * <ul>
-     *   <li><b>FAB menu does not exist here at all.</b> Its own doc says so in as many words — "The
-     *       FAB menu component is currently not available as a native <b>Views</b> component" — and
+     *   <li><b>FAB menu does not exist here at all.</b> Its own doc says so in as many words: "The
+     *       FAB menu component is currently not available as a native <b>Views</b> component", and
      *       offers only Compose interop through a {@code ComposeView}
      *       (docs/components/FloatingActionButtonMenu.md @ 1.14.0). Adding Compose to this app to
      *       host one control is not a trade worth making.
-     *   <li><b>Button group does exist</b> — {@code com.google.android.material.button
-     *       .MaterialButtonGroup}, plus {@code MaterialSplitButton} — and it is the wrong shape
+     *   <li><b>Button group does exist</b>: {@code com.google.android.material.button
+     *       .MaterialButtonGroup}, plus {@code MaterialSplitButton}, and it is the wrong shape
      *       twice over: it arranges {@code MaterialButton}s, not FABs, so it cannot be the
      *       screen's primary action at all; and the split-button variant is precisely the thing to
      *       avoid here, since it hides its second action behind a press. These two are peers that
-     *       must both be reachable at a glance — "Stop" and "Apply" are the running service's two
+     *       must both be reachable at a glance: "Stop" and "Apply" are the running service's two
      *       answers, and "Copy" and "Clear" are always live together.
      * </ul>
-     *
-     * <p>(The earlier note here claimed the reason was behaviour "not availability". Half wrong:
-     * the FAB menu really is unavailable in Views, and a plain button group does <em>not</em> hide
-     * anything unless {@code overflowMode=menu} is asked for. Recorded so nobody re-derives it.)
      */
     private void pairFabs(ExtendedFloatingActionButton first, ExtendedFloatingActionButton second) {
         first.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
@@ -436,7 +433,7 @@ public class MainActivity extends AppCompatActivity implements SettingsForm.Host
      * Give a small control a 48dp touch target without changing how big it looks.
      *
      * <p>The status chip is about 32dp tall because it is a status *readout* that happens to be
-     * tappable, and {@code ensureMinTouchTargetSize} is switched off on it deliberately — a chip
+     * tappable, and {@code ensureMinTouchTargetSize} is switched off on it deliberately: a chip
      * padded out to 48dp in an app bar reads as a button and crowds the title. That decision stands.
      * What does not stand is the consequence: it is the only way into the connection details, and a
      * 32dp target is below what anyone can reliably hit, which is an accessibility failure rather
@@ -444,7 +441,7 @@ public class MainActivity extends AppCompatActivity implements SettingsForm.Host
      *
      * <p>A {@link android.view.TouchDelegate} is the way to have both. It lives on the PARENT and
      * routes touches in a rectangle to the child, so nothing about the chip's own size, padding or
-     * appearance changes — only where the parent decides a touch belongs.
+     * appearance changes; only where the parent decides a touch belongs.
      *
      * <p>Recomputed on every layout, because the rectangle is in the parent's coordinates and the
      * chip moves whenever its text does ("Connected (2)" is wider than "Idle"). A delegate installed
@@ -497,7 +494,7 @@ public class MainActivity extends AppCompatActivity implements SettingsForm.Host
      */
     private final androidx.activity.result.ActivityResultLauncher<Intent> welcome =
             registerForActivityResult(new androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult(), r -> {
-                // Whatever happened there, the key may have changed — pairing now runs on that
+                // Whatever happened there, the key may have changed, because pairing now runs on that
                 // screen rather than handing the job back, so this is a refresh and not a dispatch.
                 // MANUAL needs nothing done either: the page behind it IS the manual setup.
                 reloadAfterPairing();
@@ -507,7 +504,7 @@ public class MainActivity extends AppCompatActivity implements SettingsForm.Host
     private final PairSheet.Host pairHost = new PairSheet.Host() {
         @Override public void keyChanged() {
             reloadAfterPairing();
-            // The service is started by the sheet; this is only the part of it this page owns —
+            // The service is started by the sheet; this is only the part of it this page owns:
             // the buttons have to show that something is expected to come up.
             setAutoStart(true);
             waitingForStart = !Status.read(MainActivity.this).alive();
@@ -551,12 +548,12 @@ public class MainActivity extends AppCompatActivity implements SettingsForm.Host
     }
 
     /**
-     * Stopped → a single "Start"; running → "Stop" and "Apply". After pressing one of them the
+     * When stopped, a single "Start"; when running, "Stop" and "Apply". After pressing one of them the
      * button greys out until the service actually reaches the new state (or the wait times out),
      * and a state change made from anywhere else moves the buttons just the same. The Log tab's
      * Copy / Clear pair only follows the tab: both stay enabled at all times.
      * Everything here goes through the components' own animations, and nothing is touched unless
-     * it actually changed — scrolling drives shrink()/extend() and must not be measured against.
+     * it actually changed; scrolling drives shrink()/extend() and must not be measured against.
      */
     private void refreshActions() {
         boolean showStop = serviceRunning && !onLogTab;
@@ -578,8 +575,8 @@ public class MainActivity extends AppCompatActivity implements SettingsForm.Host
         stopFab.setEnabled(!waitingForStop);
 
         Ui.setTextIfChanged(applyFab, getString(serviceRunning ? R.string.action_apply : R.string.action_start));
-        // setIconResource() always requests a layout; this runs on every status refresh — a
-        // file-watch event, or the 5 s backstop — so an unconditional call would drop a stray
+        // setIconResource() always requests a layout; this runs on every status refresh, such as a
+        // file-watch event or the 5 s backstop, so an unconditional call would drop a stray
         // measure into whatever shrink/extend is in flight
         int icon = serviceRunning ? R.drawable.ic_restart : R.drawable.ic_play;
         if (icon != applyIcon) { applyIcon = icon; applyFab.setIconResource(icon); }
@@ -627,7 +624,7 @@ public class MainActivity extends AppCompatActivity implements SettingsForm.Host
      * The open pairing sheet, or null. Held for one reason: {@link #onDestroy()}.
      *
      * <p>A Dialog is not part of the Activity's view tree and is not torn down with it. On a
-     * rotation the Activity is destroyed and rebuilt while this carries on — and for a pairing sheet
+     * rotation the Activity is destroyed and rebuilt while this carries on, and for a pairing sheet
      * that is worse than a leaked window: its {@link PairProvider} keeps advertising and keeps
      * handing out the key with nothing on screen to say so. {@link StatusSheet} holds its own dialog
      * for the same reason and is dismissed alongside it.
@@ -639,9 +636,9 @@ public class MainActivity extends AppCompatActivity implements SettingsForm.Host
      *
      * <p>Dialogs are most of it, and the pairing sheet is the one that matters: it holds a
      * {@link PairProvider}, which holds an mDNS advertisement and an accept loop that hands out the
-     * PSK. A rotation destroys this Activity without touching either, so before this the code
-     * window survived on the network with no surface showing the code — nobody watching, and the key
-     * still on offer.
+     * PSK. A rotation destroys this Activity without touching either, so without this the code
+     * window would survive on the network with no surface showing the code: nobody watching, and
+     * the key still on offer.
      *
      * <p>Dismissing is what stops them: the sheet's own dismiss listener runs its shutdown, which is
      * the same path the user pressing Back takes. The log pane's reader thread is the remainder.
@@ -704,7 +701,7 @@ public class MainActivity extends AppCompatActivity implements SettingsForm.Host
         // fact about one of them and the chip has no room to say which. What kind each link is now
         // belongs beside that link, in the sheet.
         //
-        // The count is Snapshot.count(), which is the number of DIRECT peers — the devices this one
+        // The count is Snapshot.count(), which is the number of DIRECT peers, the devices this one
         // holds an open connection to. Peers known only through another device's roster are not in
         // it, on purpose: the chip says how connected THIS device is, and a device reachable only
         // second-hand is not something this one is connected to. They are listed in the sheet under
@@ -720,7 +717,7 @@ public class MainActivity extends AppCompatActivity implements SettingsForm.Host
         // same path: only touch the TextView when the text really changed, or every status refresh
         // would queue a layout pass for the status chip
         Ui.setTextIfChanged(statusChip, titleText);
-        // Tappable whenever there is anything to list — which now includes "nothing is connected and
+        // Tappable whenever there is anything to list, which now includes "nothing is connected and
         // here is why", the case the sheet is most worth opening for.
         statusChip.setClickable(!s.peers.isEmpty() || !s.indirectPeers.isEmpty() || !s.targets.isEmpty());
         // The same snapshot the chip was just built from, rather than a second read: two reads a
@@ -781,14 +778,14 @@ public class MainActivity extends AppCompatActivity implements SettingsForm.Host
             }
             Logger.i("config applied: " + (c.peers.isEmpty() ? "no addresses" : String.join(", ", c.peers) + ":" + c.port)
                     + (c.discovery ? " + discovery (browse " + c.mdnsTimeoutMs + " ms)" : "")
-                    + ", " + c.threads + " streams, files -> " + c.filesDir);
+                    + ", " + c.threads + " streams, files in " + c.filesDir);
             snack(R.string.snack_applied);
         } catch (IllegalArgumentException e) {
             // should not happen (live validation), but map it back to a field anyway
             form.showSaveProblem(e);
         } catch (Exception e) {
             // The user gets a sentence; the log gets the exception. A stack-trace class name in a
-            // Snackbar — "java.io.IOException: /storage/…: EACCES (Permission denied)" — is not
+            // Snackbar, such as "java.io.IOException: /storage/...: EACCES (Permission denied)", is not
             // something anyone can act on, and it was also the only record of what went wrong.
             Logger.w("config save failed", e);
             String msg = e.getMessage() == null || e.getMessage().isBlank()

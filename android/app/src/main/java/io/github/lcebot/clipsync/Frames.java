@@ -12,14 +12,13 @@ import java.nio.charset.StandardCharsets;
  * <b>control</b> loop ({@code SyncService.handleFrame}) runs a peer session and understands every
  * frame type; the <b>inbound data</b> loop ({@code FileExchange.serveData}) is one stream of one
  * transfer that a peer opened, so it must also answer PULL; and the <b>outbound pull</b> loop
- * ({@code Transfer.pull}) is one stream this end opened and only ever receives. What they had in
- * common was written out three times and had drifted three ways — the chunk index was decoded with a
- * length check in one place and without it in another, and END/ABORT/PING each meant something
- * slightly different depending on which copy you read.
+ * ({@code Transfer.pull}) is one stream this end opened and only ever receives. Two of the three
+ * share enough (decoding the chunk index, and what END/ABORT/PING mean) that keeping that logic
+ * in one place is what keeps the two loops answering frames the same way.
  *
  * <p>So: the two <em>data</em> loops share {@link #dataLoop}, which owns the frame switch, and say
- * what they do about each frame through {@link Data}. Where their answers genuinely differ — only
- * the server loop can be asked to PULL; only the pulling loop cares why a transfer was aborted —
+ * what they do about each frame through {@link Data}. Where their answers genuinely differ (only
+ * the server loop can be asked to PULL; only the pulling loop cares why a transfer was aborted),
  * the difference is now a method one of them overrides and the other does not, which is a statement
  * rather than an omission. The control loop keeps its own switch, because it shares no frame type
  * with either of them; what it borrows from here is {@link #json} and {@link #pong}.
@@ -42,8 +41,8 @@ final class Frames {
     }
 
     /**
-     * Twelve characters of a hash, or as many as there are. Every log line wants this and one of
-     * them used to do it without the bound, which a peer could turn into a crash by sending "".
+     * Twelve characters of a hash, or as many as there are. Bounded rather than a plain substring,
+     * so a peer sending an empty or short hash cannot turn a log line into a crash.
      */
     static String shortSha(String sha) {
         return sha == null ? "?" : sha.substring(0, Math.min(12, sha.length()));
@@ -52,10 +51,10 @@ final class Frames {
     /**
      * The chunk index at the head of a CHUNK frame: {@code u32 index ‖ bytes}, big-endian.
      *
-     * <p>The length check is the reason this is a method. The inbound loop had it and the outbound
-     * pull loop did not, so a peer that sent a CHUNK frame shorter than its own header crashed one
-     * of the two with an ArrayIndexOutOfBoundsException where the other reported a protocol error.
-     * Both end the stream; only one of them says what happened.
+     * <p>The length check is the reason this is a method rather than inline code at each call site:
+     * a peer that sends a CHUNK frame shorter than its own header must get a clear protocol error
+     * from every loop that reads one, not an ArrayIndexOutOfBoundsException from whichever loop
+     * forgot to check.
      */
     static int chunkIndex(Connection.Frame f) throws IOException {
         if (f.payload.length < 4) throw new IOException("truncated chunk");
@@ -69,7 +68,7 @@ final class Frames {
      * <p>Three timestamps and not an empty frame, because the reply is also the peer's clock
      * measurement: it computes {@code offset = ((t2 - t1) + (t3 - t4)) / 2} from them and uses it to
      * normalise the version stamp on an incoming clip into its own clock domain. A data connection
-     * answers a bare PONG instead — it carries no clip and compares no versions, so the stamps would
+     * answers a bare PONG instead, because it carries no clip and compares no versions, so the stamps would
      * be measured and thrown away.
      */
     static void pong(Connection c, JSONObject ping) throws Exception {
@@ -85,7 +84,7 @@ final class Frames {
      * What one data connection does with the frames that arrive on it.
      *
      * <p>Every method but {@link #chunk} has a default, and each default is a deliberate answer
-     * rather than a gap — see the overrides at the two call sites for why each loop answers as it
+     * rather than a gap; see the overrides at the two call sites for why each loop answers as it
      * does.
      */
     interface Data {
@@ -120,8 +119,8 @@ final class Frames {
     /**
      * Read one data connection until the transfer on it ends.
      *
-     * <p>Returns on END, on ABORT, or when {@link Data#stopped()} says so; anything else — a closed
-     * socket, a frame that will not decrypt, a handler that threw — comes out as an exception, which
+     * <p>Returns on END, on ABORT, or when {@link Data#stopped()} says so; anything else, such as a closed
+     * socket, a frame that will not decrypt, or a handler that threw, comes out as an exception, which
      * is what both callers want: the stream is one of several carrying one file, and the file's fate
      * is decided by whoever counts the streams out, not here.
      *

@@ -17,15 +17,14 @@ import com.google.android.material.transition.MaterialSharedAxis;
 /**
  * Setting ClipSync up: what it is, and the three ways in.
  *
- * <p>A screen and not a dialog, which was the first version of this. Two reasons, and the visible
- * one came first: a dialog's own padding is not symmetric, so its text sat at different distances
- * from the two edges and nothing in the layout said what the distance ought to be. The deeper one is
- * that this is not a question interrupting something — on a device with no key it is the only thing
- * there is to do, and a surface that can be dismissed by tapping beside it is the wrong shape for
- * that.
+ * <p>A screen and not a dialog. Two reasons, and the visible one first: a dialog's own padding is
+ * not symmetric, so its text sits at different distances from the two edges with nothing in the
+ * layout to say what the distance ought to be. The deeper one is that this is not a question
+ * interrupting something: on a device with no key it is the only thing there is to do, and a
+ * surface that can be dismissed by tapping beside it is the wrong shape for that.
  *
  * <p>The pairing sheets open <b>over</b> this screen rather than being handed back to the settings
- * page. A sheet is a sheet — it belongs on top of whatever asked for it — and finishing the setup
+ * page. A sheet is a sheet, and it belongs on top of whatever asked for it, and finishing the setup
  * flow in order to perform the one thing the setup flow exists for put the user back on a page they
  * had not chosen to be on. {@link PairSheet.Host} is what lets one sheet serve both callers; only
  * *Set up manually* still leaves, because leaving is what it means.
@@ -49,7 +48,7 @@ public final class WelcomeActivity extends AppCompatActivity {
      * <p>Held for {@link #onDestroy()} alone. A BottomSheetDialog is not in this Activity's view
      * tree and survives it; the sheet opened by *Generate* holds a {@link PairProvider}, which holds
      * an mDNS advertisement and an accept loop that gives the PSK away. A rotation on this screen
-     * left exactly that running with nothing on screen — no code visible, and the key still on
+     * left exactly that running with nothing on screen: no code visible, and the key still on
      * offer to the network.
      */
     private PairSheet sheet;
@@ -58,7 +57,7 @@ public final class WelcomeActivity extends AppCompatActivity {
     private boolean setUp;
 
     /**
-     * Nothing to reload — unlike the settings page there are no fields here showing the old key —
+     * Nothing to reload; unlike the settings page there are no fields here showing the old key,
      * so this only has to notice whether the screen still has a reason to exist.
      *
      * <p>Keyed on the key being written rather than on a device having paired, because generating
@@ -115,7 +114,7 @@ public final class WelcomeActivity extends AppCompatActivity {
      * change stops being an arrival and becomes a stutter.
      *
      * <p>The hero scales from 80% and the two text blocks rise a little behind it, each one later
-     * than the last. Staggering is the whole effect — three things moving together read as one
+     * than the last. Staggering is the whole effect: three things moving together read as one
      * sliding panel, and three things moving in sequence read as a screen assembling itself, which
      * is what M3 Expressive means by an entrance.
      */
@@ -123,25 +122,25 @@ public final class WelcomeActivity extends AppCompatActivity {
         View hero = findViewById(R.id.intro_hero);
         // From the theme, not from the platform. android.R.interpolator.fast_out_slow_in is
         // Material 2's curve and is symmetric-ish; M3 Expressive's entrances use *emphasized
-        // decelerate*, which arrives fast and settles slowly — the difference is exactly the
+        // decelerate*, which arrives fast and settles slowly, and the difference is exactly the
         // "assembling itself" quality this staggered entrance is for. Reading it from the theme
         // rather than naming a curve also means a theme that retunes its motion retunes this too.
         //
         // Both calls are checked against Material 1.14.0's own source rather than guessed at:
-        //   MotionUtils.resolveThemeInterpolator(Context, @AttrRes int, TimeInterpolator) -> TimeInterpolator
-        //   MotionUtils.resolveThemeDuration(Context, @AttrRes int, int) -> int
+        //   MotionUtils.resolveThemeInterpolator(Context, @AttrRes int, TimeInterpolator) returns TimeInterpolator
+        //   MotionUtils.resolveThemeDuration(Context, @AttrRes int, int) returns int
         // (lib/java/com/google/android/material/motion/MotionUtils.java @ 1.14.0). The third
         // argument of each is the fallback used when the theme does not name the attribute, which
         // is why neither call can fail on a theme that has not been given these tokens.
         //
-        // TimeInterpolator — android.animation, not view.animation.Interpolator — is what the
+        // TimeInterpolator, from android.animation and not view.animation.Interpolator, is what the
         // signature actually returns, and it has to be: the *Interpolator attributes point at an
         // @interpolator RESOURCE, and for the legacy string forms MotionUtils builds a
         // PathInterpolator itself. Both attribute names exist in 1.14
         // (motion/res/values/attrs.xml declares motionEasingEmphasizedDecelerateInterpolator and
         // motionDurationLong2), so neither of these is a hopeful guess at a token name.
         //
-        // The duration is widened int -> long on the way into `enter`; that is deliberate, since
+        // The duration is widened from int to long on the way into `enter`; that is deliberate, since
         // everything it is handed to (setStartDelay, setDuration) takes a long.
         TimeInterpolator spatial = MotionUtils.resolveThemeInterpolator(this,
                 com.google.android.material.R.attr.motionEasingEmphasizedDecelerateInterpolator,
@@ -165,9 +164,9 @@ public final class WelcomeActivity extends AppCompatActivity {
 
     private void rise(View v, long delay, long duration, TimeInterpolator spatial) {
         v.setAlpha(0f);
-        // RISE_DP is a dp figure and setTranslationY takes pixels, so it has to be converted. It
-        // was not, which made the rise 32 physical pixels — about 10dp on a 3x phone, a third of
-        // what the constant below says and small enough to read as a wobble rather than an arrival.
+        // RISE_DP is a dp figure and setTranslationY takes pixels, so it must be converted here;
+        // left as-is it becomes physical pixels, small enough on a high-density phone to read as a
+        // wobble rather than an arrival.
         v.setTranslationY(RISE_DP * v.getResources().getDisplayMetrics().density);
         v.animate().alpha(1f).translationY(0f)
                 .setStartDelay(delay).setDuration(duration).setInterpolator(spatial).start();
@@ -176,7 +175,7 @@ public final class WelcomeActivity extends AppCompatActivity {
     /**
      * Between the two pages, on M3's own lateral transition.
      *
-     * <p>{@link MaterialSharedAxis} on X is the transition for peer destinations — the pages slide
+     * <p>{@link MaterialSharedAxis} on X is the transition for peer destinations: the pages slide
      * and cross-fade in the direction of travel, so going back looks like going back rather than
      * like a second forward step. Left on its themed durations for the reason recorded on
      * {@code Ui.visibilityMotion}: setting a duration on the set overwrites the spec.
@@ -187,7 +186,7 @@ public final class WelcomeActivity extends AppCompatActivity {
         intro.setVisibility(forward ? View.GONE : View.VISIBLE);
         choose.setVisibility(forward ? View.VISIBLE : View.GONE);
         // The page turning is a small, physical event, so it gets the tick the rest of the app gives
-        // a control that moved. Not the click feedback — the button already played that.
+        // a control that moved. Not the click feedback; the button already played that.
         Haptics.tick(forward ? choose : intro);
     }
 
@@ -196,7 +195,7 @@ public final class WelcomeActivity extends AppCompatActivity {
         super.onDestroy();
         PairSheet s = sheet;
         sheet = null;
-        // Dismissing runs the sheet's own shutdown — the same path Back takes — which is what closes
+        // Dismissing runs the sheet's own shutdown, the same path Back takes, which is what closes
         // the pairing window rather than leaving it advertising without a surface.
         if (s != null) s.dismiss();
     }
@@ -207,7 +206,7 @@ public final class WelcomeActivity extends AppCompatActivity {
     }
 
     /**
-     * How far the three text blocks travel. The one number still written here — a distance, not a
+     * How far the three text blocks travel. The one number still written here: a distance, not a
      * duration, and M3 has no token for it: the spec says "a short distance", and 32dp is the one
      * that reads as a rise rather than a slide at every screen size this app sees.
      */

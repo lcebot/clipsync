@@ -1,12 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- The page's spacing vocabulary.
 
-     These were prose. The settings page carried a long comment stating the rule for each gap — 8dp
-     between sub-groups, 4dp from a switch to the card it governs, 6dp under a section title — and
-     then spelled the numbers out at forty call sites, where nothing connected a given "8dp" to the
-     rule it was an instance of. A rule written in a comment is a rule the next person has to find,
-     read and choose to obey; a rule written as a named dimension is one the compiler resolves and
-     one that can be changed in a single place.
+     Named dimensions rather than numbers spelled out at each call site, so the rule behind a gap,
+     such as 8dp between sub-groups, 4dp from a switch to the card it governs, 6dp under a section title, is
+     resolved by the compiler and can be changed in one place instead of at every occurrence.
 
      Named for the RULE, not for the value, which is the whole point: two gaps that happen to be 8dp
      today for different reasons get different names here, so that changing one never silently moves
@@ -17,8 +14,8 @@
          pair, the direct pair. The one to copy when a sub-group is added. -->
     <dimen name="spacing_group">8dp</dimen>
     <!-- Between two controls inside one card: field to field, field to checkbox, column to column.
-         The same number as a group gap today and for a different reason — a card's contents are
-         spaced like each other, a page's groups are spaced like each other — so it has its own name
+         The same number as a group gap today and for a different reason: a card's contents are
+         spaced like each other, a page's groups are spaced like each other, so it has its own name
          and either can move without dragging the other. -->
     <dimen name="spacing_field">8dp</dimen>
     <!-- A seam: a switch and the card it governs, or one settings button and the next. Tighter than
@@ -30,7 +27,7 @@
     <dimen name="spacing_heading">6dp</dimen>
     <!-- Above a section title: the gap that separates one whole section from the last. -->
     <dimen name="spacing_section">12dp</dimen>
-    <!-- Between a label and the control it names — a slider and its readout line. -->
+    <!-- Between a label and the control it names, such as a slider and its readout line. -->
     <dimen name="spacing_label">12dp</dimen>
 
     <!-- The inset of every settings card's body. Applied as padding on the card body, and as a
@@ -59,8 +56,7 @@
     <dimen name="fab_margin">16dp</dimen>
 
     <!-- The welcome screen's one horizontal measurement.
-         Named and shared rather than repeated per view, because the fault it replaces was exactly
-         that: the dialog it grew out of had text at different distances from its two edges, and no
-         single place said what the distance was supposed to be. -->
+         Named and shared rather than repeated per view, so every child of both pages lines up on the
+         same edge and no single view can drift to a different margin. -->
     <dimen name="welcome_gutter">24dp</dimen>
 </resources>

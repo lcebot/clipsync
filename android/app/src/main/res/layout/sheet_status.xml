@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Peers, shown when the status chip is tapped.
      A bottom sheet rather than a dialog for two reasons: M3 reserves dialogs for decisions that
-     need an answer, while this is supplementary content you glance at and dismiss — and
+     need an answer, while this is supplementary content you glance at and dismiss, and
      BottomSheetDialog is one of the few components with predictive back built in, so the gesture
      animates the sheet back down without a line of animation code.
 
@@ -30,7 +30,7 @@
 
     <!-- Under the title, not at the foot of the sheet. A bottom sheet arrives from the bottom edge,
          so its last line is the one the animation sweeps past and the one a partially expanded sheet
-         is most likely to cut off — the worst place to put the instruction for using everything
+         is most likely to cut off, the worst place to put the instruction for using everything
          above it. Here it reads as a subtitle to "Peers", which is what it is. -->
     <TextView
         android:layout_width="match_parent"

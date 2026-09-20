@@ -41,8 +41,8 @@ final class LogPane {
     private final Logger.Listener listener = line -> ui.post(this::showLog);
     /**
      * Reads the log file. One thread, off the main one, because {@link Logger#refresh()} stats and
-     * reads a file that another process is appending to — small, but it is disk, and it was being
-     * done on the main thread once a second whichever page was in front.
+     * reads a file that another process is appending to, which is small, but it is disk, and this is only
+     * worth polling while the Log page is actually in front.
      */
     private final java.util.concurrent.ExecutorService io =
             java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
@@ -54,9 +54,9 @@ final class LogPane {
      * How often the log file is checked for lines written by the :sync process.
      *
      * <p>The log is a tail: it grows by appending, there is no "the whole thing changed" event to
-     * wait for, and a second's latency on a line of text is not felt. So it is polled — but only
-     * while the Log page is actually visible, which is what {@link #setPolling} is for. Sitting
-     * on Settings, the old unconditional 1 Hz poll read a file nobody was looking at.
+     * wait for, and a second's latency on a line of text is not felt. So it is polled, but only
+     * while the Log page is actually visible, which is what {@link #setPolling} is for: a poll
+     * running while Settings is in front would read a file nobody is looking at.
      */
     private static final long POLL_MS = 1_000;
     private final Runnable tick = new Runnable() {
@@ -77,28 +77,28 @@ final class LogPane {
 
         // The log keeps the app bar collapsed by never driving it: with nested scrolling off it
         // still scrolls its own content, but it cannot push the bar back open. That is all the
-        // "always collapsed" rule needs — no scroll flags to swap, no height to juggle.
+        // "always collapsed" rule needs: no scroll flags to swap, no height to juggle.
         page.setNestedScrollingEnabled(false);
 
         // Scrolling to the end has to wait until the new text has actually been laid out, which is
         // what the layout listener is for. scrollTo and not fullScroll: fullScroll moves focus into
         // the (selectable) TextView, and the scroll container then scrolls that view's *top* into
-        // view — the original bug.
+        // view rather than the bottom.
         //
-        // The scroll target is computed here rather than delegated, because this took three tries and
-        // each failure was a different way of trusting someone else's arithmetic:
+        // The scroll target is computed here rather than delegated to a shortcut, because the two
+        // obvious ones do not do what they look like they do:
         //
-        //   log.getBottom(), unposted — the callback runs DURING layout, so the range was computed
-        //       from dimensions that were not final and the scroll landed short;
-        //   Integer.MAX_VALUE — meant as "clamp me to the end". It does not: NestedScrollView's
+        //   log.getBottom(), unposted: the callback runs DURING layout, so the range is computed
+        //       from dimensions that are not final yet and the scroll lands short;
+        //   Integer.MAX_VALUE, meant as "clamp me to the end": it does not: NestedScrollView's
         //       clamp tests (viewport + n) > childHeight, and with n = MAX_VALUE that addition
-        //       OVERFLOWS to a negative number, the test is false, and the value is returned
-        //       unclamped. Every line ends up scrolled off the top — the blank screen.
+        //       overflows to a negative number, so the test is false and the value is returned
+        //       unclamped, scrolling every line off the top.
         //
         // So: wait for layout (post), work out the maximum with the same formula the clamp uses but
         // without the overflow, and refuse to act at all until there is a viewport to act on. A page
         // switched from GONE has height 0 while its bottom padding does not, which makes that
-        // formula negative — the other way to end up scrolled past the end.
+        // formula negative, which is the other way to end up scrolled past the end.
         log.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
             if (!toBottom) return;
             page.post(() -> {
@@ -106,9 +106,9 @@ final class LogPane {
                 int viewport = page.getHeight() - page.getPaddingTop() - page.getPaddingBottom();
                 if (viewport <= 0) return;                  // not laid out yet: keep the flag, try again
                 page.scrollTo(0, Math.max(0, log.getHeight() - viewport));
-                // Cleared only once it actually reached the end. The flag is re-armed by showLog()
-                // solely when the view is already at the bottom, so clearing it after a scroll that
-                // fell short used to be permanent — every later line pushed the end further away.
+                // Cleared only once it actually reached the end: showLog() only re-arms the flag when
+                // the view is already at the bottom, so clearing it after a scroll that fell short
+                // would leave the tail permanently unreachable as later lines push the end further away.
                 if (!page.canScrollVertically(1)) toBottom = false;
             });
         });
@@ -116,9 +116,9 @@ final class LogPane {
 
     /**
      * Start or stop the log poll. Both conditions have to hold: the page in front has to be the Log,
-     * and the Activity has to be resumed — the caller knows both and hands in the conjunction.
+     * and the Activity has to be resumed; the caller knows both and hands in the conjunction.
      *
-     * <p>Idempotent by construction — the callback is removed first either way — so every caller can
+     * <p>Idempotent by construction: the callback is removed first either way, so every caller can
      * simply restate what it knows rather than tracking whether the poll is already running.
      */
     void setPolling(boolean on) {
@@ -178,7 +178,7 @@ final class LogPane {
      * position and the already-laid-out text alone. Only a rebuild (the buffer was cleared, or has
      * dropped enough old entries to be worth trimming) replaces the text.
      *
-     * <p>While anything is selected the log is left frozen — nothing reflows under the reader's
+     * <p>While anything is selected the log is left frozen: nothing reflows under the reader's
      * fingers, and nothing is lost either, because the cursor is only advanced by a read that
      * actually happened; the next tick catches up.
      *

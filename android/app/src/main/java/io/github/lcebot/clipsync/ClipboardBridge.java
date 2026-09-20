@@ -16,16 +16,16 @@ import java.nio.charset.StandardCharsets;
  * subject:
  *
  * <ul>
- *   <li><b>the system clipboard</b> — reading a {@link ClipData} down to one text or one file, and
+ *   <li><b>the system clipboard</b>: reading a {@link ClipData} down to one text or one file, and
  *       writing an accepted remote clip back;
- *   <li><b>echo suppression</b> — {@code sentHashes}, {@code lastRemoteHash}, {@code lastRemoteUri}:
+ *   <li><b>echo suppression</b>: {@code sentHashes}, {@code lastRemoteHash}, {@code lastRemoteUri},
  *       the three answers to "did this come from us, or did we just put it there?";
- *   <li><b>identity of content</b> — {@link #normalise} and the sha taken over it, which is the one
+ *   <li><b>identity of content</b>: {@link #normalise} and the sha taken over it, which is the one
  *       rule both ends of the wire must compute the same way;
- *   <li><b>versioning</b> — {@code (ts, from)} compared lexicographically, normalised into the local
+ *   <li><b>versioning</b>: {@code (ts, from)} compared lexicographically, normalised into the local
  *       clock domain by each link's measured offset, plus the bounded seen-set that makes a clip
  *       arriving twice by two routes harmless;
- *   <li><b>the pending slot</b> — what this device is still trying to hand to its peers, which is
+ *   <li><b>the pending slot</b>: what this device is still trying to hand to its peers, which is
  *       also what decides whether the radio may sleep.
  * </ul>
  *
@@ -38,7 +38,7 @@ import java.nio.charset.StandardCharsets;
  * holds and every dialler waits on, passed in at construction. That is not an accident of the split
  * and must not be "tidied" into a private lock. The gate a dialler sleeps on asks
  * {@code (!screenOn && !worthWaking()) || !hasNetwork}, and {@link #worthWaking()} reads the pending
- * slot — so the state in here and the condition out there are one invariant, and waking the sleeper
+ * slot, so the state in here and the condition out there are one invariant, and waking the sleeper
  * requires notifying the monitor that guards what it is waiting for. Two monitors would be two
  * chances to publish a new clip to a thread that is asleep on the other one.
  *
@@ -55,7 +55,7 @@ final class ClipboardBridge {
         /** Every live link, for forwarding a clip on and for reporting an undelivered one. */
         Iterable<Link> links();
 
-        /** Direct ∪ indirect peer ids — the {@code to} set a CLIP frame carries. */
+        /** Direct ∪ indirect peer ids: the {@code to} set a CLIP frame carries. */
         java.util.Set<String> knownPeerIds();
 
         /** Put one clip on one link: text as a CLIP frame, a file as an OFFER. */
@@ -97,11 +97,10 @@ final class ClipboardBridge {
     /**
      * Content this device has sent recently, so a peer echoing it back is recognised and ignored.
      *
-     * <p><b>A set, not a slot.</b> One field was enough while there was one peer: send A, A comes
-     * back, drop it. With three nodes it is not — send A to peer 1, then relay B, and the slot now
-     * holds B, so peer 1's echo of A is no longer recognised and is written back to the clipboard.
-     * Making the field volatile fixed the visibility half of that and left the structural half; this
-     * is the structural half.
+     * <p><b>A set, not a slot.</b> A single field is not enough with more than one peer: send A to
+     * peer 1, then relay B, and a single slot would now hold only B, so peer 1's echo of A would no
+     * longer be recognised and would be written back to the clipboard. A set keeps every recently
+     * sent hash recognisable regardless of how many peers or clips are in flight.
      *
      * <p>Bounded at sixteen and ordered by insertion, so it forgets the oldest rather than growing.
      * Sixteen is far more than the number of clips that can be in flight and small enough that a
@@ -160,16 +159,15 @@ final class ClipboardBridge {
     /**
      * The current clip itself, so that a peer found to be behind can be given it.
      *
-     * <p>Exactly one of the two is non-null. The device kept only the <em>hash</em> of its clipboard,
-     * which is enough to notice that a peer is behind and not enough to do anything about it — so
-     * catch-up had to be driven from {@link #pendingLocal}, a slot that is deliberately released as
-     * soon as every live link has taken the clip. Two phones that both had the clip, then lost the
-     * link, then reconnected, therefore had no way to bring a third one up to date.
+     * <p>Exactly one of the two is non-null. Keeping the actual content here, not just its hash, is
+     * what lets {@link #catchUp} hand a behind peer the clip directly instead of routing through
+     * {@link #pendingLocal}, a slot that is deliberately released as soon as every live link has
+     * taken the clip, and so cannot be relied on once a peer reconnects later.
      *
      * <p>Separate fields rather than one Object because the two are used differently: text is sent
      * as a CLIP and compared by version, a file is OFFERed and compared by hash alone. A received
-     * file does get a version — {@link #adoptFile} borrows the originator's {@code seq} for
-     * {@link #clipTs}, so the file takes its place in the text ordering — but no file is ever
+     * file does get a version, because {@link #adoptFile} borrows the originator's {@code seq} for
+     * {@link #clipTs}, so the file takes its place in the text ordering, but no file is ever
      * compared against another file by it: {@link #catchUp} only runs {@code compareVersion} for
      * text, and asks about a file by offering it.
      */
@@ -185,7 +183,7 @@ final class ClipboardBridge {
      *
      * <p>Identical clips arriving by two routes are dropped here whatever path they took, which is
      * what makes forwarding safe in a network that is not a tree. <b>Files use it too</b>, keyed by
-     * the OFFER's {@code seq} in place of a clip's {@code ts} — they went entirely without it, so a
+     * the OFFER's {@code seq} in place of a clip's {@code ts}, because they went entirely without it, so a
      * device reconnecting and re-offering an old file could put it back on everyone's clipboard,
      * over whatever the user had copied since.
      *
@@ -214,10 +212,10 @@ final class ClipboardBridge {
     /**
      * The newest local clip, or null.
      *
-     * <p><b>Not consumed.</b> It used to be taken by whoever flushed it first, which is correct for
-     * one peer and silently wrong for several — the first connection to send it took it away from
-     * the rest. Each link now records what it has delivered ({@code Link.sentHash}), so this stays
-     * put until a newer clip replaces it, and a peer that connects a minute later still gets it.
+     * <p><b>Not consumed.</b> Taking the clip on the first flush would be wrong with more than one
+     * peer, since the first connection to send it would take it away from the rest. Instead each link
+     * records what it has delivered ({@code Link.sentHash}), so this stays put until a newer clip
+     * replaces it, and a peer that connects a minute later still gets it.
      */
     private volatile Object pendingLocal;
     /**
@@ -225,11 +223,12 @@ final class ClipboardBridge {
      *
      * <p>First, not last, and that distinction is what makes {@link #PENDING_WAKE_MS} a bound at all.
      * A file is released from the slot as soon as every link has been <em>offered</em> it, and put
-     * back by {@link #requeue} when the transfer that followed died with the file unanswered — so a
-     * file too large for the link it is crossing cycles through the slot indefinitely. Stamping the
-     * re-entry with the current time restarted the five-minute window on every cycle, which meant a
-     * clip that could never be delivered kept the radio awake for as long as it stayed on the
-     * clipboard. {@link #pendingHash} is how a re-entry is told from a new clip.
+     * back by {@link #requeue} when the transfer that followed died with the file unanswered, so a
+     * file too large for the link it is crossing cycles through the slot indefinitely. Stamping each
+     * re-entry with the current time would restart the five-minute window on every cycle, letting a
+     * clip that can never be delivered keep the radio awake indefinitely; keeping the first-entry
+     * timestamp instead makes the window a real bound. {@link #pendingHash} is how a re-entry is told
+     * from a new clip.
      */
     private volatile long pendingSince;
     /** The content in the slot, so {@link #requeue} can tell "still this one" from "a new one". */
@@ -239,7 +238,7 @@ final class ClipboardBridge {
      *
      * <p>Kept past the release of the slot, and past the clip itself: the question "have I said this"
      * is about the content, and the alternative is a warning once per heartbeat for as long as the
-     * situation lasts — which is precisely the noise that made the last one useless.
+     * situation lasts, which is precisely the noise that made the last one useless.
      */
     private volatile String staleReported;
     /**
@@ -247,22 +246,22 @@ final class ClipboardBridge {
      *
      * <p>Without a bound this is a permanent cost, not a transient one: the slot is released only
      * when a live link has taken the clip, so with no peer reachable at all it never clears, the
-     * screen-off gate never closes, and every dialer goes on dialling — once a minute each once the
-     * back-off ladder tops out, for as long as the phone is locked. That is not the old tight loop,
-     * but it is a peer that is switched off draining the phone all night.
+     * screen-off gate never closes, and every dialer goes on dialling, once a minute each once the
+     * back-off ladder tops out, for as long as the phone is locked. A peer that is simply switched off
+     * would otherwise drain the phone all night.
      *
      * <p>The clip is <b>not</b> discarded when this expires. It stops being a reason to wake the
-     * radio, and is still delivered the moment a link comes up for any other reason — which is the
+     * radio, and is still delivered the moment a link comes up for any other reason, which is the
      * honest split: undelivered is not the same as unwanted.
      *
      * <p>It is also the moment the device has learned something worth saying, so it is where
-     * {@link #reportStalePending()} speaks. And it was reachable only in the simple case until
-     * {@link #pendingSince} started measuring from the clip's <em>first</em> entry into the slot: a
-     * file that re-enters on every failed transfer used to reset the window and so never expire.
+     * {@link #reportStalePending()} speaks. Measuring {@link #pendingSince} from the clip's
+     * <em>first</em> entry into the slot, rather than each re-entry, is what makes this reachable even
+     * for a file that re-enters the slot on every failed transfer.
      */
     private static final long PENDING_WAKE_MS = 5 * 60_000;
 
-    /** The newest local clip, or null. Not consumed — every link delivers it once. */
+    /** The newest local clip, or null. Not consumed: every link delivers it once. */
     Object pendingClip() {
         return pendingLocal;
     }
@@ -280,7 +279,7 @@ final class ClipboardBridge {
         staleReported = null;
     }
 
-    // ------------------------------------------------------------------ local clipboard -> peers
+    // ------------------------------------------------------------------ local clipboard to peers
     private long lastClipStamp = -1;
 
     void readLocalClip() {
@@ -317,7 +316,7 @@ final class ClipboardBridge {
             // A clip can carry several items and each item text and/or a URI. Prefer the first
             // item that is a readable file (image copied from gallery/browser, file from a file
             // manager); otherwise the first non-empty text. A URI we cannot read is not sent as
-            // its "content://..." string — that is useless on the PC.
+            // its "content://..." string, because that is useless on the PC.
             Object out = null;
             for (int i = 0; i < cd.getItemCount() && out == null; i++) {
                 Uri uri = cd.getItemAt(i).getUri();
@@ -354,9 +353,9 @@ final class ClipboardBridge {
                 // re-entry in requeue() preserves the original stamp.
                 pendingHash = h;
                 pendingSince = System.currentTimeMillis();
-                // Version stamp, for both kinds. Files used to be left out, which meant a file on
-                // the clipboard was invisible to everything that reasons about "what do I hold" —
-                // HELLO advertised the hash of some older text, and catch-up could not offer it.
+                // Version stamp, for both kinds, because a file needs one just as much as text does, so
+                // that HELLO and catch-up can reason about "what do I hold" for a file on the
+                // clipboard the same way they do for text.
                 clipTs = System.currentTimeMillis();
                 clipFrom = Node.id();
                 clipSha = h;
@@ -383,14 +382,15 @@ final class ClipboardBridge {
      *
      * <p>The hash of a clip is a value on the wire: the sender puts it in the frame, the receiver
      * recomputes it and drops anything that disagrees, and both ends advertise it in HELLO to decide
-     * who is behind. Windows puts CRLF on the clipboard and Android does not, so the same text
-     * hashed as typed produces two different answers — which made every clip from a PC look corrupt
-     * to a peer computing it the other way, and made the catch-up check "do we already agree" answer
-     * no forever, re-sending the same paragraph on every single reconnect.
+     * who is behind. Windows puts CRLF on the clipboard and Android does not, so without normalising
+     * first, the same text hashed as typed would produce two different answers on the two platforms,
+     * so every clip from a PC would look corrupt to a peer computing it the other way, and the catch-up
+     * check "do we already agree" would never answer yes, re-sending the same paragraph on every
+     * single reconnect.
      *
      * <p>Normalising is the one rule that has to be identical at both ends, so it lives in one method
      * and every hash goes through it: the send, the check on receipt, and {@link #clipSha}. The text
-     * itself is sent unchanged — this decides what is <em>hashed</em>, not what is pasted.
+     * itself is sent unchanged; this decides what is <em>hashed</em>, not what is pasted.
      */
     static String normalise(String text) {
         return text == null ? null : text.replace("\r\n", "\n");
@@ -418,10 +418,10 @@ final class ClipboardBridge {
         j.put("sha256", h);
         j.put("data", text);
         link.connection().send(Connection.T_CLIP, j.toString().getBytes(StandardCharsets.UTF_8));
-        Logger.i("local -> remote (" + text.length() + " chars)");
+        Logger.i("sent local clip to remote (" + text.length() + " chars)");
     }
 
-    // ------------------------------------------------------------------ peers -> local clipboard
+    // ------------------------------------------------------------------ peers to local clipboard
 
     /**
      * Compare two clip versions lexicographically by (ts, from).
@@ -445,9 +445,9 @@ final class ClipboardBridge {
         if (!h.equals(msg.optString("sha256"))) {
             // Worth a line rather than a silent drop: the two ends hash the *normalised* text, so a
             // mismatch means either a peer on an older build (different hashing rule) or something
-            // rewriting the payload. Both look identical from the outside — "text just does not
-            // arrive from that one device" — and that is exactly the kind of silence this codebase
-            // keeps getting bitten by. Windows logs the same event.
+            // rewriting the payload. Both would otherwise look identical from the outside, as "text
+            // just does not arrive from that one device," with nothing in the log to explain why.
+            // Windows logs the same event.
             Logger.w("clip from " + l.peerId() + ": hash mismatch, dropping");
             return;
         }
@@ -462,9 +462,9 @@ final class ClipboardBridge {
         long normTs = remoteTs - l.clockOffset;
 
         // Drop it if we have already processed this exact (ts, from, sha) triple, whichever route it
-        // came by. The sha belongs in the key and was missing from it: two different clips made in
-        // the same millisecond by the same device have the same (ts, from), so the second was thrown
-        // away — and the comment above this set has claimed a triple since the day it was written.
+        // came by. The sha belongs in the key: two different clips made in the same millisecond by
+        // the same device would otherwise share the same (ts, from) and the second would be dropped
+        // as a false duplicate.
         if (seen(remoteTs, remoteFrom, h)) return;
 
         synchronized (lock) {
@@ -482,11 +482,11 @@ final class ClipboardBridge {
             clipFile = null;
         }
         clipboard.setPrimaryClip(ClipData.newPlainText("clipsync", text));
-        Logger.i("remote -> local (" + text.length() + " chars"
+        Logger.i("applied remote clip locally (" + text.length() + " chars"
                 + (forwarded ? ", forwarded" : "") + ")");
 
         // Forwarding: pass it on to peers the sender could not reach, exactly one hop. The copy
-        // goes out marked forwarded, and a copy that arrives marked forwarded is not passed on —
+        // goes out marked forwarded, and a copy that arrives marked forwarded is not passed on;
         // that is the whole of the loop protection, and it is why the chain is one hop and not two.
         if (!forwarded) {
             org.json.JSONArray toArr = msg.optJSONArray("to");
@@ -529,7 +529,7 @@ final class ClipboardBridge {
      * clipboard.
      *
      * @return false when the file turned out to be our own echo or already the current clip, in
-     *         which case nothing was written and the caller should stop — the bytes are on disk and
+     *         which case nothing was written and the caller should stop, because the bytes are on disk and
      *         that is all that was wanted.
      */
     boolean adoptFile(Link from, Files.Partial p, Uri uri, Files.Ref ref) {
@@ -550,7 +550,7 @@ final class ClipboardBridge {
             clipFile = ref;
         }
         clipboard.setPrimaryClip(ClipData.newUri(ctx.getContentResolver(), p.name, uri));
-        Logger.i("remote -> local (" + p.mime + " " + p.name + " " + p.size + " bytes) saved as " + uri);
+        Logger.i("saved remote file locally (" + p.mime + " " + p.name + " " + p.size + " bytes) as " + uri);
         return true;
     }
 
@@ -577,12 +577,13 @@ final class ClipboardBridge {
     /**
      * Let go of the pending clip once every live link has it.
      *
-     * <p><b>This is what keeps the radio asleep.</b> The old code consumed the clip on the first
-     * flush, which cleared the slot as a side effect; making it a broadcast removed that, and the
-     * gate every dialer waits on is {@code !screenOn && pendingLocal == null}. Without a release the
+     * <p><b>This is what keeps the radio asleep.</b> The gate every dialer waits on is
+     * {@code !screenOn && pendingLocal == null}; this method is what clears {@code pendingLocal} once
+     * delivery is actually done, rather than on the first flush, since the clip is a broadcast to
+     * every link and not something a single flush consumes. Without a release the
      * gate never closes again after the first copy of the session: screen off drops the links, the
      * gate passes at once, each dialer reconnects, runs a burst, returns "success" so skips its
-     * back-off, and does it again — N sockets and N radio wake-ups in a tight loop, forever, with
+     * back-off, and does it again, N sockets and N radio wake-ups in a tight loop, forever, with
      * the same clip re-sent every cycle because each new link starts with a clean {@code sentHash}.
      *
      * <p>Delivered to every live link is the right condition rather than "to one": a clip that has
@@ -610,16 +611,16 @@ final class ClipboardBridge {
     /**
      * Give a peer what it is missing, the moment the handshake says it is missing something.
      *
-     * <p>Delivery used to depend entirely on {@link #pendingLocal}, and that slot is released as
-     * soon as every <em>currently live</em> link has taken the clip — which is correct for the slot's
-     * own job of deciding when the radio may sleep, and useless as a record of what this device
-     * holds. So a tablet that was offline when the phone copied something reconnected to a phone
-     * with an empty slot and simply stayed behind, with no error anywhere and nothing to retry.
+     * <p>Delivery cannot depend on {@link #pendingLocal} alone: that slot is released as soon as
+     * every <em>currently live</em> link has taken the clip, which is correct for its own job of
+     * deciding when the radio may sleep but useless as a record of what this device holds. Without
+     * this method, a tablet offline when the phone copied something would reconnect to a phone with
+     * an empty slot and simply stay behind, with nothing to retry.
      *
      * <p>Three reasons to say nothing, in the order they are cheapest to check:
      *
      * <ul>
-     *   <li>the peer's hash already matches ours — it has this exact content;
+     *   <li>the peer's hash already matches ours, so it has this exact content;
      *   <li>the pending slot still holds it, in which case {@link Link#deliver()} is about to send
      *       it anyway and this would only make it arrive twice;
      *   <li>the peer's version is newer or equal by the same comparison every other path uses, so
@@ -627,9 +628,9 @@ final class ClipboardBridge {
      * </ul>
      *
      * <p>The third does not apply to a file, and the {@code text != null} guard below is where that
-     * is enforced. A received file does carry a version — {@link #adoptFile} borrows the
+     * is enforced. A received file does carry a version: {@link #adoptFile} borrows the
      * originator's {@code seq} for {@link #clipTs}, so it takes its place in the text ordering and
-     * goes out in HELLO — but no file is ever compared against another file by it, because two
+     * goes out in HELLO, but no file is ever compared against another file by it, because two
      * copies of one file are the same bytes and a digest settles that question outright. So an OFFER
      * is the only way to ask, and it costs one frame: a peer that already has it answers HAVE.
      */
@@ -662,19 +663,20 @@ final class ClipboardBridge {
      * Say once, when a clip has been waiting long enough to stop justifying wake-ups, why it has not
      * gone out.
      *
-     * <p>This is the diagnosis the frozen-process warning used to be mistaken for. A phone does not
+     * <p>This diagnosis is easy to mistake for a frozen-process warning, so it is worth being clear
+     * about the distinction. A phone does not
      * reach deep sleep until it has been locked for some time, so a clip still retrying by then is
-     * not evidence that the system is interfering — the system suspending an idle process is the
+     * not evidence that the system is interfering; the system suspending an idle process is the
      * system being right. It is evidence that <b>delivery is failing</b>, and the three ways it can
      * fail want three different things from the user, which is why this branches rather than printing
      * one line:
      *
      * <ul>
-     *   <li><b>no peer connected</b> — a reachability problem; the sheet already says why each target
+     *   <li><b>no peer connected</b>: a reachability problem; the sheet already says why each target
      *       is down, so this only points at it;
-     *   <li><b>connected, but the clip never went out</b> — sends are failing, and the log above this
+     *   <li><b>connected, but the clip never went out</b>: sends are failing, and the log above this
      *       line has the exception;
-     *   <li><b>connected and offered, and still here</b> — the transfer started and did not finish.
+     *   <li><b>connected and offered, and still here</b>: the transfer started and did not finish.
      *       For a file this is almost always the interesting one: a link that drops before the file
      *       is through will retry for as long as the clip is on the clipboard, and the fix is the
      *       size limit, not the battery settings.
@@ -706,15 +708,15 @@ final class ClipboardBridge {
         String head = what + " has not been delivered in " + mins + " min";
         if (live == 0) {
             Logger.w(head + ": no peer has been connected. It stops waking the radio now and goes out"
-                    + " as soon as one is — open the app's peer list to see why each target is down.");
+                    + " as soon as one is; open the app's peer list to see why each target is down.");
         } else if (owing > 0) {
             Logger.w(head + ": " + owing + " of " + live + " connected peer(s) never received it, so a"
-                    + " send is failing — the reason is in the lines above this one.");
+                    + " send is failing, and the reason is in the lines above this one.");
         } else if (isFile) {
             Logger.w(head + ": every peer was offered it and no transfer finished. A link that drops"
                     + " before the whole file is through will keep retrying for as long as this file is"
                     + " on the clipboard; the limit in use on these link(s) is " + mb(limit) + " MB, and"
-                    + " lowering it is what ends this. Not a battery-optimisation problem — a system"
+                    + " lowering it is what ends this. Not a battery-optimisation problem: a system"
                     + " that suspends an idle app is behaving correctly.");
         } else {
             Logger.w(head + ": every peer took it, yet it is still queued. This should not happen;"

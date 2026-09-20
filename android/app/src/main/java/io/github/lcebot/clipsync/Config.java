@@ -24,14 +24,14 @@ import java.util.Set;
  *
  * <p>Peers are found two ways, and the two are independent switches rather than a mode: {@code
  * discovery} asks the local network (mDNS), {@code direct} works through the {@code peers} list.
- * They are named for how a peer is found, not for the route taken to it — a listed address is very
+ * They are named for how a peer is found, not for the route taken to it; a listed address is very
  * often a LAN address too. At least one of them has to be on.
  *
  * <h2>Why the PSK is still in a plain text file</h2>
  *
  * <p>{@code psk}, {@code psk_next} and {@code psk_old} are the keys to the user's clipboard, and
- * they sit in this file as hex. The obvious hardening — {@code EncryptedSharedPreferences}, or
- * wrapping the value with a Keystore key — was evaluated and <b>rejected on a constraint, not on
+ * they sit in this file as hex. The obvious hardening, {@code EncryptedSharedPreferences} or
+ * wrapping the value with a Keystore key, was evaluated and <b>rejected on a constraint, not on
  * effort</b>: {@code SyncService} runs in its own {@code :sync} process and the UI runs in the main
  * one, and <em>both</em> read and write this file. {@code EncryptedSharedPreferences} is explicitly
  * not multi-process safe (neither is plain {@code SharedPreferences}); two processes with it open
@@ -47,7 +47,7 @@ import java.util.Set;
  * private directory, {@code android:allowBackup="false"} keeps it out of cloud and adb backups,
  * and it is written through {@link Files#atomicWrite} so it is never observed half-written. The key
  * material in {@code String} form is deliberately confined to this class, {@link Keys.Schedule} and
- * the pairing exchange — everywhere else it is a {@code byte[]} that can be, and is, zeroed.
+ * the pairing exchange; everywhere else it is a {@code byte[]} that can be, and is, zeroed.
  */
 public final class Config {
     public static final String FILE = "clipsync.conf";
@@ -60,7 +60,7 @@ public final class Config {
     public final boolean direct;        // dial the list at all
     public final boolean discovery;     // look for peers on the local network (mDNS)
     /**
-     * The names and literals that point at THIS device — typically a domain a dynamic DNS client
+     * The names and literals that point at THIS device, typically a domain a dynamic DNS client
      * here keeps pointed at it. Read whether or not {@link #direct} is on:
      * it is what the node knows itself by, which stays true when it is dialling nobody.
      */
@@ -105,7 +105,7 @@ public final class Config {
         port = Integer.parseInt(p.getProperty("port").trim());
         pskHex = p.getProperty("psk").trim().toLowerCase();
         psk = Crypto.fromHex(pskHex);
-        // Unreachable through the ordinary path — from() has already run checkPsk — but this
+        // Unreachable through the ordinary path, because from() has already run checkPsk, but this
         // constructor takes a Properties and a future caller could skip that. A null key would not
         // fail here; it would fail later, inside a handshake, as an obscure NPE on a worker thread.
         if (psk == null) throw new IllegalArgumentException("psk: must be 64 hex characters");
@@ -130,10 +130,23 @@ public final class Config {
     /**
      * Read the key schedule, treating a missing activation time as <b>now</b>.
      *
-     * <p>Not as zero, which is what a missing number would otherwise mean and which would make every
-     * key in every configuration written before rotation existed 55 years old — pre-retired on the
-     * first read, and rotated out from under a household that had not asked for any of this. "I do
-     * not know when this key started" has exactly one safe reading, and it is the generous one.
+     * <p>Not as zero, which is what a missing number would otherwise mean and which would make any
+     * key with no recorded activation time 55 years old, pre-retired on the first read, and rotated
+     * out from under a household that had not asked for any of this. "I do not know when this key
+     * started" has exactly one safe reading, and it is the generous one.
+     *
+     * <p><b>Generous is not the same as amnesiac, and that distinction is the whole of
+     * {@link #unknownAge()}.</b> Reading a missing activation time as <em>now</em> makes the key's
+     * age restart-proof in the wrong direction: every launch re-decides it, so a device that is
+     * restarted more often than the rotation deadline never reaches the deadline at all, and the
+     * key is immortal by accident. The service writes the answer down the first time it sees the
+     * gap, which closes the hole, but only if that write lands, and a fallback whose correctness
+     * depends on a write having succeeded is not a fallback.
+     *
+     * <p>So the anchor is the configuration file's own modification time, not the clock. It is
+     * already on disk, it survives restarts because nothing here rewrites it for fun, and it is
+     * conservative in the direction that matters: the key cannot be newer than the file that holds
+     * it. A device restarted hourly now ages its key by an hour each time rather than by nothing.
      */
     private static Keys.Schedule schedule(Properties p) {
         long since = longOr(p, "psk_since", 0);
@@ -141,10 +154,29 @@ public final class Config {
                 p.getProperty("psk", "").trim().toLowerCase(),
                 p.getProperty("psk_next", "").trim().toLowerCase(),
                 peerList(p.getProperty("psk_old", "")),
-                since > 0 ? since : System.currentTimeMillis(),
+                since > 0 ? since : unknownAge(),
                 longOr(p, "psk_retire", 0),
                 longOr(p, "psk_agreed", 0));
     }
+
+    /**
+     * When to say a key started, when the file does not say.
+     *
+     * <p>The file's own mtime, falling back to the clock only when there is no file, which is a first run,
+     * where "now" is exactly right because the key is about to be written for the first time.
+     */
+    private static long unknownAge() {
+        long stamp = fileStamp;
+        return stamp > 0 ? stamp : System.currentTimeMillis();
+    }
+
+    /**
+     * The configuration file's modification time as of the last read, or 0 if it does not exist.
+     *
+     * <p>Kept beside the cache because {@link #raw} already has to stat the file, so this costs
+     * nothing, and because {@link #schedule} is handed a {@link Properties} and has no file to ask.
+     */
+    private static volatile long fileStamp;
 
     private static long longOr(Properties p, String key, long dflt) {
         try {
@@ -158,8 +190,8 @@ public final class Config {
      * Record a key as newly in service: its clock starts now, and any schedule around the old one
      * is cleared.
      *
-     * <p>Every way a key arrives goes through here — typed, generated, or taken from a peer while
-     * pairing — because {@link #save} merges over what is stored, so a caller that sets only
+     * <p>Every way a key arrives goes through here, whether typed, generated, or taken from a peer while
+     * pairing, because {@link #save} merges over what is stored, so a caller that sets only
      * {@code psk} inherits the *previous* key's activation time and successor. The key would then be
      * pre-retired on the strength of how long the one it replaced had been in use, which for a key
      * two days old is within minutes of being written.
@@ -221,8 +253,8 @@ public final class Config {
     /**
      * The last parse of the file, and the stamp it was parsed at.
      *
-     * <p>{@link #raw} is called from several places on the UI thread — every keystroke validation
-     * path, the PSK comparison, the pairing sheet — and each call was a file open, a parse and a
+     * <p>{@link #raw} is called from several places on the UI thread, including every keystroke validation
+     * path, the PSK comparison and the pairing sheet, and each call was a file open, a parse and a
      * close. The cache is keyed on the file's modification time <em>and</em> its length, because
      * either alone is guessable: mtime has one-second granularity on some filesystems, and a
      * rewrite that changes only a key's hex digits keeps the length. Together they are enough for a
@@ -230,7 +262,7 @@ public final class Config {
      *
      * <p>It has to be invalidated across processes, not just within one: the UI is in the main
      * process and {@code SyncService} is in {@code :sync}, and both write this file. That is why the
-     * stamp is taken from the file rather than from a flag — a write by the other process moves the
+     * stamp is taken from the file rather than from a flag, because a write by the other process moves the
      * mtime, which is all this needs to see. {@link #save} additionally clears it outright, because
      * a write and the read that follows it can land inside the same mtime tick.
      */
@@ -241,6 +273,7 @@ public final class Config {
     public static synchronized Properties raw(Context ctx) {
         File f = new File(ctx.getFilesDir(), FILE);
         long stamp = f.lastModified(), length = f.length();
+        fileStamp = stamp;      // the anchor for a key whose activation time was never written
         // A copy every time, never the cached object: callers mutate what they get back (save()
         // merges into it, the UI overwrites fields before validating), and handing out the cache
         // itself would let one caller's edits become the next caller's file contents.
@@ -279,7 +312,7 @@ public final class Config {
         p.setProperty("psk_rotate", "false");
         p.setProperty("relay_opt_out", "false");
         // When the current key became active. Absent means "unknown", and unknown is read as NOW
-        // rather than as the epoch — the conservative direction, because the alternative is a first
+        // rather than as the epoch, which is the conservative direction, because the alternative is a first
         // launch that finds a key 55 years old and rotates it before the user has finished setting
         // up the second device.
         p.setProperty("psk_since", "0");
@@ -318,7 +351,8 @@ public final class Config {
     public static Config from(Properties p) {
         boolean direct = bool(p.getProperty("direct", "true"));
         boolean discovery = bool(p.getProperty("discovery", "true"));
-        // the old three-way mode made this impossible to express; two switches can, so it is checked
+        // discovery and direct are independent switches, so this is the one state they can jointly
+        // reach that leaves no way to find any peer at all, and it is checked for exactly that reason
         if (!direct && !discovery)
             throw new IllegalArgumentException("discovery: turn on local network discovery or direct connections");
         fail("own_addresses", checkAddresses(p.getProperty("own_addresses", ""), true, Set.of()));
@@ -329,14 +363,12 @@ public final class Config {
                 Set.copyOf(peerList(p.getProperty("own_addresses", "")))));
         fail("port", checkPort(p.getProperty("port", "")));
         fail("psk", checkPsk(p.getProperty("psk", "")));
-        // The successor and the ring, checked here for the same reason `psk` is: they are parsed on
-        // every inbound connection. An unchecked one that is not hex used to make every accept()
-        // throw before it read a byte, so a single malformed value — which an authenticated peer
-        // could write through T_KEYS — left the device unable to be reached at all, permanently and
-        // across restarts. Connection now skips a bad ring entry rather than failing on it, so this
-        // is no longer the only thing standing between a typo and a bricked listener; it is still
-        // the check that keeps a bad value from being written in the first place, which is where a
-        // user can actually be told about it.
+        // The successor and the ring are checked here for the same reason `psk` is: all three are
+        // parsed on every inbound connection, and an authenticated peer can write to psk_next and
+        // psk_old through T_KEYS. Connection skips a ring entry that fails to parse rather than
+        // failing the whole accept, but this is still the point where a bad value can be refused
+        // outright and the user actually told about it, instead of it being silently written and
+        // only skipped later.
         fail("psk_next", checkPskOrEmpty(p.getProperty("psk_next", "")));
         for (String k : peerList(p.getProperty("psk_old", ""))) fail("psk_old", checkPsk(k));
         fail("mdns_timeout_ms", checkRange(p.getProperty("mdns_timeout_ms", ""), 500, 60000, "ms"));
@@ -359,7 +391,7 @@ public final class Config {
      *
      * <p>Atomically, through {@link Files#atomicWrite}: this file carries the PSK, it is rewritten
      * every time a peer reports a key schedule, and a process killed halfway through an in-place
-     * rewrite leaves a key file that no longer parses — which the service reports as "invalid
+     * rewrite leaves a key file that no longer parses, which the service reports as "invalid
      * config" and which survives every restart, so the only way out is to pair every device again.
      */
     public static Config save(Context ctx, Properties values) throws IOException {
@@ -375,7 +407,7 @@ public final class Config {
     // ------------------------------------------------------------------ field checks (null = ok)
     /**
      * One entry of the peers list: a host name, an IPv4 literal or an IPv6 literal. The field never
-     * required dynamic DNS — a static address, a LAN address, a {@code .local} name or a VPN address
+     * required dynamic DNS; a static address, a LAN address, a {@code .local} name or a VPN address
      * are all equally valid, and the code always resolved them the same way.
      */
     public static String checkPeer(String s) {
@@ -399,7 +431,7 @@ public final class Config {
     /**
      * A whole address list: every entry valid, no repeats, and optionally at least one entry.
      *
-     * <p>Used for both lists, which is the point — {@code peers} and {@code own_addresses} accept
+     * <p>Used for both lists, which is the point: {@code peers} and {@code own_addresses} accept
      * exactly the same things and must not drift into accepting different ones. They differ in two
      * parameters only: the peer list needs an entry while Direct connections is on and the own list
      * never does, and a peer entry is additionally refused when it names this device.
@@ -426,7 +458,7 @@ public final class Config {
     /**
      * Does this address name this device, as far as the declared list can tell?
      *
-     * <p>A string comparison on the normalised form, never a DNS lookup — this runs on every
+     * <p>A string comparison on the normalised form, never a DNS lookup, because this runs on every
      * keystroke on the UI thread, which is the same reason {@link #isIpLiteral} uses
      * {@code InetAddresses.isNumericAddress}. It therefore catches the spellings that were declared
      * and nothing else; a second name for the same host still reaches the handshake.
@@ -436,8 +468,8 @@ public final class Config {
     }
 
     /**
-     * Literal address in any form the platform accepts — dotted quad, full or compressed IPv6 —
-     * brackets already stripped.
+     * Literal address in any form the platform accepts: dotted quad, full or compressed IPv6,
+     * with brackets already stripped.
      *
      * <p>{@link android.net.InetAddresses#isNumericAddress} and not {@code InetAddress.getByName}:
      * the latter performs a DNS lookup for anything that is not a literal, and this runs on the UI
@@ -456,7 +488,7 @@ public final class Config {
         return checkRange(s, 1, 65535, "");
     }
 
-    /** {@link #checkPsk}, but "no key" is a legal answer — which it is for a successor, not for a PSK. */
+    /** {@link #checkPsk}, but "no key" is a legal answer, which it is for a successor, not for a PSK. */
     public static String checkPskOrEmpty(String s) {
         return s.trim().isEmpty() ? null : checkPsk(s);
     }
@@ -490,7 +522,7 @@ public final class Config {
             return "must be a whole number";
         }
         String u = unit.isEmpty() ? "" : " " + unit;
-        if (v < min || v > max) return "must be " + min + "–" + max + u;
+        if (v < min || v > max) return "must be " + min + " to " + max + u;
         return null;
     }
 
@@ -509,7 +541,7 @@ public final class Config {
     }
 
     /**
-     * "/storage/emulated/0/Download/ClipSync" -> "Download/ClipSync". MediaStore can only create
+     * "/storage/emulated/0/Download/ClipSync" becomes "Download/ClipSync". MediaStore can only create
      * files for us under the well-known top-level folders; for arbitrary content that means
      * Download/ or Documents/ (Pictures/, Movies/, Music/ reject non-matching MIME types).
      */

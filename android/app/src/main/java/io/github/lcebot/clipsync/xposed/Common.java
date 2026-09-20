@@ -7,7 +7,7 @@ import java.lang.reflect.Method;
 
 /**
  * Everything the system_server module does, independent of the Xposed API that loaded it.
- * {@link Entry} installs the hooks and calls into here. Must not reference any Xposed API — that
+ * {@link Entry} installs the hooks and calls into here. Must not reference any Xposed API; that
  * separation is what let a second entry point exist for the classic API, and is worth keeping now
  * that it does not: the logic is testable and readable without an Xposed type in sight.
  *
@@ -44,12 +44,11 @@ final class Common {
      * ONE Handler, shared by everything here. It has to be one object, not one per call.
      *
      * <p>{@code MessageQueue.removeMessages} matches on {@code msg.target == handler}, and the
-     * target is whichever Handler <em>posted</em> the message. A fresh Handler per call still shares
-     * the looper, so posting worked — but {@link #scheduleCheck}'s {@code removeCallbacks} was
-     * asking a brand new Handler to cancel a message posted by a different one, which never matched.
-     * Every install and every process death therefore left another never-ending 60-second self-
-     * rescheduling chain inside system_server, each one calling getRunningServices(MAX_VALUE) — a
-     * full sweep of every running service — once a minute, for the life of the boot.
+     * target is whichever Handler <em>posted</em> the message. A fresh Handler per call would still
+     * share the looper, so posting would work, but {@link #scheduleCheck}'s {@code removeCallbacks}
+     * needs to cancel a message posted by an earlier call, and a different Handler instance can never
+     * match one it did not post itself. A single shared instance is what makes cancellation possible
+     * at all.
      *
      * <p>Double-checked on a volatile field because this is reached from binder threads and from the
      * worker itself; the inner lock on WORKER is the one that keeps the thread from being started
@@ -131,7 +130,7 @@ final class Common {
         }
     }
 
-    /** ProcessRecord -> is it our app? (processName is PKG or PKG:sync) */
+    /** Tells whether a ProcessRecord is our app (processName is PKG or PKG:sync) */
     static boolean isOurs(Object processRecord) {
         if (processRecord == null) return false;
         try {
@@ -253,7 +252,7 @@ final class Common {
      * ClipboardService's clip setter. On the releases this app installs on (minSdk 35 = Android 15
      * and up) there are TWO methods named exactly {@code setPrimaryClipInternalLocked}, verified
      * against AOSP {@code services/core/java/com/android/server/clipboard/ClipboardService.java}
-     * (tags android-14.0.0_r18 / android-15.0.0_r1 — 14 is no longer a supported target, but the
+     * (tags android-14.0.0_r18 / android-15.0.0_r1; 14 is no longer a supported target, but the
      * shape is the same on both, so the older tag is kept as corroboration):
      * <ul>
      *   <li>{@code setPrimaryClipInternalLocked(ClipData clip, int uid, int deviceId, String sourcePackage)}
@@ -290,12 +289,12 @@ final class Common {
     /**
      * Where {@code sourcePackage} sits in the clip setter's parameter list, or -1 if it has none.
      *
-     * <p>Resolved from the signature, once, at hook time — and that is the point of it. This used to
-     * be "scan every argument for a String equal to our package name", which is a different question
-     * with the same answer most of the time: it also says "ours" for a clip whose *label* or whose
-     * calling-package parameter happens to be our package name, and it silently stops working the
-     * day an overload puts our name somewhere else. Reading a known position cannot drift quietly;
-     * if the shape changes, this returns -1 and the effect is visible rather than subtle.
+     * <p>Resolved from the signature, once, at hook time, rather than by scanning every argument for
+     * a String equal to our package name, because that scan is a different question with the same answer
+     * most of the time: it also says "ours" for a clip whose *label* or whose calling-package
+     * parameter happens to be our package name, and it silently stops working the day an overload
+     * puts our name somewhere else. Reading a known position cannot drift quietly; if the shape
+     * changes, this returns -1 and the effect is visible rather than subtle.
      *
      * <p><b>The LAST String</b>, because that is where sourcePackage sits in every internal-setter
      * shape AOSP ships on the releases we run on (verified against ClipboardService.java at
@@ -304,17 +303,17 @@ final class Common {
      *   <li>{@code setPrimaryClipInternalLocked(ClipData, int uid, int deviceId, String sourcePackage)}
      *   <li>{@code setPrimaryClipInternalLocked(Clipboard, ClipData, int uid, String sourcePackage)}
      * </ul>
-     * The middle int is {@code deviceId} on 14/15 (a virtual-display id), not a userId — but its
+     * The middle int is {@code deviceId} on 14/15 (a virtual-display id), not a userId, but its
      * type is irrelevant here; only "last String == sourcePackage" matters, and it holds. NOTE the
      * trailing String is sourcePackage ONLY on these INTERNAL methods; the public binder entry points
      * ({@code setPrimaryClip(ClipData, String callingPackage, String attributionTag, int, int)} and
      * {@code clipboardAccessAllowed(int, String callingPackage, String attributionTag, …)}) end in
-     * attributionTag, not sourcePackage — which is why we hook the internal setter and read
+     * attributionTag, not sourcePackage, which is why we hook the internal setter and read
      * callingPackage by fixed index 0/1 in the access hooks, never "the last String" there.
      *
      * <p>If a ROM ever reshapes the internal setter with no String at all this returns -1: nothing is
      * recognised as our own write, and the echo is caught one layer up by SyncService's sent-hash set
-     * instead — a graceful degradation, not a crash.
+     * instead: a graceful degradation, not a crash.
      */
     static int sourceArg(Method m) {
         Class<?>[] p = m.getParameterTypes();
