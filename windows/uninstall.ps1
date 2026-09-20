@@ -1,7 +1,7 @@
 # Reverts exactly what install.ps1 did, as recorded in install-state.json: the scheduled task and
 # the firewall rules it created, plus any clipsync.py still running.
 #
-# Python packages are NOT removed, only listed. See the note further down -- that is a decision, not
+# Python packages are NOT removed, only listed. See the note further down: that is a decision, not
 # an omission. Config and log are left alone too.
 #
 # Run it however you like; it asks for administrator rights itself.
@@ -38,7 +38,7 @@ $app       = Join-Path $here 'app'
 $stateFile = Join-Path $here 'install-state.json'
 
 if (-not (Test-Path $stateFile)) {
-    # No record, so the names install.ps1 uses are reconstructed instead -- from config.json, which
+    # No record, so the names install.ps1 uses are reconstructed instead, from config.json, which
     # is where the port in two of the three names came from in the first place.
     #
     # Named exactly, never 'ClipSync *'. That wildcard was this script's one unbounded action: a

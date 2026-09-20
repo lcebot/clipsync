@@ -7,9 +7,9 @@ from this folder:
 
     python configurator.py
 
-tkinter, so there is nothing to install: it ships with Python on Windows. The layout is plain rather
-than styled, because this is a settings dialog someone opens twice a year, and every minute spent on
-its looks is a minute not spent on the thing it configures.
+tkinter, so there is nothing to install: it ships with Python on Windows. Built from ttk's themed
+widgets, on the 'vista' theme where it exists, so it follows the PC's own visual style. This is a
+settings dialog someone comes back to, so a consistent, native look earns its keep here.
 
 **No rule is written here.** Defaults, parsing and every check_* come from clipsync_config, which the
 service imports too. A settings window that disagreed with the service about what is valid would be
@@ -34,13 +34,54 @@ from tkinter import messagebox, ttk
 # The service and everything it imports live in app/, out of the way: this window is the supported
 # way to change any of it, and a folder full of .py files beside a shortcut invites editing the one
 # thing that must not be hand-edited.  Nothing else needs a path fix, because clipsync_config derives
-# config.json and clipsync.log from its OWN location -- so they moved with it.
+# config.json and clipsync.log from its OWN location, so they moved with it.
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "app"))
 
 import clipsync_config as cfgmod   # noqa: E402
 
 TASK_NAME = "ClipSync"          # the scheduled task install.ps1 registers
 PAD = 6
+
+
+# ----------------------------------------------------------------------------- look and feel
+# A small, named set of semantic styles rather than a "foreground=" on every Label: the same red,
+# grey, green and amber recur throughout the window (error text, hint text, a pairing outcome), and
+# a ttk.Style is the themed way to say "this label means an error" once instead of forty times.
+_FONT_FAMILY = "Segoe UI"
+
+
+def _apply_theme(root) -> ttk.Style:
+    """
+    Pick a themed look and lay down the semantic label styles the rest of the window uses.
+
+    'vista' is the ttk theme that follows the current Windows visual style: light or dark, accent
+    colour and all. It exists only on Windows, which is the only place this window runs; the
+    fallback to 'clam' keeps this from raising on a Python build that lacks 'vista'. Nothing here
+    changes what a widget does, only how it is drawn.
+    """
+    style = ttk.Style(root)
+    for theme in ("vista", "clam"):
+        if theme in style.theme_names():
+            style.theme_use(theme)
+            break
+
+    default_font = (_FONT_FAMILY, 9)
+    root.option_add("*Font", default_font)
+    style.configure(".", font=default_font)
+    style.configure("TLabelframe.Label", font=(_FONT_FAMILY, 9, "bold"))
+    style.configure("TButton", padding=(10, 4))
+    style.configure("TEntry", padding=(4, 2))
+    style.configure("TCheckbutton", padding=(0, 2))
+
+    # Semantic label styles, keyed to what the colour MEANS rather than to the widget it happens to
+    # sit in, so the same style is reused by the main form and by the pairing dialogs.
+    style.configure("Muted.TLabel", foreground="#49454f")
+    style.configure("Error.TLabel", foreground="#b3261e")
+    style.configure("Success.TLabel", foreground="#1a5e20")
+    style.configure("Warning.TLabel", foreground="#7a5900")
+    style.configure("Placeholder.TLabel", foreground="#79747e")
+    style.configure("CodeReal.TLabel", foreground="#1d192b")
+    return style
 
 # subprocess flags that keep a console window from flashing up when this runs under pythonw
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -188,11 +229,11 @@ def restart_service() -> str:
 # and the first is the one that matters here:
 #
 #   * This window does NOT run elevated, and Set-Acl "changes the values in the item's security
-#     descriptor to match the values in the AclObject parameter" -- the whole descriptor Get-Acl
+#     descriptor to match the values in the AclObject parameter", the whole descriptor Get-Acl
 #     returned, owner included. Writing an owner is a privileged operation that this process has no
 #     business attempting and no need for. icacls "displays or modifies discretionary access control
 #     lists (DACLs)" and nothing else, and changing a DACL needs only WRITE_DAC, which the file's
-#     owner -- this user, who created it -- always has.
+#     owner, this user who created it, always has.
 #     (https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.security/set-acl ,
 #      https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/icacls)
 #   * No PowerShell means no `-Command` string to build, which is the hazard _powershell() exists to
@@ -267,8 +308,8 @@ def protect_config() -> str:
 # abort the loop on the first missing rule instead of reporting "none of them are there" as exit 2,
 # which is the answer the caller actually turns into a sentence.
 _FIREWALL_SCRIPT = (
-    # 'Stop' first, because the interesting failure here -- access denied, this window not being
-    # elevated -- is a NON-terminating PowerShell error: without this the cmdlet prints it, the
+    # 'Stop' first, because the interesting failure here, access denied since this window is not
+    # elevated, is a NON-terminating PowerShell error: without this the cmdlet prints it, the
     # script carries on and exits 0, and the caller, reading the exit code, reports a firewall rule
     # moved that was not. (The ACL path needs no equivalent line because it does not go through
     # PowerShell at all; see protect_config.)
@@ -352,20 +393,37 @@ def _rename_recorded_rules(old_port: int, new_port: int, span: int):
 
 # ----------------------------------------------------------------------------- small widgets
 class Field:
-    """A labelled entry with an error line under it. The error line is always present, so showing
-    one does not shift every row below it."""
+    """A labelled entry with an error line under it. The line takes no space until there is
+    something to say: it is gridded normally, then immediately collapsed with grid_remove(), and
+    show() toggles it back with a bare grid() call, which restores the same row/column/sticky it
+    was given here rather than needing them repeated at every call site."""
 
-    def __init__(self, parent, row, label, *, secret=False, width=44):
+    def __init__(self, parent, row, label, *, secret=False, width=44, side_widget=None):
+        """`side_widget`, when given, is called with a Frame and is expected to pack a companion
+        widget into it with side="right": the entry is packed into the same frame with
+        fill="x", expand=True, so the two share column 1's stretched width instead of the entry
+        alone claiming all of it, and the companion widget's right edge lands exactly where the
+        entry's would have on its own, the same right edge every other field in the column has."""
         self.var = tk.StringVar()
         ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", padx=PAD, pady=(PAD, 0))
-        self.entry = ttk.Entry(parent, textvariable=self.var, width=width,
-                               show="•" if secret else "")
-        self.entry.grid(row=row, column=1, sticky="ew", padx=PAD, pady=(PAD, 0))
-        self.error = ttk.Label(parent, text="", foreground="#b3261e", wraplength=460)
+        if side_widget is None:
+            self.entry = ttk.Entry(parent, textvariable=self.var, width=width,
+                                   show="•" if secret else "")
+            self.entry.grid(row=row, column=1, sticky="ew", padx=PAD, pady=(PAD, 0))
+        else:
+            box = ttk.Frame(parent)
+            box.grid(row=row, column=1, sticky="ew", padx=PAD, pady=(PAD, 0))
+            self.entry = ttk.Entry(box, textvariable=self.var, width=width,
+                                   show="•" if secret else "")
+            self.entry.pack(side="left", fill="x", expand=True)
+            side_widget(box)
+        self.error = ttk.Label(parent, text="", style="Error.TLabel", wraplength=460)
         self.error.grid(row=row + 1, column=1, sticky="w", padx=PAD)
+        self.error.grid_remove()
 
     def show(self, problem) -> bool:
         self.error.configure(text=problem or "")
+        (self.error.grid if problem else self.error.grid_remove)()
         return problem is None
 
     def get(self) -> str:
@@ -387,12 +445,14 @@ class AddressRow:
         self.entry.grid(row=0, column=0, sticky="ew")
         self.button = ttk.Button(self.frame, text="Remove", width=8, command=lambda: on_remove(self))
         self.button.grid(row=0, column=1, padx=(PAD, 0))
-        self.error = ttk.Label(self.frame, text="", foreground="#b3261e", wraplength=440)
+        self.error = ttk.Label(self.frame, text="", style="Error.TLabel", wraplength=440)
         self.error.grid(row=1, column=0, columnspan=2, sticky="w")
+        self.error.grid_remove()
         self.frame.columnconfigure(0, weight=1)
 
     def show(self, problem) -> bool:
         self.error.configure(text=problem or "")
+        (self.error.grid if problem else self.error.grid_remove)()
         return problem is None
 
     def get(self) -> str:
@@ -518,10 +578,15 @@ class App:
     """Not a Frame subclass: every widget below is a child of the toplevel, and an unmapped frame in
     the middle would only be one more thing for a dialog to take as its parent."""
 
-    def __init__(self, master):
+    def __init__(self, master, style=None):
         self.root = master
+        self.style = style or ttk.Style(master)
         master.title("ClipSync settings")
-        master.minsize(600, 480)
+        # Wider than tall: every row in this form is a label and a field side by side, so width is
+        # what the content actually wants, and a square window wraps hint text and button rows that
+        # a wider one shows on one line.
+        master.minsize(760, 480)
+        master.geometry("760x560")
 
         # The button bar is packed first, before the scrollable body, so that a window shorter than
         # the form squeezes the form and not the row holding Apply and Close. The packer hands out
@@ -533,8 +598,11 @@ class App:
         outer.pack(fill="both", expand=True)
 
         # A canvas, because the form is taller than a small laptop screen and tkinter has no
-        # scrolling container of its own.
-        canvas = tk.Canvas(outer, highlightthickness=0)
+        # scrolling container of its own. Its background is read from the active ttk theme rather
+        # than left at tk's own default grey, which is a different shade on every theme and would
+        # otherwise show as a border around the themed body sitting inside it.
+        canvas_bg = self.style.lookup("TFrame", "background") or None
+        canvas = tk.Canvas(outer, highlightthickness=0, background=canvas_bg)
         scroll = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
         body = ttk.Frame(canvas)
         body.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
@@ -543,10 +611,17 @@ class App:
         canvas.configure(yscrollcommand=scroll.set)
         canvas.pack(side="left", fill="both", expand=True)
         scroll.pack(side="right", fill="y")
-        canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(-e.delta // 120, "units"))
+        # One line per event, not a magnitude computed from event.delta: a physical wheel reports
+        # delta in multiples of 120, but Windows delivers a touchpad's two-finger scroll as the same
+        # <MouseWheel> event with much smaller deltas, several times a second, and "-delta // 120"
+        # floors most of those to zero. Reading only the sign and moving one unit per event scrolls
+        # correctly for both, and the touchpad's own event rate is what makes it feel continuous.
+        canvas.bind_all("<MouseWheel>",
+                        lambda e: canvas.yview_scroll(-1 if e.delta > 0 else 1, "units"))
 
         # The bar's widgets are created before _build, because the lists it builds fire on_change as
-        # soon as they have a row, and revalidate touches apply_button and paths_error.
+        # soon as they have a row, and revalidate touches apply_button, paths_error and
+        # discovery_error.
         self.status = ttk.Label(bar, text="")
         self.status.pack(side="left", padx=PAD, pady=PAD)
         ttk.Button(bar, text="Close", command=master.destroy).pack(side="right", padx=PAD, pady=PAD)
@@ -566,7 +641,20 @@ class App:
         conn.grid(row=section_row, column=0, sticky="ew", padx=PAD, pady=(PAD, 0))
         conn.columnconfigure(1, weight=1)
         self.port = Field(conn, 0, "Port")
-        self.psk = Field(conn, 2, "PSK key (64 hex)", secret=True)
+        # Whether the key on screen is readable is a property of the key field itself, so Show goes
+        # beside the entry rather than down with the buttons that act on the key's value. It is
+        # passed in as `side_widget` rather than gridded separately in some column of its own,
+        # because a separately gridded checkbox is exactly what put it at the WRONG right edge the
+        # first time: column 1 stretches to fill the row, so the entry alone had claimed that whole
+        # width already, and a checkbox appended after it in another column landed further right
+        # still, past where Port's own field ends. Sharing one frame, with the entry set to expand
+        # and the checkbox not, gives the two of them together the same right edge Port's field has
+        # on its own.
+        self.psk_shown = tk.BooleanVar(value=False)
+        self.psk = Field(conn, 2, "PSK key (64 hex)", secret=True, width=36,
+                         side_widget=lambda box: ttk.Checkbutton(
+                             box, text="Show", variable=self.psk_shown, command=self._toggle_psk
+                         ).pack(side="right", padx=(4, 0)))
 
         psk_bar = ttk.Frame(conn)
         psk_bar.grid(row=4, column=1, sticky="w", padx=PAD, pady=(0, PAD))
@@ -578,9 +666,6 @@ class App:
         # not a reason to leave out the case where the PC is the device that was set up first.
         ttk.Button(psk_bar, text="Pair with a device…", command=self.pair).pack(side="left", padx=(PAD, 0))
         ttk.Button(psk_bar, text="Share this key…", command=self.share).pack(side="left", padx=(PAD, 0))
-        self.psk_shown = tk.BooleanVar(value=False)
-        ttk.Checkbutton(psk_bar, text="Show", variable=self.psk_shown,
-                        command=self._toggle_psk).pack(side="left", padx=(PAD, 0))
 
         # A single checkbox is the whole of the rotation UI on both platforms, and it controls less
         # than it looks like: rotation runs regardless once a successor exists, because a key set on
@@ -600,8 +685,8 @@ class App:
         own = ttk.LabelFrame(body, text="This PC's own addresses")
         own.grid(row=section_row, column=0, sticky="ew", padx=PAD, pady=(PAD, 0))
         own.columnconfigure(0, weight=1)
-        ttk.Label(own, wraplength=460, foreground="#49454f",
-                  text="Used to recognise itself and avoid a network loop."
+        ttk.Label(own, wraplength=460, style="Muted.TLabel",
+                  text="Used to recognise itself and avoid a network loop"
                   ).grid(row=0, column=0, sticky="w", padx=PAD, pady=(PAD, 0))
         self.own_list = AddressList(own, allow_empty=True, on_change=self.revalidate)
         self.own_list.grid(box_row=1, button_row=2)
@@ -624,11 +709,21 @@ class App:
         self.mdns_name = Field(lan, 1, "Service name (optional)")
         # The hostname bare, because that is now the default: Android advertises its device name and
         # this end advertised "ClipSync on HOSTNAME", so one LAN showed two conventions in one list.
-        ttk.Label(lan, text="Empty means “%s”, this PC's name." % _hostname(), foreground="#49454f"
+        ttk.Label(lan, text="Empty means “%s”, this PC's name" % _hostname(), style="Muted.TLabel"
                   ).grid(row=3, column=1, sticky="w", padx=PAD, pady=(0, PAD))
+        # The same "turn on at least one" problem as paths_error below: it is one condition on two
+        # switches in two different sections, so it is shown next to each switch rather than only
+        # next to one, which is the only placement that reads as a problem with THIS control no
+        # matter which of the two the user is looking at.
+        self.discovery_error = ttk.Label(lan, text="", style="Error.TLabel", wraplength=460)
+        self.discovery_error.grid(row=4, column=0, columnspan=2, sticky="w", padx=PAD, pady=(0, PAD))
+        self.discovery_error.grid_remove()
         section_row += 1
 
         # --- Direct connections
+        # No supporting paragraph under the switch, matching the Android page: the switch names what
+        # it does, each address row explains itself when it is wrong (own address, duplicate, empty),
+        # and a static paragraph repeating that in advance is a paragraph nobody reads twice.
         dire = ttk.LabelFrame(body, text="Direct connections")
         dire.grid(row=section_row, column=0, sticky="ew", padx=PAD, pady=(PAD, 0))
         dire.columnconfigure(0, weight=1)
@@ -640,29 +735,37 @@ class App:
         ttk.Checkbutton(dire, text="Use the addresses below",
                         variable=self.direct, command=self._direct_toggled
                         ).grid(row=0, column=0, sticky="w", padx=PAD, pady=(PAD, 0))
-        ttk.Label(dire, wraplength=460, foreground="#49454f",
-                  # What this list is FOR, and nothing else: several PCs advertising on one LAN is
-                  # the ordinary case, not a conflict to arbitrate, and each node declares its own
-                  # addresses above rather than having anything probe for them.
-                  text="The addresses this PC dials to reach your other devices, and the ones they "
-                       "use to reach it. An address that belongs to this PC goes in the list above "
-                       "instead, because that is the one that stops it dialling itself."
-                  ).grid(row=1, column=0, sticky="w", padx=PAD, pady=(0, PAD))
-        self.peer_list = AddressList(dire, allow_empty=False, on_change=self.revalidate)
-        self.peer_list.grid(box_row=2, button_row=3)
-        self.paths_error = ttk.Label(dire, text="", foreground="#b3261e", wraplength=460)
-        self.paths_error.grid(row=4, column=0, sticky="w", padx=PAD, pady=(0, PAD))
+        # Everything the switch governs lives in one frame, so turning it off can hide the whole
+        # thing in one call instead of hiding each row separately: the Android page does the same,
+        # collapsing its own equivalent card away entirely rather than merely greying it out.
+        self.direct_body = ttk.Frame(dire)
+        self.direct_body.grid(row=1, column=0, sticky="ew")
+        self.direct_body.columnconfigure(0, weight=1)
+        self.peer_list = AddressList(self.direct_body, allow_empty=False, on_change=self.revalidate)
+        self.peer_list.grid(box_row=0, button_row=1)
+        self.paths_error = ttk.Label(dire, text="", style="Error.TLabel", wraplength=460)
+        self.paths_error.grid(row=2, column=0, sticky="w", padx=PAD, pady=(0, PAD))
+        self.paths_error.grid_remove()
         section_row += 1
 
-        # --- Relay opt-out: the power-saving control, restated for a machine that has no battery.
-        # It matters here anyway, because "the LAN's relay" is not a role anyone is given; it is
-        # whichever node the priority order puts first, and a PC on mains wins that every time. This
-        # is how a PC declines it: the service declares `persistent: false`, which takes it out of
-        # everyone else's election, and refuses any request that arrives regardless.
+        # --- Relay: its own section, not folded into Direct connections, because declining a relay
+        # is not about the address list at all. A device found only through LAN discovery can still
+        # be asked to relay for a peer it can see and another peer cannot, so this switch matters
+        # regardless of whether Direct connections is on, and stays visible either way, the same as
+        # on the Android page, where it lives in its own card rather than inside the address list's.
+        relay = ttk.LabelFrame(body, text="Relay")
+        relay.grid(row=section_row, column=0, sticky="ew", padx=PAD, pady=(PAD, 0))
+        relay.columnconfigure(0, weight=1)
+        # The power-saving control, restated for a machine that has no battery. It matters here
+        # anyway, because "the LAN's relay" is not a role anyone is given; it is whichever node the
+        # priority order puts first, and a PC on mains wins that every time. This is how a PC
+        # declines it: the service declares `persistent: false`, which takes it out of everyone
+        # else's election, and refuses any request that arrives regardless.
         self.relay_opt_out = tk.BooleanVar(value=False)
-        ttk.Checkbutton(dire, text="Decline relay requests from other devices",
+        ttk.Checkbutton(relay, text="Decline relay requests",
                         variable=self.relay_opt_out, command=self.revalidate
-                        ).grid(row=5, column=0, sticky="w", padx=PAD, pady=(0, PAD))
+                        ).grid(row=0, column=0, sticky="w", padx=PAD, pady=PAD)
+        section_row += 1
 
         # --- Transfer limits
         lim = ttk.LabelFrame(body, text="Transfer limits")
@@ -678,7 +781,7 @@ class App:
         rec.grid(row=section_row, column=0, sticky="ew", padx=PAD, pady=(PAD, 0))
         rec.columnconfigure(1, weight=1)
         self.files_dir = Field(rec, 0, "Folder")
-        ttk.Label(rec, text="Relative paths are resolved next to clipsync.py.", foreground="#49454f"
+        ttk.Label(rec, text="Relative paths are resolved next to clipsync.py", style="Muted.TLabel"
                   ).grid(row=2, column=1, sticky="w", padx=PAD)
         self.keep_hours = Field(rec, 3, "Keep unused for (hours, 0 = forever)")
         self.keep_max_mb = Field(rec, 5, "Keep at most (MB, 0 = unlimited)")
@@ -689,8 +792,8 @@ class App:
         start.grid(row=section_row, column=0, sticky="ew", padx=PAD, pady=(PAD, PAD))
         start.columnconfigure(1, weight=1)
         self.start_delay = Field(start, 0, "Delay after logon (seconds)")
-        ttk.Label(start, text="0 is right for a single PC. Raise it only when several PCs share this "
-                              "config file.", foreground="#49454f", wraplength=460
+        ttk.Label(start, text="0 is right for a single PC, raise it only if several PCs share this "
+                              "config file", style="Muted.TLabel", wraplength=460
                   ).grid(row=2, column=1, sticky="w", padx=PAD, pady=(0, PAD))
 
         self.fields = {
@@ -718,7 +821,9 @@ class App:
             messagebox.showinfo("Rotate key automatically", self._ROTATE_HELP)
 
     def _direct_toggled(self):
-        self.peer_list.set_enabled(self.direct.get())
+        on = self.direct.get()
+        self.peer_list.set_enabled(on)
+        (self.direct_body.grid if on else self.direct_body.grid_remove)()
         self.revalidate()
 
     # ------------------------------------------------------------------ load / collect / validate
@@ -752,8 +857,10 @@ class App:
 
         self.own_list.set_values(cfgmod.as_list(raw["own_addresses"]))
         self.peer_list.set_values(cfgmod.as_list(raw["peers"]))
-        self.peer_list.set_enabled(self.direct.get())
-        self.revalidate()
+        # Sets the body's visibility to match the switch just loaded, the same call the checkbox
+        # itself uses, so a config file loaded with direct off opens with the list already collapsed
+        # rather than needing a click to discover that it can be.
+        self._direct_toggled()
         if fresh:
             # Nothing is committed to the repository and nothing ships in the zip: this window is
             # where config.json comes from. Saying so is the difference between "the defaults are
@@ -821,15 +928,24 @@ class App:
             "Enter a host name or IP address, or remove this row")
 
         if not self.discovery.get() and not self.direct.get():
-            self.paths_error.configure(
-                text="Turn on at least one of these. With both off there is no way to reach another "
-                     "device.")
+            message = ("Turn on at least one of these. With both off there is no way to reach "
+                       "another device.")
+            self._set_error(self.discovery_error, message)
+            self._set_error(self.paths_error, message)
             ok = False
         else:
-            self.paths_error.configure(text="")
+            self._set_error(self.discovery_error, "")
+            self._set_error(self.paths_error, "")
 
         self.apply_button.configure(state="normal" if ok else "disabled")
         return ok
+
+    @staticmethod
+    def _set_error(label, text):
+        """Set a top-level error label's text and, like Field/AddressRow, collapse it to no height
+        at all when there is nothing to say rather than leaving a blank line in its place."""
+        label.configure(text=text)
+        (label.grid if text else label.grid_remove)()
 
 
     # ------------------------------------------------------------------ actions
@@ -872,13 +988,13 @@ class App:
         """
         Take the key from a device that already has it.
 
-        Three things here block, tkinter has one thread, and they are not the same length -- so each
+        Three things here block, tkinter has one thread, and they are not the same length, so each
         one says what it is before it starts, in the status bar, with an explicit update() to get
         that repaint out before the thread stops answering.  A progress bar would need a second
         thread to drive it and would still be indeterminate; naming the step is worth more.
 
-        The browse is a fixed four seconds.  The key derivation is well under a second here -- native
-        scrypt on both ends (see clipsync_pair.channel_key) -- but that is still too long to spend
+        The browse is a fixed four seconds.  The key derivation is well under a second here, native
+        scrypt on both ends (see clipsync_pair.channel_key), but that is still too long to spend
         without saying so, which is why this end announces it rather than relying on the wait being
         short; Android runs it on a worker for the same reason.  The third is the one
         that is easy to miss: after PAIR_ASK, `join` waits up to ASK_TIMEOUT + CONNECT_TIMEOUT for a
@@ -995,39 +1111,39 @@ class App:
         win.transient(self.root)
         state = {"provider": None, "tick": None, "over": False}
 
-        ttk.Label(win, wraplength=380, text="On each new device choose “I have another ClipSync "
-                                           "device”, pick this PC, and enter this code.").grid(
+        ttk.Label(win, wraplength=380, text="On each new device, choose “I have another ClipSync "
+                                           "device”, pick this PC, and enter this code").grid(
             row=0, column=0, sticky="w", padx=PAD, pady=(PAD, 0))
         # Big, monospaced and grouped three-and-three: it is read across a room and typed on a phone
         # in the other hand, and nine digits that run together are nine digits typed wrong.  The two
-        # spaces are put in by clipsync_pair.format_code and go no further than this label -- what
+        # spaces are put in by clipsync_pair.format_code and go no further than this label: what
         # the provider derived its channel key from, and what the phone must end up with, is the
         # nine digits.
         #
         # Greyed DIGITS to start, not dashes: the same length in the same font, so the window does
-        # not resize when the real code arrives -- the key derivation is a deliberately slow scrypt
-        # and cannot have finished by now -- and digits because a dash and a digit do not draw to
+        # not resize when the real code arrives. (The key derivation is a deliberately slow scrypt
+        # and cannot have finished by now.) Digits, because a dash and a digit do not draw to
         # the same height.  Grouped here too, for the same reason the count matches: eleven
         # characters against nine is a fifth of the line.
         # The same placeholder digits as the Android sheet (strings.xml, pair_code_placeholder), so
         # that a screenshot of either end is recognisable as the same state rather than looking like
         # two different bugs.  Sliced to CODE_DIGITS rather than written out, so it stays the right
-        # length if that constant ever moves again -- which it has, three times.
+        # length even if that constant moves again, which it has, three times.
         code_label = ttk.Label(win, text=clipsync_pair.format_code(PLACEHOLDER_CODE[:_code_digits()]),
-                               font=("Consolas", 28), foreground="#79747e")
+                               font=("Consolas", 28), style="Placeholder.TLabel")
         code_label.grid(row=1, column=0, padx=PAD, pady=(PAD, 0))
-        status = ttk.Label(win, text="Starting…", foreground="#49454f")
+        status = ttk.Label(win, text="Starting", style="Muted.TLabel")
         status.grid(row=2, column=0, sticky="w", padx=PAD, pady=(0, PAD))
         # One line per device, appended under the status while the window stays open.
-        given = ttk.Label(win, text="", foreground="#1a5e20", justify="left")
+        given = ttk.Label(win, text="", style="Success.TLabel", justify="left")
         given.grid(row=3, column=0, sticky="w", padx=PAD, pady=(0, PAD))
         state["given"] = []
         # Why the last caller did not get the key. Its own line, because the one above it is
-        # rewritten every second by the countdown -- and because "a device with a different version
+        # rewritten every second by the countdown, and because "a device with a different version
         # tried" and "somebody is guessing codes" are two different pieces of news that deserve to
         # be told apart rather than surfaced only once, silently, when the fifth failure closes the
         # window.
-        trouble = ttk.Label(win, text="", foreground="#7a5900", wraplength=380, justify="left")
+        trouble = ttk.Label(win, text="", style="Warning.TLabel", wraplength=380, justify="left")
         trouble.grid(row=4, column=0, sticky="w", padx=PAD, pady=(0, PAD))
 
         def finish(message, over=True):
@@ -1092,8 +1208,8 @@ class App:
             except tk.TclError:
                 return False            # the window has been closed: there is nobody to approve
             # A caller must not be able to hold the key hostage while nobody is at the PC, so an
-            # unanswered prompt is a refusal. The dialog itself stays up -- tkinter has no way to
-            # take back a modal box -- and an answer that arrives after this returns simply lands
+            # unanswered prompt is a refusal. The dialog itself stays up, since tkinter has no way to
+            # take back a modal box, and an answer that arrives after this returns simply lands
             # nowhere, by which time the socket is closed and the line below has said so.
             if not done.wait(clipsync_pair.ASK_TIMEOUT):
                 return False
@@ -1122,7 +1238,7 @@ class App:
 
         def closed(burned):
             win.after(0, lambda: finish(
-                "Too many wrong codes, so this closed." if burned
+                "Too many wrong codes, so the window was closed. Try again for a new code." if burned
                 else "Finished. Every device that took the key is connecting now."
                 if state["given"] else "Nobody joined before the code expired."))
 
@@ -1139,7 +1255,7 @@ class App:
         state["provider"] = p
         # Real now, and no longer greyed.  format_code and not p.code: p.code is the nine digits the
         # channel key was derived from, and the spaces are added here, for this label, only.
-        code_label.config(text=clipsync_pair.format_code(p.code), foreground="#1d192b")
+        code_label.config(text=clipsync_pair.format_code(p.code), style="CodeReal.TLabel")
 
         def tick():
             left = max(0.0, p.closes_at - time.monotonic())
@@ -1159,8 +1275,8 @@ class App:
         """
         Put a child window over the middle of this one.
 
-        `transient` alone does not place it -- it only ties the two together for stacking and the
-        taskbar -- so a Toplevel lands wherever the window manager feels like, which on Windows is
+        `transient` alone does not place it: it only ties the two together for stacking and the
+        taskbar, so a Toplevel lands wherever the window manager feels like, which on Windows is
         the top-left of the desktop.  Which is nowhere near the window the user is looking at.
 
         update_idletasks first, because a window that has not been laid out reports 1x1 and would be
@@ -1178,17 +1294,24 @@ class App:
         win.title("Pair with which device?")
         win.transient(self.root)
         picked = {"i": None}
-        ttk.Label(win, text="Pick the one showing a code.").grid(
+        ttk.Label(win, text="Found these. Pick the one showing a code.").grid(
             row=0, column=0, sticky="w", padx=PAD, pady=(PAD, 0))
-        box = tk.Listbox(win, height=min(6, len(found)), exportselection=False)
-        for name, _, _ in found:
-            box.insert("end", name)
-        box.selection_set(0)
+        # ttk has no listbox. A single-column Treeview with the tree column as the only column
+        # ("show='tree'") serves the same purpose: one row per device, one selectable at a time,
+        # drawn in the theme's own selection colour.
+        box = ttk.Treeview(win, columns=(), show="tree", height=min(6, len(found)),
+                           selectmode="browse")
+        box.column("#0", width=320, stretch=True)
+        for i, (name, _, _) in enumerate(found):
+            box.insert("", "end", iid=str(i), text=name)
+        if found:
+            box.selection_set("0")
+            box.focus("0")
         box.grid(row=1, column=0, sticky="ew", padx=PAD, pady=PAD)
 
         def ok():
-            sel = box.curselection()
-            picked["i"] = sel[0] if sel else None
+            sel = box.selection()
+            picked["i"] = int(sel[0]) if sel else None
             win.destroy()
 
         bar = ttk.Frame(win)
@@ -1196,7 +1319,7 @@ class App:
         ttk.Button(bar, text="Cancel", command=win.destroy).pack(side="left")
         ttk.Button(bar, text="Continue", command=ok).pack(side="left", padx=(PAD, 0))
         win.columnconfigure(0, weight=1)
-        # Placed, then made modal, then waited on -- in that order.  grab_set() before the window has
+        # Placed, then made modal, then waited on, in that order.  grab_set() before the window has
         # been laid out takes the pointer to wherever it currently is, which with no placement is the
         # corner of the desktop.
         self._centre(win)
@@ -1230,7 +1353,7 @@ class App:
         win.transient(self.root)
         out = {"code": None}
         ttk.Label(win, wraplength=360,
-                  text="Enter the %d-digit code shown on %s." % (digits, name)).grid(
+                  text="Enter the %d-digit code shown on %s" % (digits, name)).grid(
             row=0, column=0, columnspan=2, sticky="w", padx=PAD, pady=(PAD, 0))
         var = tk.StringVar()
         # Wide enough for the grouped form the user is looking at (digits + 2 spaces) and then some,
@@ -1239,7 +1362,7 @@ class App:
         entry = ttk.Entry(win, textvariable=var, width=digits + 6, font=("Consolas", 16))
         entry.grid(row=1, column=0, columnspan=2, sticky="w", padx=PAD, pady=PAD)
         entry.focus_set()
-        note = ttk.Label(win, foreground="#b3261e", text="")
+        note = ttk.Label(win, style="Error.TLabel", text="")
         note.grid(row=2, column=0, columnspan=2, sticky="w", padx=PAD)
 
         def ok():
@@ -1254,7 +1377,7 @@ class App:
             # only symptom would be "wrong code" for a code that was right.
             code = re.sub(r"\s+", "", var.get())
             if not re.fullmatch(r"\d{%d}" % digits, code):
-                note.config(text="%d digits." % digits)
+                note.config(text="%d digits" % digits)
                 return
             out["code"] = code
             win.destroy()
@@ -1285,8 +1408,8 @@ class App:
         except (OSError, ValueError) as e:
             # ValueError as well as OSError: write_config reads the existing file before writing, so
             # a config.json that is not valid JSON stops the save rather than being silently replaced
-            # by whatever this window happens to be showing. That is the right way round -- the file
-            # holds a PSK and a rotation state this form cannot reconstruct -- but it has to arrive
+            # by whatever this window happens to be showing. That is the right way round, since the
+            # file holds a PSK and a rotation state this form cannot reconstruct, but it has to arrive
             # as a dialog rather than as a traceback nobody sees under pythonw.
             messagebox.showerror("Could not save", str(e), parent=self.root)
             return
@@ -1409,7 +1532,8 @@ def main():
         root.tk.call("tk", "scaling", root.winfo_fpixels("1i") / 72.0)
     except tk.TclError:
         pass
-    App(root)
+    style = _apply_theme(root)
+    App(root, style)
     root.mainloop()
 
 

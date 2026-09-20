@@ -621,7 +621,7 @@ class Cfg:
         self.discovery = as_bool(raw["discovery"])
         self.mdns_name = str(raw["mdns_name"]).strip()
         self.direct = as_bool(raw["direct"])
-        # Host names or literal addresses of peers to reach directly -- this is what this PC dials,
+        # Host names or literal addresses of peers to reach directly: this is what this PC dials,
         # and nothing else uses this list.
         # Empty when the switch is off, exactly as Config.from() does on Android: the
         # addresses stay in the file so they survive a round trip through the switch, but nothing

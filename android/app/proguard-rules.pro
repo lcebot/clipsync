@@ -18,7 +18,7 @@
 # libxposed API 102 instantiates the module via a PUBLIC NO-ARG constructor and then calls
 # XposedInterfaceWrapper.attachFramework(XposedInterface); it does NOT use a
 # (XposedInterface, ModuleLoadedParam) constructor. (The parameterized-constructor shape belonged to
-# an earlier pre-release API and was dropped — see the api's XposedModule "Constructor Requirements":
+# an earlier pre-release API and was dropped; see the api's XposedModule "Constructor Requirements":
 # public default constructor only, framework attaches the interface afterwards, and no work may be
 # done before onModuleLoaded().) Entry declares no constructor, so it gets the implicit public no-arg
 # one; keeping the class whole keeps that constructor and the overridden lifecycle callbacks the

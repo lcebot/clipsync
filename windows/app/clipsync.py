@@ -1340,7 +1340,7 @@ class SyncState:
             item = self.latest_item
             ts, from_id, sha = self.clip_ts, self.clip_from, self.clip_sha
         # Files take part too, same as Android's catchUp(). announce() sends them as an OFFER, and
-        # a peer that already has the bytes answers HAVE -- so the cost of offering something it
+        # a peer that already has the bytes answers HAVE, so the cost of offering something it
         # does not need is one frame, while the cost of *not* offering was that a device which went
         # offline before the transfer finished could never get the file without a fresh copy.
         if item is None:
@@ -2346,7 +2346,7 @@ def announce_keys(state: SyncState):
     """Send T_KEYS to every connected peer, suppressing only *repeats* inside the window.
 
     A plain time window would be wrong: a real change that lands a second after the previous
-    broadcast -- a freshly generated successor, say -- would be swallowed and would not go out until
+    broadcast, a freshly generated successor say, would be swallowed and would not go out until
     the next phase change, possibly a day later. So the window only suppresses an announcement whose
     content is identical to the last one. Matches SyncService.announceKeys().
     """
@@ -2861,7 +2861,7 @@ def dial_thread(peer: str, cfg: Cfg, state: SyncState):
     This gives the PC an outbound client role symmetric to Android's: without it, only whichever side
     happens to accept can ever find the other, so a PC could not reach a phone and two PCs could not
     find each other at all. One thread per peer, with its own back-off, because a peer that is
-    switched off must not slow down the redial of one that is merely rebooting -- a shared back-off
+    switched off must not slow down the redial of one that is merely rebooting: a shared back-off
     would let any single dead target hold up everything else.
 
     A connection that comes up is an ordinary client of `state`, indistinguishable from an inbound
@@ -3076,8 +3076,8 @@ def mdns_thread(cfg: Cfg):
     # *which* device; and the instance name is what the peer sheet shows and what the dialler keys a
     # target by, so it wants to read like a device, not like a sentence.
     name = cfg.mdns_name or host
-    # `v` is published and, on THIS service type, read by nobody -- state it plainly rather than
-    # leave a field that looks like a negotiation.  This end never browses _clipsync._tcp at all
+    # `v` is published and, on THIS service type, read by nobody, so it is stated plainly rather than
+    # left as a field that looks like a negotiation.  This end never browses _clipsync._tcp at all
     # (there is no ServiceBrowser for it anywhere in this file); Android browses it, and its dialler
     # keys targets by instance name without consulting the TXT record.  A version disagreement is
     # therefore found at HELLO, one connection later, which is cheap: nobody is standing there
@@ -3085,7 +3085,7 @@ def mdns_thread(cfg: Cfg):
     #
     # Kept rather than deleted, and the reason is not inertia.  A TXT key is free to send and cannot
     # be added retroactively to builds already installed, so removing it would mean any future
-    # filter could only be applied to peers running a build that came after the decision -- which is
+    # filter could only be applied to peers running a build that came after the decision, which is
     # exactly backwards, since the peers worth filtering are the old ones.  The same key on
     # _clipsync-pair._tcp already earns its keep (clipsync_pair.TXT_VERSION), where the cost of
     # finding out at HELLO instead is a person who has typed a nine-digit code for nothing.

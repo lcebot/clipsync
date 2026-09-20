@@ -1,7 +1,7 @@
 # Installs ClipSync: Python packages, firewall rules, and a logon-time scheduled task running
 # pythonw.exe (no console window).
 #
-# Run it however you like -- double-click, plain PowerShell, elevated PowerShell. It needs
+# Run it however you like: double-click, plain PowerShell, or elevated PowerShell. It needs
 # administrator rights and asks for them itself; being unelevated is not a failure, it is just the
 # state before the prompt.
 #
@@ -15,20 +15,20 @@
 param(
     # The account ClipSync is installed FOR: the one the logon trigger waits for and the one allowed
     # to read the key file. Defaults to whoever started this, and is passed explicitly to the
-    # elevated copy below -- because that copy may not be the same person. On a standard user's PC,
+    # elevated copy below, because that copy may not be the same person. On a standard user's PC,
     # UAC elevation runs as a DIFFERENT account, so $env:USERNAME inside it names the administrator
     # who typed the password, and a task triggered by that account's logon never fires.
     [string] $ForUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 )
 
 # Stop on the first error rather than carrying on with a half-install. Every step below is
-# idempotent, so the answer to a failure is to fix it and run this again -- which is only useful if
+# idempotent, so the answer to a failure is to fix it and run this again, which is only useful if
 # the run stops where it broke instead of continuing past it.
 $ErrorActionPreference = 'Stop'
 
 # --- elevation -------------------------------------------------------------------------------
-# Asking is the first thing, before any work: the alternative -- doing what can be done unelevated
-# and failing at the first firewall call -- leaves a half-install behind and tells the user to start
+# Asking is the first thing, before any work: the alternative, doing what can be done unelevated
+# and failing at the first firewall call, leaves a half-install behind and tells the user to start
 # again in a different kind of window, which is a thing a script can simply do for them.
 #
 # -NoExit on the child, because the elevated window is a NEW window: without it everything this
@@ -43,7 +43,7 @@ if (-not $isAdmin) {
             '-NoExit', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"",
             '-ForUser', "`"$ForUser`"")
     } catch {
-        # The user said no. THAT is the failure -- not the lack of rights a moment ago.
+        # The user said no. THAT is the failure, not the lack of rights a moment ago.
         Write-Host ""
         Write-Host "Cancelled: without administrator rights the firewall rules and the scheduled" -ForegroundColor Red
         Write-Host "task cannot be created, so nothing was installed." -ForegroundColor Red
@@ -62,8 +62,8 @@ $state = @{ rules = @(); task = $null; packages = @() }
 # the package list is merged into what was recorded before. $null when there is no file yet, and
 # every use of it tolerates that.
 #
-# -Encoding UTF8 on every read below, config.json included. Windows PowerShell 5.1 -- the one a
-# double-clicked .ps1 runs under -- "defaults to Windows-1252 encoding when there's no BOM", and
+# -Encoding UTF8 on every read below, config.json included. Windows PowerShell 5.1, the one a
+# double-clicked .ps1 runs under, "defaults to Windows-1252 encoding when there's no BOM", and
 # config.json is written by Python with no BOM and may hold a files_dir or a device name that is not
 # ASCII. Naming the encoding also makes the BOM this script's own Set-Content writes a non-issue on
 # the way back in.
@@ -82,7 +82,7 @@ $pythonw = Join-Path (Split-Path -Parent $python) "pythonw.exe"
 
 # --- Python packages -------------------------------------------------------------------------
 # The list lives here rather than in requirements.txt. One file fewer to ship, one fewer to get out
-# of step with this script -- and the thing it was for, `pip install -r`, is a line this script can
+# of step with this script, and the thing it was for, `pip install -r`, is a line this script can
 # simply run.
 #
 # pillow is genuinely optional: without it, received images are still saved as files, they just
@@ -159,7 +159,7 @@ foreach ($rule in @(
 }
 
 # Rules an earlier install made for a DIFFERENT port. The port is part of the rule name, so a port
-# changed in the settings window leaves the old rule behind -- allowing a port nothing listens on,
+# changed in the settings window leaves the old rule behind, allowing a port nothing listens on,
 # forever, with a ClipSync name on it. Recorded names that are not in the set above are the ones
 # this installation created and no longer wants, which is exactly the set that is safe to remove.
 foreach ($name in @($old.rules)) {
@@ -172,7 +172,7 @@ foreach ($name in @($old.rules)) {
 
 # --- the key file ------------------------------------------------------------------------------
 # config.json holds the PSK in clear text, and a file under a folder the user unzipped inherits
-# whatever that folder allows -- which on a machine with several accounts is usually "everyone can
+# whatever that folder allows, which on a machine with several accounts is usually "everyone can
 # read". Inheritance is broken and three principals kept: SYSTEM, Administrators (who can take
 # ownership regardless, so excluding them only makes the file hard to repair) and the user the
 # service runs as, who has to read it to start.
@@ -180,7 +180,7 @@ foreach ($name in @($old.rules)) {
 # icacls, not Get-Acl/Set-Acl, and the reasons are documented rather than stylistic:
 #
 #   * Set-Acl "changes the values in the item's security descriptor to match the values in the
-#     AclObject parameter" -- the WHOLE descriptor Get-Acl handed over, owner included, not just the
+#     AclObject parameter": the WHOLE descriptor Get-Acl handed over, owner included, not just the
 #     DACL. That is a write nobody here needs and the one that fails when the caller does not own
 #     the file. icacls "displays or modifies discretionary access control lists (DACLs)", full stop,
 #     and changing a DACL needs only WRITE_DAC, which an owner always has.
@@ -196,13 +196,13 @@ foreach ($name in @($old.rules)) {
 #     together are the whole of what the four-line Get-Acl dance was doing.
 #
 # configurator.py does the same thing after every Apply, and that is not a duplicate: see the note
-# there -- an atomic write replaces the file, and NTFS moves a file's ACL with it unchanged.
+# there: an atomic write replaces the file, and NTFS moves a file's ACL with it unchanged.
 if (Test-Path $conf) {
     # $LASTEXITCODE, not $ErrorActionPreference: a native command's failure is not a PowerShell
     # error in Windows PowerShell 5.1, so 'Stop' would sail straight past it. The output is let
     # through to the console rather than captured, because when this does fail the icacls message
     # is the only thing that says why. No `2>&1`: in PowerShell 7 that turns the native stderr into
-    # error records, which 'Stop' then throws on -- losing the exit code this line is reading.
+    # error records, which 'Stop' then throws on, losing the exit code this line is reading.
     & icacls $conf /inheritancelevel:r /grant:r '*S-1-5-18:(F)' '*S-1-5-32-544:(F)' "${ForUser}:(F)"
     if ($LASTEXITCODE -ne 0) { throw "could not lock down config.json (icacls exit $LASTEXITCODE)" }
     Write-Host "config.json: readable only by you, Administrators and SYSTEM"
@@ -213,7 +213,7 @@ $taskName = "ClipSync"
 $action   = New-ScheduledTaskAction -Execute $pythonw `
                 -Argument "`"$(Join-Path $app 'clipsync.py')`"" `
                 -WorkingDirectory $app
-# $ForUser is DOMAIN\user -- WindowsIdentity.Name "gets the user's Windows logon name", documented
+# $ForUser is DOMAIN\user, and WindowsIdentity.Name "gets the user's Windows logon name", documented
 # as being "in the form DOMAIN\USERNAME"
 # (https://learn.microsoft.com/en-us/dotnet/api/system.security.principal.windowsidentity.name), and
 # on a workgroup machine the domain part is the computer name, which is exactly what Task Scheduler
@@ -228,15 +228,15 @@ $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoi
 # way to state the logon type, and the logon type is the difference between this working and not.
 #
 # `Register-ScheduledTask -User X` with no -Password leaves the choice to Task Scheduler, and the
-# choice it may make is S4U -- "use an existing interactive token to run a task ... no password is
+# choice it may make is S4U: "use an existing interactive token to run a task ... no password is
 # stored by the system and there is no access to either the network or encrypted files". That is the
 # wrong context for a clipboard: this process opens the clipboard, registers a message-only window
 # and listens on a socket, all of which belong to the user's interactive session.
 # Interactive == TASK_LOGON_INTERACTIVE_TOKEN: "User must already be logged on. The task will be run
 # only in an existing interactive session."
 # (https://learn.microsoft.com/en-us/windows/win32/taskschd/principal-logontype). Paired with an
-# at-logon trigger, "must already be logged on" is not a restriction at all -- it is the trigger's
-# own precondition -- and it needs no password, so an administrator can register it for someone else.
+# at-logon trigger, "must already be logged on" is not a restriction at all, since it is the trigger's
+# own precondition, and it needs no password, so an administrator can register it for someone else.
 #
 # RunLevel Limited: the least-privileged token. Nothing here wants elevation, and a clipboard
 # listener running as an administrator is a clipboard listener that can be asked to write anywhere.

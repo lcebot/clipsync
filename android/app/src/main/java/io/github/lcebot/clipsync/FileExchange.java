@@ -304,8 +304,8 @@ final class FileExchange implements RelayCoordinator.Host {
             c.sendJson(Connection.T_HAVE, Frames.shaMsg(sha));
             clip.noteCached(sha, cached);
             // Deliberately NOT put on the clipboard. "We already have these bytes" is not "the user
-            // just copied them": an offer can arrive long after the fact -- a peer reconnecting and
-            // catching up, or a file coming back round a network that is not a tree -- and writing
+            // just copied them": an offer can arrive long after the fact, from a peer reconnecting and
+            // catching up, or a file coming back round a network that is not a tree, and writing
             // it here would overwrite whatever the user copied since. That is the flip-flop the
             // forwarded flag and the seen-set exist to stop, and it would walk straight past both,
             // because this branch returns before either is consulted. HAVE + touch is the whole of

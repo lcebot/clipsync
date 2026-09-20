@@ -4,14 +4,14 @@ Pairing on the PC: taking the PSK from a device that has it, and giving it to on
 The flow: the provider opens a window, advertises `_clipsync-pair._tcp` with a random salt in its
 TXT record, and shows a nine-digit code.  The joiner browses, picks a device, and types the code.
 Both derive the same channel key from the code and the salt, and the joiner then speaks the ordinary
-protocol on an ordinary SecureChannel -- HELLO with `role: pair`, then PAIR_ASK -- and gets PAIR_KEY
-with the PSK and the service port.  Nothing new is invented for it; only the key differs.
+protocol on an ordinary SecureChannel, sending HELLO with `role: pair` and then PAIR_ASK, and gets
+PAIR_KEY with the PSK and the service port.  Nothing new is invented for it; only the key differs.
 
 The PC could be made a joiner only, since a provider has to listen and a listening port on Windows
 is a firewall rule somebody has to create. But that cost is not a reason to leave out the case where
 the PC is the device that was set up first, so the provider role lives here too. The firewall rule is
-install.ps1's job -- a **bounded** range from `port + 1`, the same range `Provider` searches, so the
-two cannot disagree about which ports are open.
+install.ps1's job: it opens a **bounded** range from `port + 1`, the same range `Provider` searches,
+so the two cannot disagree about which ports are open.
 
 Free of side effects, like clipsync_config and clipsync_proto, because configurator.py imports it
 and must not drag the service's logging and clipboard registration in with it.
@@ -27,8 +27,8 @@ from cryptography.exceptions import InvalidTag
 
 from clipsync_proto import (PROTOCOL_VERSION, T_HELLO, T_PAIR_ASK, T_PAIR_KEY, SecureChannel)
 
-# Must match Pairing.java exactly -- both ends derive the same key from the same code or nothing
-# works, and nothing about the failure would say why.  CODE_DIGITS and all four scrypt parameters
+# Must match Pairing.java exactly, because both ends derive the same key from the same code or
+# nothing works, and nothing about the failure would say why.  CODE_DIGITS and all four scrypt parameters
 # feed the key derivation, so a mismatch is not a degraded pairing, it is a pairing that fails every
 # time and reports "wrong code" for a code that was typed correctly.  They are not negotiated in the
 # TXT record on purpose: a joiner that lets the provider choose its own work factor lets an attacker
@@ -39,7 +39,7 @@ TXT_SALT = b"s"
 # which made it look like a mechanism when it was decoration.  `find` reads it now, and the reason
 # is specific to *pairing*: on an ordinary link a version mismatch costs a connection nobody was
 # watching, but here it costs the user reading nine digits off another screen, typing them, and
-# waiting out a key derivation -- to be told "wrong code, or the window has closed" about a code
+# waiting out a key derivation, only to be told "wrong code, or the window has closed" about a code
 # that was right.  Skipping the device before it is ever offered is the only place that failure can
 # be turned into something true.
 TXT_VERSION = b"v"
@@ -53,7 +53,7 @@ TXT_VERSION = b"v"
 # SCRYPT_P is the one of the four with slack left in it, and the slack is deliberate: it was set
 # from an ESTIMATE of how long a phone takes, never a measurement, so it stops at the value whose
 # pessimistic estimate is exactly the one-second budget.  Pairing.SCRYPT_P carries the reasoning,
-# how to take the measurement, and what to do with the answer -- P can go UP for free once anybody
+# how to take the measurement, and what to do with the answer: P can go UP for free once anybody
 # has a real figure (linear attacker cost, no extra memory), and the two ends move together or not
 # at all.
 #
@@ -64,14 +64,14 @@ SCRYPT_N = 1 << 14
 SCRYPT_R = 8
 SCRYPT_P = 10
 DK_LEN = 32
-# NOT a derivation parameter -- it is a policy cap on how much scrypt may allocate, so it is the one
+# NOT a derivation parameter: it is a policy cap on how much scrypt may allocate, so it is the one
 # number here that does NOT have to match the other end, and Android could not match it anyway (the
 # reflective KeySpec Conscrypt accepts has six fields and max_mem is not one of them; BoringSSL's
 # own default of 65 MiB applies there).
 #
 # It must still be passed, and this is the trap the whole parameter choice was made around:
 # hashlib.scrypt defaults maxmem to 0, which means OpenSSL's SCRYPT_MAX_MEM of 32 MiB, and OpenSSL
-# needs 128*R*(N+P+2) -- about 16.01 MiB for these numbers, but exactly 32 MiB + change for the
+# needs 128*R*(N+P+2), which is about 16.01 MiB for these numbers, but exactly 32 MiB plus change for the
 # N=2**15 that was the other candidate.  That one would have raised "memory limit exceeded" here
 # while working fine on Android: a pairing broken on one end only, by a default nobody passed.
 # 64 MiB is four times what is needed, so no default on either side is load-bearing.
@@ -99,7 +99,7 @@ CONNECT_TIMEOUT = 5
 WINDOW_S = 120
 MAX_TRIES = 5
 # Where the provider listens.  A bounded search from port+1, and bounded is the point: install.ps1
-# opens exactly this range, so a port outside it would be found free, bound, advertised -- and then
+# opens exactly this range, so a port outside it would be found free, bound, advertised, and then
 # silently unreachable behind the firewall, which is the worst of the three possible failures.
 # Android has no such problem and simply asks the OS for any free port, which is why the two ends
 # are asymmetric here and the asymmetry is not a bug: the port is advertised in the TXT record, so
@@ -114,7 +114,7 @@ HANDSHAKE_TIMEOUT = 10
 ASK_TIMEOUT = 20
 
 # What one served connection turned out to be.  Only ASK_CODE is evidence of anyone guessing, and
-# only it is allowed to spend one of MAX_TRIES -- see Provider._run.
+# only it is allowed to spend one of MAX_TRIES; see Provider._run.
 ATTEMPT_OK = "ok"
 ATTEMPT_CODE = "code"            # the first frame did not decrypt: the code was wrong
 ATTEMPT_VERSION = "version"      # it decrypted, so the code was right; the two ends differ in version
@@ -129,26 +129,26 @@ def channel_key(code: str, salt: bytes) -> bytes:
 
     Nine digits is 10**9 possibilities: the provider's five-try window bounds *online* guessing,
     and nothing bounds an offline attack on a recorded handshake except the cost of trying a code.
-    scrypt makes that cost real.  It does not make it impossible -- a low-entropy secret stays
-    low-entropy, and a PAKE is the only real answer -- but it prices the attack out of being done on
+    scrypt makes that cost real.  It does not make it impossible: a low-entropy secret stays
+    low-entropy, and a PAKE is the only real answer, but it prices the attack out of being done on
     the off-chance, which is the threat that is actually there.
 
     **The numbers, one RTX 4090 walking the whole code space**, from a single published hashcat
     v6.2.6 run: scrypt at exactly our N and r with p=1 is hashcat mode 8900 and measures 7 126 H/s;
     p is that many sequential ROMix passes, so p=10 is 713 H/s. Nine digits at p=10 is an expected
-    hit around 8 days on that one card -- an honest fortnight, not an impossible wall, which is the
-    realistic bound for a low-entropy secret. The full argument, including why the memory footprint
+    hit around 8 days on that one card, which is an honest fortnight rather than an impossible wall,
+    and that is the realistic bound for a low-entropy secret. The full argument, including why the memory footprint
     rather than the work factor is what does the work, and why p stopped at 10, is in the Pairing
     class comment on the Android side; this end's job is to agree with it.
 
     Both ends run native scrypt (`hashlib.scrypt` here, Conscrypt's `SecretKeyFactory.SCRYPT` on
-    Android, which is why minSdk is 35 -- that registration only exists from the android15 branch
+    Android, which is why minSdk is 35, since that registration only exists from the android15 branch
     up), so the derivation costs something under a second on either side, and the timeouts in this
     file are sized around the parts of pairing that actually dominate: a four-second browse, and up
     to ASK_TIMEOUT of a person at the other device deciding. Both implementations derive the key
     *before* opening a socket, so the derivation is never inside anybody else's timeout.
     """
-    # maxmem is explicit and must be -- see SCRYPT_MAXMEM.  dklen is in bytes here; Android's
+    # maxmem is explicit and must be; see SCRYPT_MAXMEM.  dklen is in bytes here; Android's
     # equivalent is in bits.  ASCII, matching Java's `new String(password).getBytes("UTF-8")` over a
     # char[] of digits: for [0-9] the two encodings are byte-identical, which is the only reason the
     # two ends agree, and the reason `join` below refuses a code that is not ASCII digits.
@@ -161,14 +161,14 @@ def format_code(code: str) -> str:
     The code as a person should see it: "123456789" becomes "123 456 789".
 
     **Display only, and the distinction is load-bearing.**  A nine-digit run is read back wrong and
-    read *aloud* worse, and somebody copying a code off one device into another does both -- so the
+    read *aloud* worse, and somebody copying a code off one device into another does both, so the
     two spaces go in here, at the last moment before a label, and nowhere else.  What is generated,
     typed, compared and stretched by `channel_key` is always the nine digits (CODE_DIGITS).
     Feeding the result of this function to a KDF derives a different key on one end only, and the
     user is told their code was wrong.
 
     A plain U+0020 rather than a thin space: both ends draw the code in a monospace font, where
-    every character has the same advance, so the width of the result is computable -- and the
+    every character has the same advance, so the width of the result is computable, and the
     Android sheet does compute it, against a layout budget eleven characters only just fit (see
     pair_code in sheet_pair.xml).  U+2009 would measure a full advance anyway where the font has it
     and something unpredictable where it does not.
@@ -180,13 +180,13 @@ def find(timeout: float = 4.0) -> list:
     """
     Browse for devices offering to pair.
 
-    Devices that advertise a protocol version this build cannot speak are left out -- see
+    Devices that advertise a protocol version this build cannot speak are left out; see
     TXT_VERSION.  That means an empty result has two causes, not one, and a caller that only offers
     "check the other device has its window open" will be wrong about the second; the configurator's
     wording names both.
 
     :return: [(display name, [(host, port), ...], salt bytes)], newest resolution last
-    :raises RuntimeError: if zeroconf is not installed -- the same dependency the advertiser needs
+    :raises RuntimeError: if zeroconf is not installed, the same dependency the advertiser needs
     """
     try:
         from zeroconf import ServiceBrowser, ServiceListener, Zeroconf
@@ -206,7 +206,7 @@ def find(timeout: float = 4.0) -> list:
                 return                       # not one of ours, or a truncated record
             # Only an explicit disagreement is a reason to hide a device.  A record without `v` is
             # an older build, not an incompatible one, and the handshake is still the authority on
-            # whether the two can talk -- this is an early exit from a case we can already name, not
+            # whether the two can talk, so this is an early exit from a case we can already name, not
             # a second gate that gets to veto.  Erring the other way would make a device silently
             # invisible because its TXT record was truncated by a flaky resolver.
             ver = props.get(TXT_VERSION)
@@ -215,7 +215,7 @@ def find(timeout: float = 4.0) -> list:
             # from_hex, not bytes(): the TXT value is the salt written as 32 hex characters, so
             # bytes() gives the ASCII of the digits rather than the sixteen bytes they spell.  The
             # two ends then derive different keys from the same correct code, the joiner's HELLO
-            # fails to decrypt, the provider closes -- and every code, right or wrong, reports
+            # fails to decrypt, the provider closes, and every code, right or wrong, reports
             # "peer closed".  Nothing about that failure points at this line, which is why it is
             # worth a paragraph.
             try:
@@ -250,14 +250,14 @@ def join(addrs, salt: bytes, code: str, device: str) -> dict:
     Ask one provider for the key.
 
     A wrong code does not produce a "wrong code" message and cannot: the code *is* the channel key,
-    so getting it wrong fails at the first frame as a decrypt error.  That is the design working --
-    there is no cheaper way to test a guess than by spending one of the provider's five attempts --
+    so getting it wrong fails at the first frame as a decrypt error.  That is the design working:
+    there is no cheaper way to test a guess than by spending one of the provider's five attempts,
     and it is why the error raised here says what the user can act on rather than what the cipher
     reported.
 
     :param addrs: every address of ONE device, tried in turn.  Not raced: an attempt that reaches
                   the far end with the wrong code costs one of its five.
-    :return: the PAIR_KEY payload -- {"psk", "device", "type"}
+    :return: the PAIR_KEY payload, with keys {"psk", "device", "type"}
     """
     # Checked here as well as in the window that collected it: a code of the wrong length cannot be
     # right, and finding that out from the provider would spend one of its five attempts on a typo.
@@ -277,7 +277,7 @@ def join(addrs, salt: bytes, code: str, device: str) -> dict:
         # The connect is separated from everything after it, and the split is exactly where the
         # meaning changes.  Only reaching the address can fail in a way another address might fix;
         # once a socket is open we are talking to the device, and the nonce exchange is plaintext,
-        # so a failure past this point is the code being wrong -- which every address would report
+        # so a failure past this point is the code being wrong, which every address would report
         # identically while spending one of the provider's five attempts each time.
         #
         # This distinction matters because ConnectionError is an OSError: a provider that cannot
@@ -299,7 +299,7 @@ def join(addrs, salt: bytes, code: str, device: str) -> dict:
             ch.send_json(T_HELLO, {"v": PROTOCOL_VERSION, "role": "pair", "device": device, "type": "pc"})
             ch.send(T_PAIR_ASK)
             # The wait for PAIR_KEY is a person, not a network. The provider now shows its user who
-            # is asking before it sends the key, so five seconds -- fine for a handshake -- would
+            # is asking before it sends the key, so five seconds, fine for a handshake, would
             # time this end out while somebody was still reading a device name off a dialog, and the
             # failure would be reported to them as a wrong code. ASK_TIMEOUT is how long that can
             # take, plus one connect timeout of slack for the frame itself.
@@ -310,8 +310,8 @@ def join(addrs, salt: bytes, code: str, device: str) -> dict:
             return json.loads(payload.decode("utf-8"))
         except Exception as e:
             # Three endings share this one message because the wire cannot tell them apart: a wrong
-            # code, a window that has closed, and -- since the provider started asking its user
-            # before handing the key over -- a person who pressed Cancel.  All three are a socket
+            # code, a window that has closed, and, since the provider started asking its user
+            # before handing the key over, a person who pressed Cancel.  All three are a socket
             # that closes before PAIR_KEY arrives.
             raise ConnectionError(
                 "wrong code, or the other device refused, or the pairing window has closed") from e
@@ -350,7 +350,7 @@ class Provider:
 
     The mirror of PairProvider.java, and the same three bounds: a window, five attempts, and one
     caller served at a time.  Pairing is something a person does with two devices in front of them,
-    so there is no concurrency to serve -- and not spawning a thread per connection is what makes a
+    so there is no concurrency to serve, and not spawning a thread per connection is what makes a
     flood cost nothing but a queue.
 
     Only a wrong code counts towards the five, because a wrong code is cheaply distinguishable from
@@ -364,19 +364,19 @@ class Provider:
     def __init__(self, psk_hex: str, base_port: int, device: str, on_ask, on_paired, on_closed,
                  on_attempt=None):
         """
-        Opens the window.  Blocking -- the key derivation is deliberately slow, and binding and
-        advertising are network calls -- so call it off the UI thread.
+        Opens the window.  Blocking, because the key derivation is deliberately slow and binding and
+        advertising are network calls, so call it off the UI thread.
 
         :param on_ask: (device, type) -> bool, called on the provider's thread BEFORE the key is
                        sent, and blocking until the person at this PC answers.  Knowing the code is
                        not consent: a caller that has guessed it, or one the user did not mean to
-                       pair, gets as far as a device name on screen and no further.  Returning False
-                       -- which is also what a timeout must return -- refuses without spending an
+                       pair, gets as far as a device name on screen and no further.  Returning False,
+                       which is also what a timeout must return, refuses without spending an
                        attempt.
         :param on_paired: (device, type) -> None, ONCE PER DEVICE.  The window does not end on a
                           success: setting up three devices is the ordinary case, and closing after
                           the first would mean a new window and a new code read out for each of the
-                          others -- two minutes of work to save nothing.
+                          others, two minutes of work to save nothing.
         :param on_closed: burned: bool -> None, once, when the window is over
         :param on_attempt: (outcome, detail) -> None for every connection that did not end in a
                            key being handed over, on the provider's thread.  Optional only because
@@ -403,8 +403,8 @@ class Provider:
         # avoid, and impossible to explain away afterwards.  Leading zeros kept, because a code the
         # user reads as nine digits is a code they will type as nine.  (Four bytes are still enough,
         # with less room than there was: 10**9 < 2**32 by a factor of 4.29, so the limit is 4e9 and
-        # the loop takes a second turn about 7% of the time -- a few extra reads of os.urandom, once
-        # per pairing window.  A tenth digit would not fit in four bytes at all.)
+        # the loop takes a second turn about 7% of the time, meaning a few extra reads of os.urandom,
+        # once per pairing window.  A tenth digit would not fit in four bytes at all.)
         limit = (1 << 32) - ((1 << 32) % CODE_SPACE)
         while True:
             n = int.from_bytes(os.urandom(4), "big")
@@ -443,7 +443,7 @@ class Provider:
 
         Bounded, and an honest error if none is free, rather than walking to 65535: in practice the
         first candidate is always free, and an unbounded scan would find a port the firewall has
-        never heard of -- which fails later, silently, and looks like a pairing problem.
+        never heard of, which fails later, silently, and looks like a pairing problem.
         """
         last = None
         for port in range(base_port + 1, base_port + 1 + PAIR_PORT_SPAN):
@@ -516,7 +516,7 @@ class Provider:
         """
         One caller, start to finish.
 
-        :return: (outcome, detail) -- one of the ATTEMPT_* constants, and a line for the user.
+        :return: (outcome, detail), one of the ATTEMPT_* constants, and a line for the user.
                  Every exit tells the caller apart from the others on purpose: collapsing them into
                  a single `except Exception: return False` would report, and charge, a version
                  mismatch and a dropped socket as if each were a wrong code.
@@ -557,7 +557,7 @@ class Provider:
                 return ATTEMPT_PROTOCOL, "expected PAIR_ASK, got frame %d" % typ
             # The last gate, and the only one a correct code does not open: the person at this PC
             # sees who is asking before the key leaves it.  PairProvider.java asks in the same place,
-            # for the same reason -- the code is a channel key, not an authorisation.
+            # for the same reason: the code is a channel key, not an authorisation.
             if not self._on_ask(ch.device, ch.node_type):
                 return ATTEMPT_DECLINED, "%s was refused at this PC" % ch.device
             # The port goes with the key: it is the other half of being able to connect at all, and
@@ -580,14 +580,14 @@ class Provider:
     def _shut(self):
         """Take the window down.  Idempotent, because it has to be.
 
-        The window can end three ways -- the clock, MAX_TRIES, and close() from the UI -- and the
+        The window can end three ways: the clock, MAX_TRIES, and close() from the UI, and the
         first two race the third, so more than one path can call this. Taking `self._zc` out of the
         field before acting on it (`zc, self._zc = self._zc, None`) is what makes a second call a
         no-op instead of operating on an already-closed Zeroconf instance.
 
         Only `zc.close()` is called, never `unregister_service` first: `Zeroconf.close()` already
         unregisters everything it registered, goodbye packets included, so a separate call would be
-        redundant -- and `unregister_service` schedules work onto Zeroconf's own event loop, which a
+        redundant, and `unregister_service` schedules work onto Zeroconf's own event loop, which a
         second, redundant call could find already gone.
         """
         zc, self._zc = self._zc, None
@@ -602,7 +602,7 @@ class Provider:
             pass
 
     def close(self):
-        """Give up on the window early -- the user closed the dialog, or pressed Cancel."""
+        """Give up on the window early: the user closed the dialog, or pressed Cancel."""
         if self._closed:
             return
         self._closed = True

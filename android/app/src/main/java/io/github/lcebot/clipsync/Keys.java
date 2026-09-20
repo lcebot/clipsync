@@ -17,7 +17,7 @@ import java.util.List;
  * <pre>
  *   0h        a key becomes active
  *   48h       PRE-RETIRED: a successor is generated, announced to every peer, and accepted
- *   72h       RETIRED: the successor becomes the key -- but only if some peer has agreed
+ *   72h       RETIRED: the successor becomes the key, but only if some peer has agreed
  *             +24h at a time, if none has
  * </pre>
  *

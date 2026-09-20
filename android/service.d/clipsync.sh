@@ -23,21 +23,21 @@ sleep 10
 # Is auto-start wanted? The BootReceiver component's enabled state IS the app's Stop switch: Stop
 # calls setComponentEnabledSetting(DISABLED), Apply re-enables it, and the system_server watchdog
 # reads the same flag (PackageManager.getComponentEnabledSetting). Starting the service
-# unconditionally from here overrode a Stop the user had pressed — the service came back by itself
+# unconditionally from here overrode a Stop the user had pressed: the service came back by itself
 # after every reboot, with nothing in the app to explain why.
 #
 # There is genuinely no `pm get-enabled-setting` (pm only offers enable/disable/disable-user/
 # disable-until-used/default-state and `list packages -d/-e`), so we read `pm dump`. IMPORTANT: a
-# component's per-component state is NOT printed as an "enabledSetting=<n>" field — that field does
+# component's per-component state is NOT printed as an "enabledSetting=<n>" field: that field does
 # not exist. dumpsys/pm dump surfaces the sets instead: a component the user disabled appears under
 # the package's "disabledComponents:" section (and an explicitly-enabled one under
 # "enabledComponents:"); the bare "enabled=<n>" line is the whole-PACKAGE state, not this component.
 # Verified against AOSP: Settings.java persists/reads TAG_DISABLED_COMPONENTS / TAG_ENABLED_COMPONENTS
 # and has no per-component enabledSetting print. COMPONENT_ENABLED_STATE_* numbers, for reference,
-# are DEFAULT=0, ENABLED=1, DISABLED=2, DISABLED_USER=3 — but we key off the list, not a number.
+# are DEFAULT=0, ENABLED=1, DISABLED=2, DISABLED_USER=3, but we key off the list, not a number.
 #
 # So: treat auto-start as OFF only when BootReceiver is clearly listed inside a disabledComponents
-# block. Anything else — dump fails, format differs on some ROM, component simply absent — falls
+# block. Anything else (dump fails, format differs on some ROM, component simply absent) falls
 # through to starting the service (fail-open), the same direction as a fresh install where nothing
 # has been disabled yet. awk resets the flag at the enabledComponents header and at any other
 # section header so a match can only come from the disabled block.

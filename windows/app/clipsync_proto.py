@@ -148,7 +148,7 @@ T_OFFER, T_WANT, T_HAVE, T_SKIP = 7, 8, 9, 10
 T_CHUNK, T_PULL, T_END, T_ABORT = 11, 12, 13, 14
 
 # Pairing: ask for the key, and here it is.  Ordinary frames on an ordinary channel, reached after
-# an ordinary handshake and an ordinary HELLO -- only the key differs, being derived from the code
+# an ordinary handshake and an ordinary HELLO, where only the key differs, being derived from the code
 # the user reads off one screen and types into the other rather than from the PSK.  That is the
 # whole of what makes pairing possible without new machinery.  See clipsync_pair.py.
 T_PAIR_ASK, T_PAIR_KEY = 15, 16
@@ -488,8 +488,8 @@ class SecureChannel:
             # empty string: letting it escape unhandled would produce a log line that ends in
             # "dropped: " with no reason attached.
             #
-            # On the FIRST frame it means the peer holds a different key -- the frame arrived whole
-            # and did not authenticate -- which is the only common cause and the only one the user
+            # On the FIRST frame it means the peer holds a different key: the frame arrived whole
+            # and did not authenticate, which is the only common cause and the only one the user
             # can act on. Later in a session it means the stream desynchronised, which is a bug
             # here rather than a misconfiguration, so the two are worth telling apart.
             if self.rx_ctr == 0:
