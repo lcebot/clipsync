@@ -1,0 +1,39 @@
+# One place for every version, because most of them are pre-releases that move together: the
+# material3 alpha decides the Compose alpha, which decides compileSdk, which decides the AGP.
+# Bump them as a set and read each library's "API changes" first.
+
+[versions]
+agp = "9.5.0-alpha06"
+# The Kotlin compiler and the Compose compiler plugin ship as one version and must stay equal.
+kotlin = "2.5.0-Beta1"
+compose-bom-alpha = "2026.09.01"
+activity = "1.14.0-alpha03"
+lifecycle = "2.12.0-alpha04"
+core = "1.19.1"
+coroutines = "1.11.0"
+junit = "4.13.2"
+libxposed = "102.0.0"
+
+[libraries]
+compose-bom-alpha = { module = "androidx.compose:compose-bom-alpha", version.ref = "compose-bom-alpha" }
+compose-material3 = { module = "androidx.compose.material3:material3" }
+compose-ui = { module = "androidx.compose.ui:ui" }
+compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling" }
+compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview" }
+compose-ui-test-junit4 = { module = "androidx.compose.ui:ui-test-junit4" }
+compose-ui-test-manifest = { module = "androidx.compose.ui:ui-test-manifest" }
+activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activity" }
+lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycle" }
+lifecycle-viewmodel-compose = { module = "androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "lifecycle" }
+core-ktx = { module = "androidx.core:core-ktx", version.ref = "core" }
+coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
+coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
+junit = { module = "junit:junit", version.ref = "junit" }
+libxposed-api = { module = "io.github.libxposed:api", version.ref = "libxposed" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+# Declared at the root with `apply false` only to put this compiler version on the build classpath,
+# so AGP's built-in Kotlin compiles with the same version the Compose plugin expects.
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }

@@ -2,7 +2,9 @@ import java.security.KeyStore
 import java.util.Properties
 
 plugins {
-    id("com.android.application")
+    alias(libs.plugins.android.application)
+    // Compose compiler only. Kotlin itself is AGP 9's built-in Kotlin, see the root build file.
+    alias(libs.plugins.kotlin.compose)
 }
 
 // Nothing is configured at build time. The app is set up on the device, which is also why a
@@ -10,11 +12,11 @@ plugins {
 // it. Every setting lives in clipsync.conf in the app's private storage, written by the settings
 // screen; the build knows about none of them.
 
-// Release signing, PKCS12. Locally: android/keystore.properties (gitignored) with storeFile /
-// storePassword and optionally keyAlias / keyPassword; storeFile is absolute, or relative to
+// Release signing, PKCS12. Locally: android/keystore.properties (gitignored) with storeFile,
+// storePassword and optionally keyAlias and keyPassword; storeFile is absolute, or relative to
 // android/, since the keystore itself belongs outside the repository. On CI the same values arrive
 // as environment variables. With neither, assembleRelease still runs and produces an unsigned APK,
-// which simply cannot be installed.
+// which cannot be installed.
 val keystoreProps = Properties().apply {
     val f = rootProject.file("keystore.properties")
     if (f.exists()) f.inputStream().use { load(it) }
@@ -28,8 +30,8 @@ val releaseVersionCode = (findProperty("clipsync.versionCode") as String?)?.toIn
 val keystoreFile = signingValue("storeFile", "KEYSTORE_FILE")?.let { rootProject.file(it) }
 val keystorePassword = signingValue("storePassword", "KEYSTORE_PASSWORD")
 // A .p12 written by PowerShell's Export-PfxCertificate takes its entry name from the certificate's
-// friendly name, which isn't always what you expect and can't be inspected without keytool. With no
-// alias configured, read the store's only alias instead of making anyone guess.
+// friendly name, which is not always what you expect and cannot be inspected without keytool. With
+// no alias configured, read the store's only alias instead of making anyone guess.
 val keystoreAlias = signingValue("keyAlias", "KEY_ALIAS") ?: keystoreFile?.takeIf { it.isFile }?.let { f ->
     KeyStore.getInstance("PKCS12").run {
         f.inputStream().use { load(it, keystorePassword?.toCharArray()) }
@@ -39,46 +41,32 @@ val keystoreAlias = signingValue("keyAlias", "KEY_ALIAS") ?: keystoreFile?.takeI
 
 android {
     namespace = "io.github.lcebot.clipsync"
-    // 35 is not a spare number here: it is exactly what the Material dependency below demands.
-    // An AAR records the compileSdk it was built against, and AGP refuses at BUILD time: a
-    // checkReleaseAarMetadata failure saying the dependency "requires libraries and applications
-    // that depend on it to compile against version N or later", never a runtime surprise, if the
-    // consumer compiles lower. Material 1.14.0 is built with compileSdkVersion 35 (its root
-    // build.gradle at tag 1.14.0 sets `compileSdkVersion = 35`, and the 1.14.0 release notes list
-    // only minSdk 23 and AGP 8.11.1 under "Important"). An earlier review guessed 1.13+ wanted 36;
-    // it does not, since 1.13.0's notes say 35 as well. So this may stay at 35, and 1.14 is not a reason
-    // to raise it.
-    compileSdk = 35
+    // 37 because Compose Material 3 1.5.0 alphas and the Compose 1.12+ line they depend on refuse
+    // to build against anything lower: AGP's checkAarMetadata fails the build, it is never a
+    // runtime surprise. If that check asks for 37.1, the form is
+    // `release(37) { minorApiLevel = 1 }`. compileSdk only decides which APIs the compiler can see;
+    // it does not change behaviour on any device, which is targetSdk's job.
+    compileSdk { version = release(37) }
 
     defaultConfig {
         applicationId = "io.github.lcebot.clipsync"
-        // 35, and this number has been 35, then 34, and now 35 again. The round trip is the whole
-        // comment, because the reason it went down is still true and is not the reason it came back.
+        // 35 because pairing needs Conscrypt's native scrypt, which AOSP registers as
+        // SecretKeyFactory.SCRYPT from android15-release on; android14 offers DESede and nothing
+        // else there. The only stretching below 35 would be bundled pure-Java PBKDF2, which costs
+        // seconds on a phone and still buys less brute-force resistance than a fraction of that in
+        // scrypt. Conscrypt is an updatable Mainline module, so some API 34 devices have scrypt
+        // anyway, but a key cannot be derived from "some", and the failure is
+        // NoSuchAlgorithmException, a device that cannot pair at all.
         //
-        // It went from 35 to 34 because nothing in the app needed 35: the highest API actually
-        // called is the specialUse foreground-service type, which is 34. 35 was excluding most of
-        // the devices this app is FOR (Xposed and root users are disproportionately on older ROMs)
-        // in exchange for nothing at all. That argument was correct and has not been refuted.
-        //
-        // It came back to 35 because something finally does need it, and it is not an API call:
-        // Conscrypt's native scrypt. AOSP's external/conscrypt registers
-        // `SecretKeyFactory.SCRYPT` for the first time on the android15-release branch; on
-        // android14-release and android14-qpr3-release the SecretKeyFactory block is DESEDE and its
-        // TDEA alias and nothing else. Below 35 the only stretching available to this app is the
-        // bundled pure-Java BouncyCastle PBKDF2, which costs SECONDS on a phone and still buys less
-        // brute-force resistance than a fraction of that in scrypt does. See Pairing.SCRYPT_N for the
-        // measured comparison. Conscrypt is an updatable Mainline module, so some API-34 devices
-        // will have picked scrypt up anyway, but "will have" is not something to derive a key from,
-        // and the failure mode is NoSuchAlgorithmException, i.e. a device that cannot pair at all.
-        //
-        // The price is paid in devices, knowingly: every Android 14 device is now excluded, and on
-        // this app's audience that is a real number rather than a rounding error. What it buys is
-        // one specific thing: the pairing code, which is the whole of the authentication for
-        // handing over the PSK, goes from ~21 GPU-hours to exhaust to ~13 GPU-days, while the phone
-        // spends less time on it than before. Nothing else in the app changes. If that trade ever
-        // stops looking worth it, the way back is to revert this number AND Pairing/clipsync_pair
-        // together: the two ends derive the same key or pairing silently fails, so they move as one.
+        // The price is every Android 14 device, which on this app's audience (Xposed and root users,
+        // often on older ROMs) is a real number. What it buys: the pairing code, the whole of the
+        // authentication for handing over the PSK, needs about 13 GPU-days to exhaust instead of
+        // about 21 GPU-hours, while the phone spends less time on it. See Pairing.SCRYPT_N. Lowering
+        // this means changing Pairing and clipsync_pair together: both ends must derive the same key
+        // or pairing fails without saying why.
         minSdk = 35
+        // Stays 35 through the Compose migration: moving it opts into new platform behaviour and is
+        // reviewed on its own.
         targetSdk = 35
         // Both come from a git tag, which the workflow parses and passes in as -P: a release uses
         // its own tag, any other build uses the newest one plus the short commit in versionName
@@ -86,8 +74,7 @@ android {
         // fallback for a build with no tag in reach (a fresh clone with no tags, or a local build).
         //
         // Tags are vA.B.C with A and B one digit and C up to two, and versionCode is
-        // A*1000 + B*100 + C, so 1.0.0 becomes 1000, 1.0.12 becomes 1012, 1.1.0 becomes 1100, and
-        // 2.0.0 becomes 2000.
+        // A*1000 + B*100 + C, so 1.0.0 is 1000, 1.0.12 is 1012, 1.1.0 is 1100 and 2.0.0 is 2000.
         // Android only requires that the number never decreases, which that ordering guarantees.
         versionCode = releaseVersionCode ?: 1000
         versionName = releaseVersionName ?: "1.0"
@@ -102,8 +89,8 @@ android {
             // PKCS12 keeps one password for the whole store; Export-PfxCertificate never sets a
             // separate one, so the store password is the key password unless told otherwise.
             keyPassword = signingValue("keyPassword", "KEY_PASSWORD") ?: keystorePassword
-            // v1 is the old JAR signing, only consulted below API 24, dead weight at minSdk 35,
-            // and the scheme the Janus class of attacks targeted. v3 (API 28+) carries the
+            // v1 is JAR signing, only consulted below API 24, dead weight at minSdk 35, and the
+            // scheme the Janus class of attacks targets. v3 (API 28+) carries the
             // proof-of-rotation lineage: without a v3 block in the installed APK there is no
             // supported way to ever move this app to a different key. v4 only buys incremental
             // `adb install` and needs its own .idsig file alongside the APK.
@@ -122,20 +109,39 @@ android {
         }
     }
 
+    buildFeatures {
+        compose = true
+    }
+
     compileOptions {
-        // libxposed api 102 uses sealed interfaces / records, which needs Java 17
+        // libxposed api 102 uses sealed interfaces and records, which need Java 17. Kotlin's
+        // jvmTarget follows targetCompatibility, so both languages emit the same bytecode level.
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
 }
 
 dependencies {
-    compileOnly("io.github.libxposed:api:102.0.0")     // libxposed API 102, the only entry (Entry)
-    // androidx.annotation (for @NonNull in Entry) comes transitively via appcompat/core; pinning a
-    // newer version explicitly collides with AGP's runtime/compile consistent resolution.
-    implementation("androidx.appcompat:appcompat:1.7.0")
-    implementation("androidx.core:core:1.13.1")
-    // Material 3 Expressive themes (1.14+). Needs compileSdk 35 and minSdk 23, both satisfied
-    // above; see the note on compileSdk for why 35 is the exact requirement and not a guess.
-    implementation("com.google.android.material:material:1.14.0")
+    compileOnly(libs.libxposed.api)                  // libxposed API 102, the only entry (Entry)
+
+    val composeBom = platform(libs.compose.bom.alpha)
+    implementation(composeBom)
+    androidTestImplementation(composeBom)
+    implementation(libs.compose.material3)            // 1.5.0-alpha29 through the alpha BOM
+    implementation(libs.compose.ui)
+    implementation(libs.compose.ui.tooling.preview)
+    debugImplementation(libs.compose.ui.tooling)
+    debugImplementation(libs.compose.ui.test.manifest)
+    androidTestImplementation(libs.compose.ui.test.junit4)
+
+    implementation(libs.activity.compose)
+    implementation(libs.lifecycle.runtime.compose)
+    implementation(libs.lifecycle.viewmodel.compose)
+    // Also the source of androidx.annotation for xposed/Entry's @NonNull. Pinning annotation
+    // separately collides with AGP's consistent runtime and compile resolution.
+    implementation(libs.core.ktx)
+    implementation(libs.coroutines.android)
+
+    testImplementation(libs.junit)
+    testImplementation(libs.coroutines.test)
 }

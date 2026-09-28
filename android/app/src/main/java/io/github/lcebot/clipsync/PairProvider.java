@@ -32,9 +32,9 @@ import java.util.Map;
  * is the same wall a wrong PSK meets on the ordinary port. That is what keeps the surface here to
  * two short JSON frames.
  */
-final class PairProvider implements Closeable {
+public final class PairProvider implements Closeable {
     /** What the UI needs to show, and the only way out of this class. */
-    interface Listener {
+    public interface Listener {
         /**
          * A device completed the handshake and was given the key.
          *
@@ -97,7 +97,7 @@ final class PairProvider implements Closeable {
      * turns it into the "123 456 789" a person is shown, and that happens in the sheet, once,
      * on its way into a TextView.
      */
-    final String code;
+    public final String code;
     /**
      * When the window will close, by the same clock a countdown would read.
      *
@@ -107,7 +107,7 @@ final class PairProvider implements Closeable {
      * behind by the end of a two-minute window and would still be showing time left after the socket
      * had timed out. The gap is small but not zero, and publishing the real deadline costs nothing.
      */
-    final long closesAt;
+    public final long closesAt;
     private Mdns.Advert advert;
     private volatile boolean closed;
     private int failures;
@@ -118,7 +118,7 @@ final class PairProvider implements Closeable {
      *
      * @param pskHex the key to give away, as the configuration stores it
      */
-    PairProvider(Context ctx, String pskHex, int port, Listener listener) throws Exception {
+    public PairProvider(Context ctx, String pskHex, int port, Listener listener) throws Exception {
         this.ctx = ctx;
         this.pskHex = pskHex;
         this.port = port;
@@ -315,5 +315,5 @@ final class PairProvider implements Closeable {
      * the mirror image: it must be at least this long, because after PAIR_ASK it is waiting on a
      * human at this end.
      */
-    static final long ASK_TIMEOUT_MS = 20_000;
+    public static final long ASK_TIMEOUT_MS = 20_000;
 }

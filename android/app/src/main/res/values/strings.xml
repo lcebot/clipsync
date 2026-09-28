@@ -29,6 +29,9 @@
          one bad outcome is and how to recover from it. The hours are the real constants; if
          Keys.java changes, this changes with it. -->
     <string name="psk_rotate_help">Every 48 hours this device makes a new key and passes it to the others, so a key that leaks is only useful for a few days. Devices that were switched off still connect, because the last few keys keep working for about a week. A device left off longer than that has to be paired again.</string>
+    <!-- The reveal toggle in the key field, named for what pressing it does. -->
+    <string name="psk_show">Show key</string>
+    <string name="psk_hide">Hide key</string>
     <string name="psk_generate">Generate random PSK key</string>
     <string name="psk_replace_title">Replace the key?</string>
     <string name="psk_replace_body">Every other device is using the current key and will stop connecting until you set the new one there too.</string>
@@ -46,8 +49,8 @@
          switch does not leave the message behind. -->
     <string name="peer_empty">Enter a host name or IP address, or remove this row</string>
     <string name="peer_empty_last">Enter a host name or IP address, or turn off %1$s</string>
-    <!-- Carries no "+": the button has no icon (see page_settings.xml) and a typographic plus in a
-         label is not how M3 writes a text button. A plain verb phrase says it. -->
+    <!-- Carries no "+": the button shows an add icon, and a typographic plus in a label is not how
+         M3 writes a button. A plain verb phrase says it. -->
     <string name="peer_add">Add address</string>
     <string name="peer_remove">Remove</string>
     <string name="peer_duplicate">Already listed above</string>
@@ -95,8 +98,8 @@
 
     <!-- Status chip in the app bar. Five states, distinct because the answer to "what do I do now"
          differs for each: Stopped needs a button, No network needs the network fixed, Idle needs
-         nothing. Disconnected is gone, because with several peers it carried no information the sheet does
-         not carry better: the chip carries a COUNT, and which kind of link each peer has belongs
+         nothing. There is no "Disconnected": with several peers it would carry no information the sheet
+         does not carry better. The chip carries a COUNT, and which kind of link each peer has belongs
          beside that peer in the status sheet. -->
     <string name="state_stopped">Stopped</string>
     <string name="state_connecting">Connecting…</string>
@@ -199,8 +202,8 @@
     <string name="pair_join_body">On the device that already works, open Settings and tap “Pair new devices”</string>
     <string name="pair_searching">Looking on this network</string>
     <!-- Kept to two lines, and that is a layout decision as much as an editorial one: this string
-         replaces pair_join_body in the same TextView, which reserves two lines (sheet_pair.xml says
-         why), so anything that fits in two leaves the sheet exactly where it was, and this is a
+         replaces pair_join_body on the same line of the pairing sheet, which reserves two lines
+         (ui/pair/PairSheet.kt says why), so anything that fits in two leaves the sheet exactly where it was, and this is a
          dead end with a button under it, which is the last moment to be moving the surface the user
          is reading. Both checks survive because both are things the user can act on. -->
     <string name="pair_none_found">Nothing is offering to pair. Check the other device\'s window, and that both are on one Wi-Fi.</string>
@@ -208,7 +211,7 @@
     <string name="pair_pick">Found these. Pick the one showing a code.</string>
     <string name="pair_enter_code">Enter the code shown on %1$s</string>
     <!-- "Nine-digit code", and it counts digits rather than characters on purpose: the other device
-         shows "123 456 789", the field takes it either way (sheet_pair.xml says how), and telling
+         shows "123 456 789", the field takes it either way (ui/pair/PairSheet.kt says how), and telling
          the user the length in characters would make the spaces sound like part of the code. They
          are not; they never leave the screen they are drawn on. -->
     <string name="pair_code_hint">Nine-digit code</string>
@@ -230,8 +233,8 @@
 
          Kept even though the derivation is usually brief (Pairing.SCRYPT_P, where the estimate and
          its uncertainty are written out): on a slow or loaded phone it is the only true thing the
-         sheet could be saying. PairSheet.connect has the argument for why the flicker moves nothing
-         in the layout.
+         sheet could be saying, and the swap between the two labels happens on a line whose height does
+         not change.
 
          Both are short on purpose, as are pair_opening, pair_searching and pair_waiting_for: they
          all land in the same one-line row beside the loading indicator, and one of them wrapping to

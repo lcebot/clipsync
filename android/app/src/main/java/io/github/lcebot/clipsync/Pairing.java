@@ -83,7 +83,7 @@ import androidx.annotation.Keep;
  * one precomputed table from covering every pairing anyone ever performs. Public is fine; a salt is
  * not a secret, it only has to be unique.
  */
-final class Pairing {
+public final class Pairing {
     /** Its own service type, so ordinary discovery never has to filter it out and vice versa. */
     static final String SERVICE_TYPE = "_clipsync-pair._tcp.";
     /**
@@ -126,7 +126,7 @@ final class Pairing {
      * generated, what is compared, and what {@link #channelKey} stretches; the field may hold
      * eleven characters, and what it holds is stripped before it is measured against this.
      */
-    static final int CODE_DIGITS = 9;
+    public static final int CODE_DIGITS = 9;
 
     /**
      * scrypt's cost parameter N, and the anchor of the whole choice below.
@@ -225,7 +225,7 @@ final class Pairing {
      * somebody has an actual figure, <b>raise it</b>: p=16 if the real number is at the fast end,
      * p=20 if it is faster still; the only ceiling is what a user will wait for.
      *
-     * <p><b>How to measure:</b> wrap the {@link #channelKey} call in {@code PairSheet.connect} in a
+     * <p><b>How to measure:</b> wrap the {@link #channelKey} call in {@code PairJoiner.join} in a
      * {@code SystemClock.elapsedRealtime()} pair and log the delta on the oldest and slowest device
      * the project cares about, with the screen on and the CPU not already warm from a build.
      *
@@ -347,14 +347,14 @@ final class Pairing {
      *
      * <p>A plain U+0020 and not a thin space: this is rendered in {@code monospace}, where every
      * glyph including the space has the same advance, so the width is predictable and computable,
-     * which is what the budget in {@code sheet_pair.xml} is computed from. A U+2009 would either
+     * which is what the width budget of the code line in {@code ui/pair/PairSheet.kt} rests on. A U+2009 would either
      * measure one full advance anyway (if the font has it) or fall back to another font and measure
      * something nobody here can predict.
      *
      * <p>Anything that is not exactly {@link #CODE_DIGITS} digits is returned untouched, so a
      * placeholder or an error string passed here by mistake is not silently mangled.
      */
-    static String grouped(String code) {
+    public static String grouped(String code) {
         if (code == null || code.length() != CODE_DIGITS) return code;
         StringBuilder out = new StringBuilder(CODE_DIGITS + 2);
         for (int i = 0; i < CODE_DIGITS; i++) {
@@ -373,7 +373,7 @@ final class Pairing {
      * rather than validating: what is left is then measured against {@link #CODE_DIGITS}, so a
      * grouped code and a bare one are the same nine digits and anything else is still rejected.
      */
-    static String digitsOnly(String typed) {
+    public static String digitsOnly(String typed) {
         if (typed == null) return "";
         StringBuilder out = new StringBuilder(typed.length());
         for (int i = 0; i < typed.length(); i++) {

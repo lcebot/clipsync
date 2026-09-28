@@ -29,7 +29,7 @@ import java.util.UUID;
  * read timeout it holds a live link and a stale one and cannot collapse them by id. That is bounded,
  * self-healing, and costs duplicate delivery rather than lost delivery.
  */
-final class Node {
+public final class Node {
     /**
      * Generated when this class is first touched, which is once per process; the sync service and
      * the UI run in separate processes and therefore have separate ids, which is correct: only the
@@ -56,7 +56,7 @@ final class Node {
     }
 
     /** The first 8 characters, which is what logs and the peer list show beside the friendly name. */
-    static String shortId(String id) {
+    public static String shortId(String id) {
         return id == null ? "?" : id.substring(0, Math.min(8, id.length()));
     }
 

@@ -28,11 +28,11 @@ import java.util.Properties;
  * {@link Pairing#SCRYPT_P}), and the wait for the provider's user to say yes is a person rather than
  * a network. Nothing in this class may be called from the main thread.
  */
-final class PairJoiner {
+public final class PairJoiner {
     private PairJoiner() {}
 
     /** What was found on the LAN, and what the user picks between. */
-    static List<Mdns.Instance> find(Context ctx, long timeoutMs) {
+    public static List<Mdns.Instance> find(Context ctx, long timeoutMs) {
         return Mdns.discover(ctx, network(ctx), Pairing.SERVICE_TYPE, timeoutMs);
     }
 
@@ -42,10 +42,10 @@ final class PairJoiner {
     }
 
     /** The key, the port it is used on, and who gave them. */
-    static final class Result {
-        final String pskHex, device, type;
+    public static final class Result {
+        public final String pskHex, device, type;
         /** The provider's service port, or 0 if it did not say, in which case ours is left alone. */
-        final int port;
+        public final int port;
 
         Result(String pskHex, int port, String device, String type) {
             this.pskHex = pskHex; this.port = port; this.device = device; this.type = type;
@@ -74,7 +74,7 @@ final class PairJoiner {
      *                on the calling thread, so an implementation posts and returns
      * @throws IOException if the advertisement is unusable, nothing answers, or the code is wrong
      */
-    static Result join(Context ctx, Mdns.Instance provider, String code, Runnable derived)
+    public static Result join(Context ctx, Mdns.Instance provider, String code, Runnable derived)
             throws Exception {
         // Version first, because the cost of getting this wrong is paid by a person. On an ordinary
         // link a mismatch wastes one connection nobody is watching; here it wastes copying nine
@@ -171,7 +171,7 @@ final class PairJoiner {
      * <p>Goes through {@link Config#save}, so the whole configuration is validated before a byte is
      * written, so a key that cannot be parsed never reaches the file.
      */
-    static void apply(Context ctx, Result r) throws IOException {
+    public static void apply(Context ctx, Result r) throws IOException {
         Properties v = new Properties();
         // freshKey resets the whole schedule (activation time, successor, old-key ring), so the
         // paired key starts clean rather than inheriting the previous key's rotation state.

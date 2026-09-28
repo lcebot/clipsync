@@ -1,19 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- ClipSync's own palette: the colours used when the system does not hand us one.
 
-     On Android 12+ the wallpaper-derived (Monet) palette replaces every role below, applied as a
-     theme overlay by ClipSyncApp. These are the fallback, and the fallback has to be a COMPLETE
-     scheme rather than a few brand accents: M3 components pick their own roles, and a half-override
-     produces blue buttons on purple cards, the baseline scheme showing through wherever this file
-     stopped. Anything genuinely unused is still defined, because "unused" is a fact about today's
-     layouts.
+     Where the platform has a wallpaper-derived palette, ClipSyncTheme (ui/theme/ColorScheme.kt)
+     uses it for every role except the error family, which always comes from here. These are the
+     fallback, and the fallback has to be a COMPLETE scheme rather than a few brand accents: M3
+     components pick their own roles, and a partial scheme shows Material's baseline wherever this
+     file stops. Every role is defined whether or not a screen uses it today, because which roles a
+     component picks is the library's decision, not this app's.
 
      Generated from the same blue seed as the launcher icon (ic_launcher_background is primary-40),
      so an unthemed launcher and an unthemed app agree. Tones follow the standard M3 assignments:
      primary 40/100/90/10 in light, 80/20/30/90 in dark, which is what makes the on-pairs legible by
      construction rather than by luck.
 
-     values-night/colors.xml carries the dark scheme under the same names. -->
+     values-night/colors.xml carries the dark scheme under the same names. The window background
+     and the notification fallback read from here too. -->
 <resources>
     <!-- Launcher icon background for launchers without themed icons: the white glyph sits on
          primary-40. With themed icons the launcher ignores this and tints <monochrome> itself. -->

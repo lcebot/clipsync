@@ -18,7 +18,6 @@ import android.os.IBinder;
 import android.os.PowerManager;
 import android.os.SystemClock;
 
-import com.google.android.material.color.MaterialColors;
 
 import org.json.JSONObject;
 
@@ -559,17 +558,14 @@ public class SyncService extends Service {
         NotificationChannel ch = new NotificationChannel(CHANNEL, "ClipSync", NotificationManager.IMPORTANCE_LOW);
         ch.setShowBadge(false);
         nm.createNotificationChannel(ch);
-        Intent open = new Intent(this, MainActivity.class).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        Intent open = new Intent(this, io.github.lcebot.clipsync.ui.main.MainActivity.class).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         Notification n = new Notification.Builder(this, CHANNEL)
                 .setSmallIcon(R.drawable.ic_notification)
                 .setContentTitle("ClipSync")
                 .setContentText("Syncing clipboard with the PC")
-                // The shade tints the small icon with this. Read through the dynamic overlay rather
-                // than from this Service's own theme: a Service never passes through the Activity
-                // overlay that applies the system palette, so the theme alone would give the app's
-                // fallback blue on a device showing a green palette everywhere else.
-                .setColor(MaterialColors.getColor(ClipSyncApp.themed(this),
-                        androidx.appcompat.R.attr.colorPrimary, 0))
+                // The shade tints the small icon with this; NotificationColor says why it reads the
+                // platform palette directly.
+                .setColor(io.github.lcebot.clipsync.ui.theme.NotificationColor.of(this))
                 .setContentIntent(android.app.PendingIntent.getActivity(this, 0, open, android.app.PendingIntent.FLAG_IMMUTABLE))
                 .setOngoing(true)
                 .build();
