@@ -58,17 +58,18 @@ jobs:
           java-version: "17"
 
       # ubuntu-latest ships the Android SDK at $ANDROID_HOME with licenses accepted. The platform
-      # must match compileSdk in app/build.gradle.kts. android-actions/setup-android@v3 is not used
+      # must match compileSdk in app/build.gradle.kts: since API 36.1 platform packages carry a minor
+      # version, and AGP maps compileSdk 37 to android-37.0. android-actions/setup-android@v3 is not used
       # because it tries to install the 'tools' package, which current images do not have.
       - name: install SDK components
         run: |
           SDKMANAGER=$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager | tail -n1)
           yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
-          "$SDKMANAGER" "platforms;android-37" "build-tools;36.0.0" >/dev/null
+          "$SDKMANAGER" "platforms;android-37.0" "build-tools;36.0.0" >/dev/null
 
       - uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "9.6.0"          # the same as gradle-wrapper.properties; AGP 9.4+ needs 9.6
+          gradle-version: "9.8.0"          # the same as gradle-wrapper.properties
 
       # Decoded into RUNNER_TEMP, never into the workspace: nothing here can end up in an artifact.
       - name: decode keystore
