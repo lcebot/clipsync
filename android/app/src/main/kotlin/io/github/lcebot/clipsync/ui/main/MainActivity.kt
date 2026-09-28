@@ -8,7 +8,6 @@ import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.lifecycle.Lifecycle
@@ -19,6 +18,7 @@ import io.github.lcebot.clipsync.ui.pair.PairEvent
 import io.github.lcebot.clipsync.ui.pair.PairSheetHost
 import io.github.lcebot.clipsync.ui.pair.PairViewModel
 import io.github.lcebot.clipsync.ui.theme.ClipSyncTheme
+import io.github.lcebot.clipsync.ui.theme.drawEdgeToEdge
 import io.github.lcebot.clipsync.ui.welcome.WelcomeActivity
 import kotlinx.coroutines.launch
 
@@ -42,8 +42,8 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        drawEdgeToEdge()
         Logger.init(this)
 
         lifecycleScope.launch {

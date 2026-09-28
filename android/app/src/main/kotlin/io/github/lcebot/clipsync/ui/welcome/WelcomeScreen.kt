@@ -15,14 +15,17 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.MaterialShapes
+import androidx.compose.material3.toShape
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -106,18 +109,20 @@ fun WelcomeScreen(
 private fun IntroPage(animateEntrance: Boolean, onEntered: () -> Unit, onNext: () -> Unit) {
     val rise = rememberRise(count = 4, animate = animateEntrance, onDone = onEntered)
     Column(Modifier.fillMaxSize().padding(horizontal = Dimens.WelcomeGutter, vertical = 32.dp)) {
-        // The hero, in a tonal circle, because a bare glyph on a surface reads as an icon that lost
-        // its button. The launcher glyph, because this is the first thing a new install shows and it
-        // should look like what the user just tapped. It fills the circle: the adaptive-icon canvas
-        // already keeps the glyph in its middle 48 of 108 units, so any size picked here would be
-        // fighting that margin.
+        // The hero, in a tonal container, because a bare glyph on a surface reads as an icon that
+        // lost its button. One of M3 Expressive's own shapes rather than a circle: this is the first
+        // thing a new install shows and the one place the app can afford a bit of character. The
+        // launcher glyph, because it should look like what the user just tapped. It fills the
+        // container: the adaptive-icon canvas already keeps the glyph in its middle 48 of 108 units,
+        // so any size picked here would be fighting that margin.
+        val heroShape = MaterialShapes.Cookie9Sided.toShape()
         Box(
             Modifier
                 .padding(top = 24.dp)
                 .size(120.dp)
                 .align(Alignment.CenterHorizontally)
                 .then(rise.modifier(0, scaleFrom = HERO_SCALE))
-                .background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
+                .background(MaterialTheme.colorScheme.primaryContainer, heroShape),
         ) {
             Image(
                 painter = painterResource(R.drawable.ic_launcher_foreground),
@@ -139,8 +144,12 @@ private fun IntroPage(animateEntrance: Boolean, onEntered: () -> Unit, onNext: (
             modifier = Modifier.padding(top = 16.dp).fillMaxWidth().then(rise.modifier(2)),
         )
         Spacer(Modifier.weight(1f))
-        Button(onClick = onNext, modifier = Modifier.fillMaxWidth().then(rise.modifier(3))) {
-            Text(stringResource(R.string.welcome_next))
+        Button(
+            onClick = onNext,
+            shapes = ButtonDefaults.shapes(),
+            modifier = Modifier.fillMaxWidth().heightIn(min = BIG_BUTTON).then(rise.modifier(3)),
+        ) {
+            Text(stringResource(R.string.welcome_next), style = MaterialTheme.typography.titleMedium)
         }
     }
 }
@@ -166,11 +175,15 @@ private fun ChoosePage(onJoin: () -> Unit, onGenerate: () -> Unit, onManual: () 
         // Filled, then tonal, then text: the emphasis ladder IS the recommendation. Taking the key
         // from a device that has it is what almost everyone should do, making one is what the first
         // device does once, and typing 64 hex characters is what pairing exists to avoid.
-        Button(onClick = onJoin, modifier = Modifier.fillMaxWidth()) {
-            Text(stringResource(R.string.first_run_join))
+        Button(onClick = onJoin, shapes = ButtonDefaults.shapes(), modifier = Modifier.fillMaxWidth().heightIn(min = BIG_BUTTON)) {
+            Text(stringResource(R.string.first_run_join), style = MaterialTheme.typography.titleMedium)
         }
-        FilledTonalButton(onClick = onGenerate, modifier = Modifier.padding(top = 12.dp).fillMaxWidth()) {
-            Text(stringResource(R.string.first_run_generate))
+        FilledTonalButton(
+            onClick = onGenerate,
+            shapes = ButtonDefaults.shapes(),
+            modifier = Modifier.padding(top = 12.dp).fillMaxWidth().heightIn(min = BIG_BUTTON),
+        ) {
+            Text(stringResource(R.string.first_run_generate), style = MaterialTheme.typography.titleMedium)
         }
         TextButton(onClick = onManual, modifier = Modifier.padding(top = 4.dp).fillMaxWidth()) {
             Text(stringResource(R.string.first_run_manual))
@@ -233,6 +246,9 @@ private fun rememberRise(count: Int, animate: Boolean, onDone: () -> Unit): Rise
 }
 
 private val RISE = 32.dp
+
+/** The expressive medium button height: the choices on this screen are the whole screen's point. */
+private val BIG_BUTTON = 56.dp
 private const val STAGGER_MS = 75L
 private const val HERO_SCALE = 0.8f
 

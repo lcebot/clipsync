@@ -13,7 +13,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SegmentedListItem
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -86,6 +88,9 @@ private sealed interface SheetRow {
         val fields: List<Field>,
         /** What a tap copies, or null for the "nothing connected" card, which copies nothing. */
         val copy: String?,
+        /** Where the card sits in its group, which decides its corners. */
+        val index: Int = 0,
+        val count: Int = 1,
     ) : SheetRow
 }
 
@@ -148,7 +153,30 @@ private fun rowsFor(s: StatusUi): List<SheetRow> {
         }
     }
     if (rows.isEmpty()) rows += SheetRow.Device("none", "", emptyList(), copy = null)
-    return uniqueKeys(rows)
+    return shaped(uniqueKeys(rows))
+}
+
+/**
+ * Each run of cards under one heading becomes one expressive group: large corners on the outside
+ * of the run, small ones between its cards.
+ */
+private fun shaped(rows: List<SheetRow>): List<SheetRow> {
+    val out = rows.toMutableList()
+    var start = 0
+    while (start < out.size) {
+        if (out[start] !is SheetRow.Device) {
+            start++
+            continue
+        }
+        var end = start
+        while (end < out.size && out[end] is SheetRow.Device) end++
+        val count = end - start
+        for (i in start until end) {
+            out[i] = (out[i] as SheetRow.Device).copy(index = i - start, count = count)
+        }
+        start = end
+    }
+    return out
 }
 
 /**
@@ -193,40 +221,37 @@ private fun Header(text: String, modifier: Modifier) {
 private fun DeviceCard(row: SheetRow.Device, onCopy: (String) -> Unit, modifier: Modifier) {
     val haptics = rememberHaptics()
     val copyLabel = stringResource(R.string.card_copy)
-    val body: @Composable () -> Unit = {
-        Column(Modifier.padding(Dimens.CardPadding)) {
-            Text(
-                text = row.name.ifEmpty { stringResource(R.string.sheet_none) },
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            if (row.fields.isNotEmpty()) {
-                // A field is closer to its neighbours than the group is to the name, which is what
-                // makes the fields read as one block under it.
+    val shapes = ListItemDefaults.segmentedShapes(index = row.index, count = row.count)
+    val copy = row.copy
+    val base = modifier
+        .fillMaxWidth()
+        .padding(start = Dimens.SheetGutter, end = Dimens.SheetGutter, bottom = ListItemDefaults.SegmentedGap)
+    SegmentedListItem(
+        shapes = shapes,
+        // A plain item made clickable, rather than the clickable item overload, because only
+        // clickable takes a label for the action; the clip keeps the ripple on the item's shape.
+        modifier = if (copy == null) base else base
+            .clip(shapes.shape)
+            .clickable(onClickLabel = copyLabel, onClick = haptics.ticking { onCopy(copy) }),
+        supportingContent = if (row.fields.isEmpty()) null else {
+            {
+                // A field is closer to its neighbours than the fields are to the name, which is
+                // what makes them read as one block under it.
                 Column(
                     verticalArrangement = Arrangement.spacedBy(Dimens.SpacingSeam),
-                    modifier = Modifier.padding(top = Dimens.SpacingGroup),
+                    modifier = Modifier.padding(top = Dimens.SpacingSeam),
                 ) {
                     row.fields.forEach { FieldRow(it) }
                 }
             }
-        }
-    }
-    val cardModifier = modifier
-        .fillMaxWidth()
-        .padding(start = Dimens.SheetGutter, end = Dimens.SheetGutter, bottom = Dimens.SpacingGroup)
-    val copy = row.copy
-    if (copy == null) {
-        Card(modifier = cardModifier) { body() }
-    } else {
-        // clickable on a clipped plain card rather than Card(onClick), because only clickable takes
-        // a label for the action; the clip keeps the ripple on the card's rounded shape.
-        Card(
-            modifier = cardModifier
-                .clip(CardDefaults.shape)
-                .clickable(onClickLabel = copyLabel, onClick = haptics.ticking { onCopy(copy) }),
-        ) { body() }
-    }
+        },
+        content = {
+            Text(
+                text = row.name.ifEmpty { stringResource(R.string.sheet_none) },
+                style = MaterialTheme.typography.titleMedium,
+            )
+        },
+    )
 }
 
 /**

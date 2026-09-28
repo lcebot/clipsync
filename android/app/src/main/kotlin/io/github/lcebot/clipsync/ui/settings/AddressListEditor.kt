@@ -3,18 +3,23 @@
 package io.github.lcebot.clipsync.ui.settings
 
 import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.input.TextFieldLineLimits
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.key
 import androidx.compose.ui.Modifier
@@ -23,6 +28,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import io.github.lcebot.clipsync.R
+import io.github.lcebot.clipsync.ui.common.TonalField
 import io.github.lcebot.clipsync.ui.common.rememberHaptics
 import io.github.lcebot.clipsync.ui.theme.Dimens
 
@@ -47,12 +53,15 @@ fun AddressListEditor(
 ) {
     val haptics = rememberHaptics()
     val switchName = stringResource(R.string.switch_direct)
-    Column(modifier.animateContentSize(MaterialTheme.motionScheme.defaultSpatialSpec())) {
+    Column(
+        verticalArrangement = Arrangement.spacedBy(Dimens.SpacingField),
+        modifier = modifier.animateContentSize(MaterialTheme.motionScheme.defaultSpatialSpec()),
+    ) {
         state.rows.forEachIndexed { i, row ->
             key(row.id) {
                 val problem = problems.getOrNull(i)?.let { text(it, switchName) }
                     ?: firstRowOverride.takeIf { i == 0 }
-                OutlinedTextField(
+                TextField(
                     state = row.field,
                     enabled = state.enabled,
                     label = { Text(stringResource(R.string.hint_peer, i + 1)) },
@@ -67,19 +76,21 @@ fun AddressListEditor(
                     } else null,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next, autoCorrectEnabled = false),
                     lineLimits = TextFieldLineLimits.SingleLine,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = Dimens.SpacingSeam),
+                    shape = TonalField.Shape,
+                    colors = TonalField.colors(),
+                    modifier = Modifier.fillMaxWidth(),
                 )
             }
         }
-        SettingsButton(
-            text = stringResource(R.string.peer_add),
-            icon = R.drawable.ic_add,
-            enabled = state.enabled,
+        FilledTonalButton(
             onClick = haptics.ticking { state.add() },
-            modifier = Modifier.padding(top = Dimens.SpacingSeam),
-        )
+            enabled = state.enabled,
+            contentPadding = ButtonDefaults.ButtonWithIconContentPadding,
+        ) {
+            Icon(painterResource(R.drawable.ic_add), contentDescription = null, modifier = Modifier.size(ButtonDefaults.IconSize))
+            Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+            Text(stringResource(R.string.peer_add))
+        }
     }
 }
 

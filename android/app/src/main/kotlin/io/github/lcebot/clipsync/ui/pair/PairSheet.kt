@@ -18,13 +18,14 @@ import androidx.compose.foundation.text.input.InputTransformation
 import androidx.compose.foundation.text.input.OutputTransformation
 import androidx.compose.foundation.text.input.TextFieldBuffer
 import androidx.compose.foundation.text.input.TextFieldLineLimits
-import androidx.compose.foundation.text.input.maxLength
+import androidx.compose.foundation.text.input.maxLengthTrim
 import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.foundation.text.input.clearText
 import androidx.compose.foundation.text.input.insert
 import androidx.compose.foundation.text.input.then
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -32,6 +33,10 @@ import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.res.painterResource
+import androidx.compose.material3.Icon
+import androidx.compose.material3.SegmentedListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -189,22 +194,19 @@ private fun PairContent(
         }
 
         Part(visible = ui is PairUi.Picking) {
+            // One expressive group: the devices found are peers of one choice.
             Column(
-                verticalArrangement = Arrangement.spacedBy(Dimens.SpacingGroup),
+                verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap),
                 modifier = Modifier.padding(start = Dimens.SheetGutter, end = Dimens.SheetGutter, top = 12.dp),
             ) {
-                (ui as? PairUi.Picking)?.devices?.forEach { device ->
-                    Card(
+                val devices = (ui as? PairUi.Picking)?.devices.orEmpty()
+                devices.forEachIndexed { i, device ->
+                    SegmentedListItem(
                         onClick = haptics.ticking { onPick(device) },
-                        colors = CardDefaults.cardColors(),
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(
-                            text = device.name,
-                            style = MaterialTheme.typography.titleMedium,
-                            modifier = Modifier.padding(Dimens.CardPadding),
-                        )
-                    }
+                        shapes = ListItemDefaults.segmentedShapes(index = i, count = devices.size),
+                        leadingContent = { Icon(painterResource(R.drawable.ic_pair), contentDescription = null) },
+                        content = { Text(device.name) },
+                    )
                 }
             }
         }
@@ -263,8 +265,8 @@ private fun PairContent(
                     val label = stringResource(action.label)
                     // "Cancel" leaves before anything came of the window and is the quiet button;
                     // everything else finishes or moves the conversation on.
-                    if (action == Action.CANCEL) FilledTonalButton(onClick = onClick) { Text(label) }
-                    else Button(onClick = onClick) { Text(label) }
+                    if (action == Action.CANCEL) FilledTonalButton(onClick = onClick, shapes = ButtonDefaults.shapes()) { Text(label) }
+                    else Button(onClick = onClick, shapes = ButtonDefaults.shapes()) { Text(label) }
                 }
             }
         }
@@ -277,7 +279,7 @@ private fun PairContent(
  *
  * Before the code exists this shows a grey placeholder of the same eleven characters, so the sheet
  * measures itself with this line from the start and does not grow when the real code arrives.
- * headlineLarge and no tracking: eleven monospace characters at that size fit a narrow phone inside
+ * headlineLarge (emphasized, which changes weight and not advance) and no tracking: eleven monospace characters at that size fit a narrow phone inside
  * the sheet gutters, and it is still display type that follows the user's font scale.
  */
 @Composable
@@ -285,7 +287,7 @@ private fun Code(offering: PairUi.Offering?) {
     val text = offering?.let { Pairing.grouped(it.code) } ?: stringResource(R.string.pair_code_placeholder)
     Text(
         text = text,
-        style = MaterialTheme.typography.headlineLarge.copy(fontFamily = FontFamily.Monospace, letterSpacing = 0.sp),
+        style = MaterialTheme.typography.headlineLargeEmphasized.copy(fontFamily = FontFamily.Monospace, letterSpacing = 0.sp),
         color = if (offering != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
         textAlign = androidx.compose.ui.text.style.TextAlign.Center,
         modifier = Modifier
@@ -368,8 +370,9 @@ private fun action(ui: PairUi): Action? = when (ui) {
  * Digits only, at most eleven. The other device shows the code grouped, so eleven is the bound of
  * what a person copies down, not the definition of the code; the controller requires exactly nine
  * digits. Filtering here is a convenience; the controller strips again before deriving anything.
+ * Trimmed rather than rejected, so an over-long paste keeps its first digits instead of vanishing.
  */
-private val CodeInput: InputTransformation = DigitsOnly.then(InputTransformation.maxLength(Pairing.CODE_DIGITS + 2))
+private val CodeInput: InputTransformation = DigitsOnly.then(InputTransformation.maxLengthTrim(Pairing.CODE_DIGITS + 2))
 
 private object DigitsOnly : InputTransformation {
     override fun TextFieldBuffer.transformInput() {

@@ -44,6 +44,12 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import kotlin.math.sign
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -112,6 +118,8 @@ fun MainScreen(
     val settingsScroll = rememberScrollState()
     val logList = rememberLazyListState()
     val topBar = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+    val fabThreshold = with(LocalDensity.current) { FAB_SCROLL_THRESHOLD.toPx() }
+    val fabs = remember(fabThreshold) { FabExpansion(fabThreshold) }
 
     LaunchedEffect(vm) {
         vm.messages.collect { m -> snackbar.showSnackbar(context.getString(m.text, *m.args)) }
@@ -127,6 +135,7 @@ fun MainScreen(
     // attached below, it stays that way. Settings reopens the bar when it is at the top, since a
     // collapsed bar over content that has not scrolled reads as broken.
     LaunchedEffect(tab) {
+        fabs.reset()
         val bar = topBar.state
         // The limit is only known once the bar has been measured; before that it is a sentinel, and
         // animating to it would fling the bar out of existence.
@@ -142,7 +151,10 @@ fun MainScreen(
     Scaffold(
         modifier = Modifier
             .fillMaxSize()
+            .nestedScroll(fabs)
             .then(if (tab == Tab.SETTINGS) Modifier.nestedScroll(topBar.nestedScrollConnection) else Modifier),
+        // The page sits one tone below the list groups, so each group reads as a raised block.
+        containerColor = MaterialTheme.colorScheme.surfaceContainer,
         // Each bar takes its own inset and nothing else consumes any, so the bars' containers run to
         // the screen edges and nothing between them is displaced.
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
@@ -152,7 +164,11 @@ fun MainScreen(
                 actions = {
                     StatusChip(status, onClick = { sheetOpen = true })
                 },
-                colors = TopAppBarDefaults.topAppBarColors(scrolledContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                    scrolledContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    titleContentColor = MaterialTheme.colorScheme.onSurface,
+                ),
                 scrollBehavior = topBar,
             )
         },
@@ -175,8 +191,7 @@ fun MainScreen(
             ActionBar(
                 tab = tab,
                 actions = actionState.settingsActions(validation.ok),
-                settingsScroll = settingsScroll,
-                logList = logList,
+                expanded = fabs.expanded || !(if (tab == Tab.SETTINGS) settingsScroll.canScrollBackward else logList.canScrollBackward),
                 onApply = haptics.ticking(vm::apply),
                 onStop = haptics.ticking(vm::stop),
                 onCopyLog = haptics.ticking { onCopy(vm.log.text(), R.string.snack_log_copied) },
@@ -279,19 +294,14 @@ private fun StatusChip(status: StatusUi, onClick: () -> Unit) {
 private fun ActionBar(
     tab: Tab,
     actions: SettingsActions,
-    settingsScroll: ScrollState,
-    logList: LazyListState,
+    expanded: Boolean,
     onApply: () -> Unit,
     onStop: () -> Unit,
     onCopyLog: () -> Unit,
     onClearLog: () -> Unit,
 ) {
-    val settingsExpanded by remember {
-        derivedStateOf { !settingsScroll.canScrollBackward || !settingsScroll.lastScrolledForward }
-    }
-    val logExpanded by remember {
-        derivedStateOf { !logList.canScrollBackward || !logList.lastScrolledForward }
-    }
+    val settingsExpanded = expanded
+    val logExpanded = expanded
     val motion = MaterialTheme.motionScheme
     AnimatedContent(
         targetState = tab,
@@ -356,3 +366,36 @@ private fun ActionFab(text: Int, icon: Int, primary: Boolean, enabled: Boolean, 
         modifier = Modifier.semantics { if (!enabled) disabled() },
     )
 }
+
+/**
+ * Whether the floating actions show their labels, decided with hysteresis: they shrink after the
+ * page has travelled [thresholdPx] downwards and extend after the same distance upwards. Reacting to
+ * every scroll event makes a slow drag, which alternates tiny moves in both directions, flicker the
+ * pair between the two widths.
+ */
+@Stable
+private class FabExpansion(private val thresholdPx: Float) : NestedScrollConnection {
+    var expanded by mutableStateOf(true)
+        private set
+
+    /** Distance travelled in the current direction; its sign is the direction. */
+    private var travel = 0f
+
+    override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+        val dy = available.y
+        if (dy == 0f) return Offset.Zero
+        if (sign(dy) != sign(travel)) travel = 0f
+        travel += dy
+        // A negative delta moves the content up, which is scrolling towards the end of the page.
+        if (travel <= -thresholdPx) expanded = false
+        else if (travel >= thresholdPx) expanded = true
+        return Offset.Zero
+    }
+
+    fun reset() {
+        travel = 0f
+        expanded = true
+    }
+}
+
+private val FAB_SCROLL_THRESHOLD = 48.dp

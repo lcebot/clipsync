@@ -11,6 +11,10 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.style.LineHeightStyle
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
@@ -74,6 +78,9 @@ fun LogPage(state: LogState, listState: LazyListState, contentPadding: PaddingVa
         LazyColumn(
             state = listState,
             contentPadding = contentPadding,
+            // Two entries sit further apart than two wrapped lines of one entry, so where one entry
+            // ends is visible at a glance without a timestamp hunt.
+            verticalArrangement = Arrangement.spacedBy(ENTRY_GAP),
             modifier = Modifier
                 .fillMaxSize()
                 // The pane recedes behind its text: one step below the navigation bar's container.
@@ -83,11 +90,11 @@ fun LogPage(state: LogState, listState: LazyListState, contentPadding: PaddingVa
                 // 12 sp and a stated monospace family rather than a type-scale role: a log wants
                 // density and aligned columns, a role would bring its own family and tracking, and
                 // 12 sp is the floor below which the text stops being legible to those who need it.
-                // sp, so it still follows the system font size.
+                // sp, so it still follows the system font size. Wrapped lines of one entry sit at
+                // close to single spacing; the gap between entries comes from the list.
                 Text(
                     text = state.lines[i],
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp,
+                    style = LogLine,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
             }
@@ -96,3 +103,13 @@ fun LogPage(state: LogState, listState: LazyListState, contentPadding: PaddingVa
 }
 
 private const val POLL_MS = 1_000L
+
+private val LogLine = TextStyle(
+    fontFamily = FontFamily.Monospace,
+    fontSize = 12.sp,
+    lineHeight = 14.sp,
+    lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.Both),
+)
+
+/** About a third of a line: entries read as separate, the log stays dense. */
+private val ENTRY_GAP = 5.dp
