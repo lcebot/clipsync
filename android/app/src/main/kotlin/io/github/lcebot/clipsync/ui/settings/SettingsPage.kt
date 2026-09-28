@@ -33,6 +33,8 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.ListItemShapes
@@ -68,7 +70,6 @@ import androidx.compose.ui.unit.dp
 import io.github.lcebot.clipsync.Config
 import io.github.lcebot.clipsync.Crypto
 import io.github.lcebot.clipsync.R
-import io.github.lcebot.clipsync.ui.common.ActionItem
 import io.github.lcebot.clipsync.ui.common.ContentItem
 import io.github.lcebot.clipsync.ui.common.Group
 import io.github.lcebot.clipsync.ui.common.Haptics
@@ -112,8 +113,9 @@ fun SettingsPage(
     // An error inside a collapsed group is an error nobody can act on, so it opens the group.
     LaunchedEffect(validation.ownHasError) { settings.reveal(validation) }
 
+    // No arranged spacing: each block carries its own gap above it, so a block that folds away takes
+    // its gap with it inside the same animation instead of dropping it at the end.
     Column(
-        verticalArrangement = Arrangement.spacedBy(GroupGap),
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(scroll)
@@ -124,12 +126,25 @@ fun SettingsPage(
             BatteryNotice(battery, onBatteryFix, haptics)
         }
 
-        // Port and key first: "who we are", then "how we find each other". The three ways to end up
-        // with a key follow the key, in the order of how much work they are: make one, take one
-        // from a device that has it, or be walked through the choice.
-        Group(title = stringResource(R.string.section_connection)) {
+        // Port and key first: "who we are", then "how we find each other". The key's own actions
+        // (a fresh random key, show or hide) live in its field; the ways to hand it to another
+        // device close the group.
+        Group(title = stringResource(R.string.section_connection), modifier = Modifier.padding(top = TitledGroupGap)) {
             item { FieldItem(it) { NumberField(settings.port, R.string.hint_port, validation.port ?: problem.on("port")) } }
-            item { FieldItem(it) { PskField(settings.psk, validation.psk ?: problem.on("psk")) } }
+            item {
+                FieldItem(it) {
+                    PskField(
+                        state = settings.psk,
+                        error = validation.psk ?: problem.on("psk"),
+                        onGenerate = {
+                            // Replacing a usable key cuts off every other device at once; a mis-tap
+                            // that costs re-pairing the household is asked about first.
+                            if (Config.checkPsk(settings.psk.text.toString()) != null) settings.newPsk()
+                            else confirmReplace = true
+                        },
+                    )
+                }
+            }
             item {
                 SwitchItem(
                     shapes = it,
@@ -143,28 +158,31 @@ fun SettingsPage(
                     },
                 )
             }
+            // The two ways to get this key onto another device, as a pair of buttons at the foot of
+            // the key's group: pairing is the one almost everyone wants, so it carries the tone.
             item {
-                ActionItem(
-                    shapes = it,
-                    title = stringResource(R.string.psk_generate),
-                    icon = R.drawable.ic_dice,
-                    onClick = {
-                        // Replacing a usable key cuts off every other device at once; a mis-tap that
-                        // costs re-pairing the household is asked about first.
-                        if (Config.checkPsk(settings.psk.text.toString()) != null) settings.newPsk()
-                        else confirmReplace = true
-                    },
-                )
+                ContentItem(it) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        FilledTonalButton(
+                            onClick = haptics.ticking(onPair),
+                            shapes = ButtonDefaults.shapes(),
+                            modifier = Modifier.weight(1f),
+                        ) { Text(stringResource(R.string.pair_button)) }
+                        OutlinedButton(
+                            onClick = haptics.ticking(onSetup),
+                            shapes = ButtonDefaults.shapes(),
+                            modifier = Modifier.weight(1f),
+                        ) { Text(stringResource(R.string.setup_button)) }
+                    }
+                }
             }
-            item { ActionItem(it, stringResource(R.string.pair_button), R.drawable.ic_pair, onPair) }
-            item { ActionItem(it, stringResource(R.string.setup_button), R.drawable.ic_setup, onSetup) }
         }
 
-        OwnAddresses(settings, validation, problem.on("own_addresses"), haptics)
+        OwnAddresses(settings, validation, problem.on("own_addresses"), haptics, Modifier.padding(top = GroupGap))
 
         // Named for HOW a peer is found, not for the route to it: a listed address is very often a
         // LAN address too. Named that way, neither switch needs a supporting line.
-        Group {
+        Group(modifier = Modifier.padding(top = GroupGap)) {
             item {
                 SwitchItem(
                     shapes = it,
@@ -177,8 +195,8 @@ fun SettingsPage(
                 val ms = SettingsRules.snap(Config.BROWSE_STEPS_MS, settings.browseIndex)
                 StepSlider(
                     shapes = shapes,
-                    label = stringResource(R.string.browse_label, ms),
-                    valueText = "$ms ms",
+                    label = stringResource(R.string.browse_label),
+                    valueText = stringResource(R.string.value_ms, ms),
                     positions = Config.BROWSE_STEPS_MS.size,
                     index = settings.browseIndex,
                     onIndex = { settings.browseIndex = it },
@@ -187,7 +205,7 @@ fun SettingsPage(
             }
         }
 
-        Group {
+        Group(modifier = Modifier.padding(top = GroupGap)) {
             item {
                 SwitchItem(
                     shapes = it,
@@ -212,11 +230,11 @@ fun SettingsPage(
                 text = stringResource(R.string.paths_none),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.padding(horizontal = 16.dp),
+                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp),
             )
         }
 
-        Group(title = stringResource(R.string.section_limits)) {
+        Group(title = stringResource(R.string.section_limits), modifier = Modifier.padding(top = TitledGroupGap)) {
             item { FieldItem(it) { NumberField(settings.textKb, R.string.hint_text_kb, validation.textKb ?: problem.on("max_bytes")) } }
             item {
                 FieldItem(it) {
@@ -237,7 +255,7 @@ fun SettingsPage(
                 val threads = SettingsRules.snap(Config.THREAD_STEPS, settings.threadsIndex)
                 StepSlider(
                     shapes = shapes,
-                    label = stringResource(R.string.threads_label, threads),
+                    label = stringResource(R.string.threads_label),
                     valueText = threads.toString(),
                     positions = Config.THREAD_STEPS.size,
                     index = settings.threadsIndex,
@@ -257,7 +275,7 @@ fun SettingsPage(
             }
         }
 
-        Group(title = stringResource(R.string.section_files)) {
+        Group(title = stringResource(R.string.section_files), modifier = Modifier.padding(top = TitledGroupGap)) {
             item {
                 FieldItem(it) {
                     SettingsField(
@@ -308,8 +326,11 @@ private fun SettingsState.newPsk() {
 
 private fun SaveProblem?.on(key: String): String? = this?.takeIf { it.key == key }?.message
 
-/** Between groups: enough that each block reads as its own, with the section titles on top. */
+/** Between groups: enough that each block reads as its own. */
 private val GroupGap = 16.dp
+
+/** Above a titled group, whose title brings its own space: the two add up to about a group gap. */
+private val TitledGroupGap = 8.dp
 
 private val FAB_CLEARANCE = 80.dp
 
@@ -404,7 +425,8 @@ private fun SettingsField(
 
 /** The key, hidden by default, with the reveal toggle in the field's trailing slot. */
 @Composable
-private fun PskField(state: TextFieldState, error: String?) {
+private fun PskField(state: TextFieldState, error: String?, onGenerate: () -> Unit) {
+    val haptics = rememberHaptics()
     var shown by rememberSaveable { mutableStateOf(false) }
     SecureTextField(
         state = state,
@@ -413,12 +435,19 @@ private fun PskField(state: TextFieldState, error: String?) {
         supportingText = error?.let { { Text(it) } },
         textObfuscationMode = if (shown) TextObfuscationMode.Visible else TextObfuscationMode.RevealLastTyped,
         textStyle = MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Monospace),
+        // Both of the key's own actions live in the field, where the key is: a fresh random key,
+        // and showing or hiding it.
         trailingIcon = {
-            IconButton(onClick = { shown = !shown }) {
-                Icon(
-                    painterResource(if (shown) R.drawable.ic_visibility_off else R.drawable.ic_visibility),
-                    contentDescription = stringResource(if (shown) R.string.psk_hide else R.string.psk_show),
-                )
+            Row {
+                IconButton(onClick = haptics.ticking(onGenerate)) {
+                    Icon(painterResource(R.drawable.ic_dice), contentDescription = stringResource(R.string.psk_generate))
+                }
+                IconButton(onClick = { shown = !shown }) {
+                    Icon(
+                        painterResource(if (shown) R.drawable.ic_visibility_off else R.drawable.ic_visibility),
+                        contentDescription = stringResource(if (shown) R.string.psk_hide else R.string.psk_show),
+                    )
+                }
             }
         },
         shape = TonalField.Shape,
@@ -437,12 +466,18 @@ private fun PskField(state: TextFieldState, error: String?) {
  * an open group must never close it.
  */
 @Composable
-private fun OwnAddresses(settings: SettingsState, validation: Validation, saveProblem: String?, haptics: Haptics) {
+private fun OwnAddresses(
+    settings: SettingsState,
+    validation: Validation,
+    saveProblem: String?,
+    haptics: Haptics,
+    modifier: Modifier = Modifier,
+) {
     val open = settings.ownExpanded
     val chevron by animateFloatAsState(if (open) 180f else 0f, MaterialTheme.motionScheme.defaultSpatialSpec(), label = "chevron")
     val clickLabel = stringResource(if (open) R.string.own_collapse else R.string.own_expand)
     val state = stringResource(if (open) R.string.own_state_expanded else R.string.own_state_collapsed)
-    Group {
+    Group(modifier = modifier) {
         item { shapes ->
             // A plain item made clickable, rather than the clickable item overload, because only
             // clickable takes a label for the action; the clip keeps the ripple on the item's shape.
@@ -507,7 +542,12 @@ private fun StepSlider(
     val current by rememberUpdatedState(index)
     ContentItem(shapes = shapes) {
         Column(Modifier.fillMaxWidth()) {
-            Text(label)
+            // The setting's name on the left, its value on the right in the accent colour, the way
+            // system settings show a slider's current value.
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Text(label, modifier = Modifier.weight(1f))
+                Text(valueText, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+            }
             Slider(
                 state = state,
                 onValueChange = { v ->

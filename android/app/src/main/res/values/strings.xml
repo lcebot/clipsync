@@ -67,7 +67,10 @@
     <!-- And the state it is in now, which is a different question from what the press would do. -->
     <string name="own_state_expanded">Expanded</string>
     <string name="own_state_collapsed">Collapsed</string>
-    <string name="browse_label">mDNS browse timeout: %1$d ms</string>
+    <!-- Slider rows name the setting on the left and show its value on the right, so the two
+         strings are separate. -->
+    <string name="browse_label">mDNS browse timeout</string>
+    <string name="value_ms">%1$d ms</string>
     <!-- Relay opt-out switch. A device that can see two peers which cannot see each other will
          forward files between them; this switch declines that role, which is useful for a device on
          battery that would otherwise stay awake carrying somebody else's transfer. -->
@@ -83,7 +86,7 @@
     <string name="hint_text_kb">Text (KB)</string>
     <string name="hint_file_mb">File (MB)</string>
     <string name="hint_file_mb_local">File on LAN (MB)</string>
-    <string name="threads_label">Parallel connections per file: %1$d</string>
+    <string name="threads_label">Parallel connections per file</string>
 
     <!-- received files -->
     <string name="section_files">Received files</string>

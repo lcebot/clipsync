@@ -111,5 +111,5 @@ private val LogLine = TextStyle(
     lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.Both),
 )
 
-/** About a third of a line: entries read as separate, the log stays dense. */
-private val ENTRY_GAP = 5.dp
+/** Most of a line: entries read as clearly separate while wrapped lines stay tight. */
+private val ENTRY_GAP = 9.dp

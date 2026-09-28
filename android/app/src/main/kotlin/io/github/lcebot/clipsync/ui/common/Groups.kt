@@ -21,6 +21,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
@@ -70,7 +71,8 @@ class GroupScope internal constructor() {
 
 /**
  * A row holding content of its own (a text field, a slider, an editable list) rather than a
- * headline. Non-interactive: the content handles its own input.
+ * headline. Non-interactive: the content handles its own input. Centred vertically by default,
+ * because a trailing chevron or button belongs to the whole row.
  */
 @Composable
 fun ContentItem(
@@ -78,6 +80,7 @@ fun ContentItem(
     modifier: Modifier = Modifier,
     colors: ListItemColors = ListItemDefaults.segmentedColors(),
     contentPadding: PaddingValues = ListItemDefaults.ContentPadding,
+    verticalAlignment: Alignment.Vertical = Alignment.CenterVertically,
     trailingContent: (@Composable () -> Unit)? = null,
     supportingContent: (@Composable () -> Unit)? = null,
     content: @Composable () -> Unit,
@@ -87,6 +90,7 @@ fun ContentItem(
         modifier = modifier,
         colors = colors,
         contentPadding = contentPadding,
+        verticalAlignment = verticalAlignment,
         trailingContent = trailingContent,
         supportingContent = supportingContent,
         content = content,
@@ -100,6 +104,7 @@ fun ActionItem(shapes: ListItemShapes, title: String, icon: Int, onClick: () -> 
     SegmentedListItem(
         onClick = haptics.ticking(onClick),
         shapes = shapes,
+        verticalAlignment = Alignment.CenterVertically,
         leadingContent = { Icon(painterResource(icon), contentDescription = null) },
         supportingContent = supporting?.let { { Text(it) } },
         content = { Text(title) },
@@ -129,6 +134,9 @@ fun SwitchItem(
             role = Role.Switch
             toggleableState = ToggleableState(checked)
         },
+        // Centred whatever the supporting text's length. Material tops the trailing element of a
+        // tall item, which suits a list of messages, but a settings switch belongs to the whole row.
+        verticalAlignment = Alignment.CenterVertically,
         supportingContent = supporting?.let { { Text(it) } },
         trailingContent = {
             Switch(
