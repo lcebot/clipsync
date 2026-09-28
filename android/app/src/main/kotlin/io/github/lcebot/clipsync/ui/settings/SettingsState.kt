@@ -23,8 +23,23 @@ class AddressListState(initial: List<String>) {
 
     val rows = mutableStateListOf<Row>()
 
-    var enabled by mutableStateOf(true)
-        private set
+    private var enabledState by mutableStateOf(true)
+
+    /**
+     * Whether the list is switched on. Switching it off drops its blank rows (keeping one), because
+     * a blank row in a disabled list is neither an entry nor something the user can act on.
+     */
+    var enabled: Boolean
+        get() = enabledState
+        set(on) {
+            enabledState = on
+            if (!on) {
+                for (i in rows.indices.reversed()) {
+                    if (rows.size <= 1) break
+                    if (rows[i].field.text.isBlank()) rows.removeAt(i)
+                }
+            }
+        }
 
     /** A single row stays: it is where the user types the first address. */
     val removable: Boolean get() = enabled && rows.size > 1
@@ -45,20 +60,6 @@ class AddressListState(initial: List<String>) {
 
     fun remove(row: Row) {
         if (rows.size > 1) rows.remove(row)
-    }
-
-    /**
-     * Switching a list off drops its blank rows (keeping one), because a blank row in a disabled
-     * list is neither an entry nor something the user can act on.
-     */
-    fun setEnabled(on: Boolean) {
-        enabled = on
-        if (!on) {
-            for (i in rows.indices.reversed()) {
-                if (rows.size <= 1) break
-                if (rows[i].field.text.isBlank()) rows.removeAt(i)
-            }
-        }
     }
 
     /** The rows as typed, blanks included, in order. */
@@ -97,7 +98,7 @@ class SettingsState(initial: SettingsValues) {
         get() = directOn
         set(on) {
             directOn = on
-            peers.setEnabled(on)
+            peers.enabled = on
         }
 
     var pskRotate by mutableStateOf(false)
@@ -127,7 +128,7 @@ class SettingsState(initial: SettingsValues) {
         discovery = v.discovery
         directOn = v.direct
         peers.setValues(v.peers)
-        peers.setEnabled(v.direct)
+        peers.enabled = v.direct
         ownAddresses.setValues(v.ownAddresses)
         // Collapsed by default, but never over content: a device with an address of its own shows
         // it, and a group the user cannot see is worse than one that takes a tap.
