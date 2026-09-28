@@ -1,9 +1,9 @@
 # Builds the Android module APK. Repo layout: android/ (Gradle project), windows/ (Python daemon).
 #
 # The APK carries NO configuration. There is no build-time config and no CLIPSYNC_* secret: the app
-# is set up on the device, which is what makes it safe to attach a build to a public release — there
+# is set up on the device, which is what makes it safe to attach a build to a public release: there
 # is no field in it that could hold anybody's key. Neither does windows.zip: no config.json is
-# committed or shipped — the settings window writes one on the machine it runs on.
+# committed or shipped; the settings window writes one on the machine it runs on.
 #
 # Secrets (Settings > Secrets and variables > Actions), signing only:
 #   KEYSTORE_B64       - base64 of your personal keystore (see below)
@@ -11,16 +11,16 @@
 #   KEY_ALIAS          - optional, defaults to the store's only alias
 #   KEY_PASSWORD       - optional, defaults to KEYSTORE_PASSWORD (PKCS12 has one password)
 #
-# Make the keystore once, keep it offline, never commit it. No JDK needed — PowerShell writes a
+# Make the keystore once, keep it offline, never commit it. No JDK needed: PowerShell writes a
 # PKCS12 directly (see README / the commands below), then base64 it into KEYSTORE_B64:
 #   [Convert]::ToBase64String([IO.File]::ReadAllBytes("clipsync.p12")) | Set-Clipboard
 # Not certutil -encode (it wraps the output in BEGIN/END lines) and not > / Out-File (PowerShell 5
 # writes UTF-16 with a BOM); paste straight from the clipboard into the secret.
-# KEY_ALIAS may be left unset — the build reads the store's only alias.
+# KEY_ALIAS may be left unset; the build reads the store's only alias.
 # Losing this file means no device can ever overwrite-install the app again.
 #
 # Output: workflow artifact "clipsync" (app-release.apk + windows.zip). Publishing a release on
-# GitHub runs the same build and attaches both files to that release — create the release with no
+# GitHub runs the same build and attaches both files to that release. Create the release with no
 # files of your own and wait for the run to finish.
 # Without the keystore secrets the build still succeeds, but produces app-release-unsigned.apk,
 # which cannot be installed.
@@ -32,7 +32,7 @@ on:
     paths: ["android/**", "windows/**", ".github/workflows/build-apk.yml"]
   # Publishing a release is what attaches the files. This is the event to listen for, not a tag
   # push: a release created in the web UI makes its tag through the API, and a "push" with both a
-  # tags and a paths filter is unreliable anyway — a tag pointing at an already-pushed commit has
+  # tags and a paths filter is unreliable anyway: a tag pointing at an already-pushed commit has
   # no changed files for the paths filter to match, so the run is skipped.
   release:
     types: [published]
@@ -57,18 +57,18 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      # ubuntu-latest ships the Android SDK at $ANDROID_HOME with licenses accepted;
-      # AGP downloads platform 35 / build-tools itself. (android-actions/setup-android@v3
-      # fails on current images trying to install the removed 'tools' package.)
+      # ubuntu-latest ships the Android SDK at $ANDROID_HOME with licenses accepted. The platform
+      # must match compileSdk in app/build.gradle.kts. android-actions/setup-android@v3 is not used
+      # because it tries to install the 'tools' package, which current images do not have.
       - name: install SDK components
         run: |
           SDKMANAGER=$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager | tail -n1)
           yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
-          "$SDKMANAGER" "platforms;android-35" "build-tools;36.0.0" >/dev/null
+          "$SDKMANAGER" "platforms;android-37" "build-tools;36.0.0" >/dev/null
 
       - uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "9.6.0"          # AGP 9.x needs Gradle 9.x; 9.6 covers the whole line
+          gradle-version: "9.6.0"          # the same as gradle-wrapper.properties; AGP 9.4+ needs 9.6
 
       # Decoded into RUNNER_TEMP, never into the workspace: nothing here can end up in an artifact.
       - name: decode keystore
@@ -87,7 +87,7 @@ jobs:
           clean=$(printf '%s' "$KEYSTORE_B64" | tr -cd 'A-Za-z0-9+/=')
           printf '%s' "$clean" | base64 -d > "$RUNNER_TEMP/clipsync.p12" 2>/dev/null || true
 
-          # A PKCS12 is a DER SEQUENCE, so the file starts with 30 82 — and its base64 with "MII".
+          # A PKCS12 is a DER SEQUENCE, so the file starts with 30 82, and its base64 with "MII".
           if ! head -c2 "$RUNNER_TEMP/clipsync.p12" | od -An -tx1 | grep -q '30 82'; then
             echo "KEYSTORE_B64 does not decode to a PKCS12. Diagnostics (no secret content):"
             echo "  characters received:       ${#KEYSTORE_B64}"
@@ -106,7 +106,7 @@ jobs:
           echo "signing with the keystore secret ($(wc -c < "$RUNNER_TEMP/clipsync.p12") bytes)"
 
       # Tags are the single source of truth for versions. A release builds its own tag; anything
-      # else is a debug build and borrows the newest tag plus the short commit — 1.0.3+a1b2c3d —
+      # else is a debug build and borrows the newest tag plus the short commit (1.0.3+a1b2c3d),
       # so a CI APK says which release it sits after and which commit it actually is.
       #
       # The format is fixed at vA.B.C, where A and B are one digit and C may be two, which is
@@ -127,7 +127,7 @@ jobs:
 
           if ! printf '%s' "$tag" | grep -qE '^v[0-9]\.[0-9]\.[0-9]{1,2}$'; then
             if [ "$GITHUB_EVENT_NAME" = "release" ]; then
-              echo "tag '$tag' is not vA.B.C (A and B one digit, C one or two) — refusing to guess"
+              echo "tag '$tag' is not vA.B.C (A and B one digit, C one or two), refusing to guess"
               exit 1
             fi
             echo "latest tag '$tag' is not vA.B.C: using the fallback in build.gradle.kts"
@@ -142,7 +142,7 @@ jobs:
           code=$(( major * 1000 + minor * 100 + patch ))
 
           # A build that is not the release itself is a debug build sitting somewhere after that
-          # tag, so it says so: 1.0.3+a1b2c3d. The build metadata is only in versionName —
+          # tag, so it says so: 1.0.3+a1b2c3d. The build metadata is only in versionName;
           # versionCode stays the tag's, because it is an ordering, not an identity, and giving a
           # CI build a higher one would let it silently overwrite the release on a device.
           if [ "$GITHUB_EVENT_NAME" != "release" ]; then
@@ -150,7 +150,7 @@ jobs:
           fi
 
           echo "VERSION_ARGS=-Pclipsync.versionName=$name -Pclipsync.versionCode=$code" >> "$GITHUB_ENV"
-          echo "$tag -> versionName $name, versionCode $code"
+          echo "$tag gives versionName $name, versionCode $code"
 
       - name: build
         env:
@@ -165,13 +165,12 @@ jobs:
       # config.json, none of which belong in a download.
       #
       # NO config.json SHIPS, and none is committed. configurator.py opens on the defaults when the
-      # file is absent and writes a complete one on Apply, so a template bought nothing — while being
-      # the one tracked file that could carry a real PSK, which .gitignore cannot protect from a
-      # local edit. Deleting it removed the leak, the guard that watched for it, and the
-      # skip-worktree dance the guard needed, all at once.
+      # file is absent and writes a complete one on Apply, so a template would buy nothing while
+      # being the one tracked file that could carry a real PSK, which .gitignore cannot protect from
+      # a local edit.
       #
-      # What is left is a tripwire, because the accident this prevents is expensive and silent, and
-      # someone adding the file back would not think of it.
+      # The check below is a tripwire, because the accident it prevents is expensive and silent, and
+      # someone adding the file would not think of it.
       - name: package the PC side
         working-directory: windows
         run: |
@@ -180,10 +179,9 @@ jobs:
             echo "that can hold a PSK, and the settings window creates it locally on first Apply."
             exit 1
           fi
-          # Copied as a tree, not as a list of names: the list was a second place to remember a new
-          # module in, and it had already been forgotten once (clipsync_proto and clipsync_pair were
-          # added without it). --include-from would be the same trap. What ships is what the folder
-          # holds, minus the things that are generated.
+          # Copied as a tree, not as a list of names: a list is a second place to remember every new
+          # module in, and a forgotten entry ships a broken zip without any error. --include-from
+          # would be the same trap. What ships is what the folder holds, minus what is generated.
           mkdir -p "$RUNNER_TEMP/pc"
           cp configurator.py install.ps1 uninstall.ps1 "$RUNNER_TEMP/pc/"
           cp -r app "$RUNNER_TEMP/pc/app"
