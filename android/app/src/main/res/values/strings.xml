@@ -14,9 +14,10 @@
     <string name="nav_settings">Settings</string>
     <string name="nav_log">Log</string>
 
-    <!-- battery card -->
-    <string name="battery_on">Battery optimisation is on: the system may freeze ClipSync in the background (nothing is copied or received until you reopen it).</string>
-    <string name="battery_still_frozen">The system still froze ClipSync in the background. Check the log for "root keep-alive" and "hooked" (LSPosed); on this ROM also allow autostart / no background restrictions and lock ClipSync in Recents.</string>
+    <!-- battery card. Short phrases without a full stop, like every supporting line on the
+         settings page. -->
+    <string name="battery_on">Battery optimisation can pause syncing in the background</string>
+    <string name="battery_still_frozen">Still paused in the background: allow autostart, remove background limits, lock ClipSync in Recents</string>
     <string name="battery_allow">Allow</string>
 
     <!-- connection -->
@@ -32,6 +33,7 @@
     <!-- The reveal toggle in the key field, named for what pressing it does. -->
     <string name="psk_show">Show key</string>
     <string name="psk_hide">Hide key</string>
+    <string name="psk_rotate_title">Automatic key rotation</string>
     <string name="psk_generate">Generate random PSK key</string>
     <string name="psk_replace_title">Replace the key?</string>
     <string name="psk_replace_body">Every other device is using the current key and will stop connecting until you set the new one there too.</string>
@@ -75,11 +77,11 @@
          forward files between them; this switch declines that role, which is useful for a device on
          battery that would otherwise stay awake carrying somebody else's transfer. -->
     <string name="switch_relay_opt_out">Decline relay requests</string>
-    <string name="relay_opt_out_help">Other devices on the LAN may ask this one to relay a file. Turn this on to decline, so the device can sleep sooner.</string>
+    <string name="relay_opt_out_help">Don\'t forward files between other devices</string>
 
     <!-- Both switches off leaves no way to reach anything. Shown under the pair, because it is about
          the pair; neither switch on its own is wrong. -->
-    <string name="paths_none">Turn on at least one of these. With both off there is no way to reach another device.</string>
+    <string name="paths_none">Turn on at least one to reach other devices</string>
 
     <!-- transfer limits -->
     <string name="section_limits">Transfer limits</string>

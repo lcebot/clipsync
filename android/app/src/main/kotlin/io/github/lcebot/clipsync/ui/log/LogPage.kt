@@ -62,7 +62,9 @@ fun LogPage(state: LogState, listState: LazyListState, contentPadding: PaddingVa
                 for (ignored in wake) {
                     // Sampled before the append: a reader at the bottom keeps following, a reader
                     // who scrolled up to read something is left where they are.
-                    val atEnd = !listState.canScrollForward
+                    // An empty log is at its end by definition: a cleared log must follow the
+                    // first line that arrives.
+                    val atEnd = state.lines.isEmpty() || !listState.canScrollForward
                     if (state.pull() && (follow || atEnd) && state.lines.isNotEmpty()) {
                         listState.scrollToItem(state.lines.lastIndex)
                     }

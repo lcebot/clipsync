@@ -1,0 +1,377 @@
+package io.github.lcebot.clipsync
+
+import android.net.Network
+
+/**
+ * One session with one peer, from the moment a socket is opened to the moment it is torn down.
+ *
+ * Each concern (gating, connecting, the handshake, the screen-off burst, the heartbeat, the read
+ * loop, and teardown) belongs to a single Link instance, so "is this session still alive" is a
+ * property of the object itself rather than an identity comparison against some shared field. That
+ * also lets a device hold more than one connection at once.
+ *
+ * The owner ([SyncService]) supplies everything shared through [Owner]. The split is
+ * the point: what a Link may decide for itself is what it holds, and what belongs to the device is
+ * what it has to ask for. Two things stay with the device rather than the link:
+ *
+ * - **the heartbeat.** One timer for the device, not one per link, because N pingers would wake
+ *   the radio N times on a phone that has exactly one radio, and the frozen-process detector and the
+ *   status timestamp must not run N times either. [ping] is all this class does of it.
+ * - **the retry.** It belongs to the target, which outlives any session to it.
+ *
+ * [sentHash] is per link rather than shared across them: a clip has to reach every peer,
+ * so "have I already sent this" is a question each link answers for itself.
+ */
+internal class Link private constructor(
+    private val owner: Owner,
+    target: String,
+    private val conn: Connection,
+    hello: Hello,
+) : AutoCloseable {
+    /** What a session needs from the service. Shared state stays on the far side of this. */
+    internal interface Owner {
+        /** The clipboard is one device's, however many peers there are. */
+        fun onFrame(link: Link, frame: Connection.Frame)
+
+        fun onConnected(link: Link)
+
+        /** Wall-clock ms of the current local clip, or 0 if none. */
+        fun clipTs(): Long
+
+        /** SHA-256 hex of the current local clip, or null if none. */
+        fun clipSha(): String?
+
+        /** The newest local clip, or null. Not consumed; every link delivers it once. */
+        fun pendingClip(): Any?
+
+        /** Put one clip on one link. Throws like any send; the caller decides what that means. */
+        fun send(link: Link, clip: Any)
+
+        /** This link has now delivered that content hash. */
+        fun delivered(link: Link, hash: String)
+
+        /** Is a transfer or an open offer still outstanding anywhere? */
+        fun transferBusy(): Boolean
+
+        fun isRunning(): Boolean
+
+        fun isScreenOn(): Boolean
+
+        fun config(): Config
+    }
+
+    /** The target this link was dialled for: a listed address, or the mDNS service name. */
+    internal val target: String = target
+
+    @Volatile
+    private var open = true
+
+    /**
+     * The content hash this link has already delivered.
+     *
+     * Per link, not global: a clip has to reach every peer, including one that connects a minute
+     * later, so each link tracks its own delivery state rather than sharing one flag that the first
+     * connection to flush would consume for the rest.
+     */
+    @Volatile
+    private var sentHash: String? = null
+
+    /**
+     * NTP-style clock offset to this peer, in milliseconds.
+     *
+     * `peer_clock = my_clock + offset`. Updated on every PONG round trip, so it tracks
+     * drift without extra messages. Used to normalise an incoming clip's version stamp into the
+     * local clock domain before it is compared with ours: two devices whose wall clocks differ by a
+     * minute would otherwise decide "newer" by whose clock was fast.
+     */
+    @Volatile
+    internal var clockOffset: Long = 0
+
+    /**
+     * What the peer declared in its HELLO.
+     *
+     * Kept because two of its fields are about the *session* rather than about the peer:
+     * [Hello.clipTs] and [Hello.clipSha] say what the peer's clipboard held when it
+     * connected, and they are only useful once, at this moment. Both ends send them, so a device
+     * that reconnects with a stale clip can be told what it missed.
+     */
+    private val peerHello: Hello = hello
+
+    /** What the peer declared when this session opened. Never null. */
+    internal fun peerHello(): Hello {
+        return peerHello
+    }
+
+    // ------------------------------------------------------------------ how this link ends
+
+    /**
+     * Why this link stopped, when it stopped on purpose.
+     *
+     * A single state, because the three possibilities are mutually exclusive: a link is running,
+     * or the peer said goodbye, or this end retired it in favour of another link to the same device,
+     * and no two of those are ever true at once.
+     *
+     * What the dialler asks is one question, [endedOnPurpose], so the two non-RUNNING
+     * members behave alike and the enum is, to the code, a boolean. They are still named apart
+     * because they are two different reasons to answer yes, and the difference is measured in radio
+     * wake-ups:
+     *
+     * - [RUNNING] also covers a link that ended by *failing*, such as a read that
+     *   threw or a socket closed under us. That is the case where redialling is the right answer,
+     *   so it is the one with no marker;
+     * - [PEER_BYE] means the peer chose to close and said why. It is not coming straight
+     *   back on its own account, so the dialler waits out its longest back-off instead of
+     *   rebuilding the link the peer just discarded, which, with no BYE at all, would be an infinite
+     *   loop between two devices that both think the other vanished;
+     * - [SUPERSEDED] means *this* end closed it as a duplicate. Its owner sees
+     *   nothing but a dead socket otherwise, which is indistinguishable from the peer going
+     *   away, and a dialler that cannot tell those apart redials immediately into the link that
+     *   just replaced this one.
+     */
+    internal enum class End {
+        /** Still up, or ended by an error. The ordinary case, and the only one worth retrying soon. */
+        RUNNING,
+
+        /** The peer sent BYE. What it said is logged where the frame is read, not kept here. */
+        PEER_BYE,
+
+        /** This end closed it: another link to the same peer won the duplicate tiebreak. */
+        SUPERSEDED,
+    }
+
+    /**
+     * How this link ended.
+     *
+     * Only ever asked as [endedOnPurpose]; nothing needs to tell PEER_BYE from
+     * SUPERSEDED, or to read back what the peer said. The reason is logged where the BYE frame is
+     * read, which is where the peer and the frame are both in hand, so there is no need to keep a
+     * second copy here.
+     */
+    @Volatile
+    private var end = End.RUNNING
+
+    /**
+     * True once this link was closed deliberately by either end.
+     *
+     * The single question the dialler's back-off logic needs: whichever end decided, redialling
+     * at once would undo the decision.
+     */
+    internal fun endedOnPurpose(): Boolean {
+        return end != End.RUNNING
+    }
+
+    /**
+     * Record how this link is ending. First writer wins: a link that the peer said goodbye to and
+     * that this end then retires is still, in the only sense the dialler cares about, the first
+     * thing that happened to it.
+     */
+    internal fun ended(how: End) {
+        if (end != End.RUNNING) return
+        end = how
+    }
+
+    internal fun connection(): Connection {
+        return conn
+    }
+
+    /** The peer's node id, known once the handshake is done. */
+    internal fun peerId(): String? {
+        return conn.peerId
+    }
+
+    internal fun isOpen(): Boolean {
+        return this.open
+    }
+
+    /**
+     * Whether this session is still current: the question the caller means, and one that stays
+     * meaningful when there are several links.
+     */
+    private fun alive(): Boolean {
+        return this.open && owner.isRunning()
+    }
+
+    override fun close() {
+        this.open = false
+        conn.close()
+    }
+
+    /**
+     * Close deliberately, telling the peer why first.
+     *
+     * The BYE is the whole point: a close without one becomes a loop. The far side would see only
+     * a disconnect, reconnect, and rebuild exactly the link that was discarded.
+     */
+    internal fun bye(reason: String) {
+        try {
+            conn.sendJson(Connection.T_BYE, org.json.JSONObject().put("reason", reason))
+        } catch (ignored: Exception) {
+            // it is going away regardless; a peer that cannot hear the reason still sees the close
+        }
+        close()
+    }
+
+    /**
+     * One keep-alive frame, sent by the device's single heartbeat. Carries `t1` so the peer's
+     * PONG can be turned into a clock offset; see [clockOffset].
+     */
+    internal fun ping() {
+        if (alive()) {
+            val j = org.json.JSONObject()
+            j.put("t1", System.currentTimeMillis())
+            conn.sendJson(Connection.T_PING, j)
+        }
+    }
+
+    /**
+     * Send the current local clip if this link has not already delivered it.
+     *
+     * Idempotent, because it is called from three places (on connect, when a clip is captured,
+     * and after a burst), and a peer must get a clip exactly once however many of those fire.
+     */
+    @Synchronized
+    internal fun deliver() {
+        val clip = owner.pendingClip() ?: return
+        // Through the same normalisation the rest of the device uses: this hash is compared against
+        // the one the pending slot is keyed by, so computing it the other way here would make every
+        // clip containing a CRLF look undelivered forever.
+        val h = if (clip is Files.Ref) {
+            clip.sha256
+        } else {
+            Crypto.sha256Hex(
+                ClipboardBridge.normalise(clip as String) ?: throw NullPointerException("normalise returned null"),
+            )
+        }
+        if (h == sentHash) return
+        // Marked after the send, not before: marking first would let a link claim delivery it never
+        // made if the send throws, skipping `delivered` and leaving the clip stuck pending. The cost
+        // of this order is a possible duplicate if the send half-succeeds, which the peer discards
+        // by hash.
+        owner.send(this, clip)
+        sentHash = h
+        owner.delivered(this, h)
+    }
+
+    /** The content hash this link has delivered, or null. */
+    internal fun sentHash(): String? {
+        return sentHash
+    }
+
+    /**
+     * Run the session to its end. Returns when the peer goes away, the screen-off burst finishes, or
+     * the link is closed from outside.
+     *
+     * @return true when this was a screen-off burst rather than a session that ended. The caller
+     *         must not back off on that: a burst finishing is the expected outcome, not a failure.
+     */
+    internal fun run(): Boolean {
+        owner.onConnected(this)
+        deliver()
+        if (!owner.isScreenOn()) {
+            burst()
+            // Say why before going. Every session that ends because *this* device is asleep ends
+            // here: the one the screen-off transition interrupted, and every later one a peer
+            // opens while we stay asleep. So this is the single place the fact can be told, and
+            // the second kind matters just as much: a peer that dials a sleeping device and is cut
+            // off without a word sees a reset, which reads as a fault and is not one.
+            bye(Connection.BYE_IDLE)
+            return true
+        }
+        while (alive()) {
+            owner.onFrame(this, conn.recv())
+        }
+        return false
+    }
+
+    /**
+     * Woken only to deliver a pending clip: give the peer a moment to answer, whether a WANT for an
+     * offered file or anything newer, then let the link drop so the radio can sleep. While an offer is
+     * open or a transfer is running the window stays open, with a hard cap; otherwise one second of
+     * silence ends it.
+     */
+    private fun burst() {
+        val until = System.currentTimeMillis() + BURST_CAP_MS
+        try {
+            while (System.currentTimeMillis() < until) {
+                conn.setSoTimeout(if (owner.transferBusy()) BURST_BUSY_MS else BURST_IDLE_MS)
+                owner.onFrame(this, conn.recv())
+            }
+        } catch (expected: java.net.SocketTimeoutException) {
+            // Read timeout: the burst is over, and this is the ONE clean ending it has.
+        } catch (e: Exception) {
+            // Everything else, such as a frame that will not decrypt, a protocol error, or a handler
+            // that threw, is a genuine failure and must be reported as one rather than folded into "the
+            // burst finished": swallowing it here would hide a link that fails every time behind a
+            // UI that never shows a fault.
+            if (!alive()) return        // we closed it: the read failing afterwards is the consequence
+            Logger.w("burst on " + conn.peerLabel + " ended in error: " + e)
+            throw e
+        }
+    }
+
+    internal companion object {
+        // ------------------------------------------------------------------ opening
+
+        /** Completes the dialler's handshake, or throws having closed the socket it was given. */
+        private fun dialled(s: SyncService, o: Owner, target: String, c: Connection): Link {
+            val hello: Hello
+            try {
+                hello = c.hello(s, o.clipTs(), o.clipSha())
+            } catch (e: Exception) {
+                c.close()                     // the socket is ours from the moment we were handed it
+                throw e
+            }
+            return Link(o, target, c, hello)
+        }
+
+        fun toPeer(s: SyncService, o: Owner, peer: String, net: Network?): Link {
+            return dialled(s, o, peer, Connection.toPeer(s, o.config(), peer, net))
+        }
+
+        /**
+         * A peer dialled us and has already declared itself: [Server] reads the HELLO because it
+         * has to, in order to tell a control connection from a data one. All that is left here is the
+         * answer.
+         *
+         * The reverse order of [dialled], and it buys something. A dialler has to send its
+         * sequence cursor before it knows who it is talking to, so the cursor is keyed by the only name
+         * it has, the target it dialled. Here the peer names itself first, so the cursor is keyed by
+         * **what the peer calls itself**, which is also what the sheet and the log should show for a
+         * link nobody chose an address for.
+         *
+         * That does mean an outbound link to a peer and an inbound one from the same peer keep two
+         * cursors. The cost is one redundant catch-up offer on the second route, which the far end
+         * answers with HAVE; the alternative, keying by node id, would put a UUID in front of the user
+         * wherever the target appears.
+         */
+        fun accepted(s: SyncService, o: Owner, c: Connection, hello: Hello): Link {
+            val target = c.peerLabel
+            try {
+                c.sendHello(s, o.clipTs(), o.clipSha())
+            } catch (e: Exception) {
+                c.close()
+                throw e
+            }
+            return Link(o, target, c, hello)
+        }
+
+        /**
+         * @param target the dialer's target, not the advertised service name. Keeping them distinct
+         *               matters: conflating them would alternate the log between two names for one
+         *               dialer, and would key the per-target sequence cursor by the name the PC
+         *               advertises, so renaming the PC would silently reset the LAN path's cursor. The
+         *               advertised name is still what the UI shows; it reaches it through the peer's
+         *               HELLO (`Connection.peerLabel`), which is where a display name belongs.
+         * @param inst   the advertisement this dialer was created for, with every address it named
+         */
+        fun viaMdns(s: SyncService, o: Owner, target: String, inst: Mdns.Instance, net: Network?): Link {
+            return dialled(s, o, target, Connection.toInstance(s, o.config(), inst, net))
+        }
+
+        private const val BURST_CAP_MS = 120_000L
+
+        // Int, because Connection.setSoTimeout takes one.
+        private const val BURST_BUSY_MS = 10_000
+        private const val BURST_IDLE_MS = 1_000
+    }
+}

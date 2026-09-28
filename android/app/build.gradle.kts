@@ -125,7 +125,7 @@ android {
 }
 
 dependencies {
-    compileOnly(libs.libxposed.api)                  // libxposed API 102, the only entry (Entry)
+    compileOnly(libs.libxposed.api)                  // libxposed API 102, the only entry (xposed.Entry)
 
     val composeBom = platform(libs.compose.bom.alpha)
     implementation(composeBom)
@@ -140,11 +140,12 @@ dependencies {
     implementation(libs.activity.compose)
     implementation(libs.lifecycle.runtime.compose)
     implementation(libs.lifecycle.viewmodel.compose)
-    // Also the source of androidx.annotation for xposed/Entry's @NonNull. Pinning annotation
+    // Also the source of androidx.annotation (@Keep on Pairing.ScryptSpec). Pinning annotation
     // separately collides with AGP's consistent runtime and compile resolution.
     implementation(libs.core.ktx)
     implementation(libs.coroutines.android)
 
     testImplementation(libs.junit)
+    testImplementation(libs.org.json)
     testImplementation(libs.coroutines.test)
 }

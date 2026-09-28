@@ -38,7 +38,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.SegmentedListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -113,6 +114,7 @@ private fun PairSheet(c: PairController, onDismiss: () -> Unit) {
         // this far, and the one question a person can still answer is "is that one of mine?".
         AlertDialog(
             onDismissRequest = { c.answer(a, yes = false) },
+            icon = { Icon(painterResource(R.drawable.ic_pair), contentDescription = null) },
             title = { Text(stringResource(R.string.pair_ask_title)) },
             text = { Text(stringResource(R.string.pair_ask_body, a.device, a.type)) },
             confirmButton = { TextButton(onClick = { c.answer(a, yes = true) }) { Text(stringResource(R.string.pair_ask_yes)) } },
@@ -224,8 +226,10 @@ private fun PairContent(
                 focus.requestFocus()
                 keyboard?.show()
             }
-            OutlinedTextField(
+            TextField(
                 state = codeField,
+                shape = TextFieldDefaults.roundedShape,
+                colors = TextFieldDefaults.tonalColors(),
                 label = { Text(stringResource(R.string.pair_code_hint)) },
                 readOnly = checking != null,
                 isError = entering?.error != null,

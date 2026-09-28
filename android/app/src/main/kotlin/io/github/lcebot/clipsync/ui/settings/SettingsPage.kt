@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.foundation.text.input.TextFieldState
@@ -45,6 +46,7 @@ import androidx.compose.material3.SliderState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -75,7 +77,6 @@ import io.github.lcebot.clipsync.ui.common.Group
 import io.github.lcebot.clipsync.ui.common.Haptics
 import io.github.lcebot.clipsync.ui.common.SliderGrabHaptics
 import io.github.lcebot.clipsync.ui.common.SwitchItem
-import io.github.lcebot.clipsync.ui.common.TonalField
 import io.github.lcebot.clipsync.ui.common.rememberHaptics
 import io.github.lcebot.clipsync.ui.status.StatusUi
 import io.github.lcebot.clipsync.ui.theme.Dimens
@@ -163,16 +164,19 @@ fun SettingsPage(
             item {
                 ContentItem(it) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        // Icons as well as labels: a label alone in a tinted pill reads as a toggle.
                         FilledTonalButton(
                             onClick = haptics.ticking(onPair),
                             shapes = ButtonDefaults.shapes(),
+                            contentPadding = ButtonDefaults.ButtonWithIconContentPadding,
                             modifier = Modifier.weight(1f),
-                        ) { Text(stringResource(R.string.pair_button)) }
+                        ) { IconLabel(R.drawable.ic_pair, stringResource(R.string.pair_button)) }
                         OutlinedButton(
                             onClick = haptics.ticking(onSetup),
                             shapes = ButtonDefaults.shapes(),
+                            contentPadding = ButtonDefaults.ButtonWithIconContentPadding,
                             modifier = Modifier.weight(1f),
-                        ) { Text(stringResource(R.string.setup_button)) }
+                        ) { IconLabel(R.drawable.ic_setup, stringResource(R.string.setup_button)) }
                     }
                 }
             }
@@ -297,6 +301,7 @@ fun SettingsPage(
     if (confirmReplace) {
         AlertDialog(
             onDismissRequest = { confirmReplace = false },
+            icon = { Icon(painterResource(R.drawable.ic_dice), contentDescription = null) },
             title = { Text(stringResource(R.string.psk_replace_title)) },
             text = { Text(stringResource(R.string.psk_replace_body)) },
             confirmButton = {
@@ -313,6 +318,8 @@ fun SettingsPage(
     if (explainRotation) {
         AlertDialog(
             onDismissRequest = { explainRotation = false },
+            icon = { Icon(painterResource(R.drawable.ic_restart), contentDescription = null) },
+            title = { Text(stringResource(R.string.psk_rotate_title)) },
             text = { Text(stringResource(R.string.psk_rotate_help)) },
             confirmButton = { TextButton(onClick = { explainRotation = false }) { Text(stringResource(android.R.string.ok)) } },
         )
@@ -325,6 +332,14 @@ private fun SettingsState.newPsk() {
 }
 
 private fun SaveProblem?.on(key: String): String? = this?.takeIf { it.key == key }?.message
+
+/** A button's content: the icon at Material's button icon size and spacing, then the label. */
+@Composable
+private fun IconLabel(icon: Int, label: String) {
+    Icon(painterResource(icon), contentDescription = null, modifier = Modifier.size(ButtonDefaults.IconSize))
+    Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+    Text(label)
+}
 
 /** Between groups: enough that each block reads as its own. */
 private val GroupGap = 16.dp
@@ -417,8 +432,8 @@ private fun SettingsField(
         supportingText = supporting?.let { { Text(it) } },
         keyboardOptions = KeyboardOptions(keyboardType = keyboardType, autoCorrectEnabled = false),
         lineLimits = TextFieldLineLimits.SingleLine,
-        shape = TonalField.Shape,
-        colors = TonalField.colors(),
+        shape = TextFieldDefaults.roundedShape,
+        colors = TextFieldDefaults.tonalColors(),
         modifier = modifier,
     )
 }
@@ -450,8 +465,8 @@ private fun PskField(state: TextFieldState, error: String?, onGenerate: () -> Un
                 }
             }
         },
-        shape = TonalField.Shape,
-        colors = TonalField.colors(),
+        shape = TextFieldDefaults.roundedShape,
+        colors = TextFieldDefaults.tonalColors(),
         modifier = Modifier.fillMaxWidth(),
     )
 }
