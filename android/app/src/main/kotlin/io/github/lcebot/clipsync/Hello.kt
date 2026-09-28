@@ -247,7 +247,7 @@ class Hello private constructor(
             while (it.hasNext()) keys.add(it.next())
             return Hello(
                 o.optInt(K_V, -1),
-                o.optString(K_ID, null),
+                if (o.opt(K_ID) == null) null else o.optString(K_ID),
                 o.optString(K_DEVICE, ""),
                 o.optString(K_TYPE, "?"),
                 o.optString(K_ROLE, ""),

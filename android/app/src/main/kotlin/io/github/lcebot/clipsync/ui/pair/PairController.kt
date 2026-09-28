@@ -264,7 +264,7 @@ class PairController(
                 // over the one just paired.
                 events.keyChanged()
                 SyncService.startOrReload(app)
-                finish(offering = false, message = app.getString(R.string.pair_join_done, r.device ?: "?"))
+                finish(offering = false, message = app.getString(R.string.pair_join_done, r.device))
             } catch (e: Exception) {
                 Logger.i("pairing: $e")
                 set(PairUi.EnteringCode(device, e.message ?: e.javaClass.simpleName))

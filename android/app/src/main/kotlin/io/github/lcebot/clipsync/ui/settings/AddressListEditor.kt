@@ -29,6 +29,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import io.github.lcebot.clipsync.R
+import io.github.lcebot.clipsync.ui.common.NoLineBreaks
 import io.github.lcebot.clipsync.ui.common.rememberHaptics
 import io.github.lcebot.clipsync.ui.theme.Dimens
 
@@ -75,7 +76,10 @@ fun AddressListEditor(
                         }
                     } else null,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next, autoCorrectEnabled = false),
-                    lineLimits = TextFieldLineLimits.SingleLine,
+                    // A long host name wraps instead of scrolling out of sight; line breaks never
+                    // get into it.
+                    lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 3),
+                    inputTransformation = NoLineBreaks,
                     shape = TextFieldDefaults.roundedShape,
                     colors = TextFieldDefaults.tonalColors(),
                     modifier = Modifier.fillMaxWidth(),

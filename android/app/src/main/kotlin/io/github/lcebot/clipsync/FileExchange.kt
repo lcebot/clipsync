@@ -386,7 +386,7 @@ internal class FileExchange internal constructor(
                 Logger.w("cannot open a file for " + name + " under " + config().relativePath + ": " + e)
                 return null
             }
-            if (p != null) partials[sha] = p
+            partials[sha] = p
             p
         }
     }
@@ -619,6 +619,8 @@ internal class FileExchange internal constructor(
                 }
 
                 /** This end accepted the connection, so the peer is entitled to ask us for chunks. */
+                // `c` already names the served connection in this scope.
+                @Suppress("PARAMETER_NAME_CHANGED_ON_OVERRIDE")
                 override fun pull(cc: Connection, msg: JSONObject) {
                     wasPull[0] = true          // a puller, and never a push stream that failed
                     servePull(cc, sha, msg)
@@ -630,6 +632,8 @@ internal class FileExchange internal constructor(
                  * thrown away. Answered at all because a push stream can sit idle between chunks
                  * while the sender reads from slow storage, and silence would cost it its socket.
                  */
+                // `c` already names the served connection in this scope.
+                @Suppress("PARAMETER_NAME_CHANGED_ON_OVERRIDE")
                 override fun ping(cc: Connection) {
                     cc.send(Connection.T_PONG)
                 }

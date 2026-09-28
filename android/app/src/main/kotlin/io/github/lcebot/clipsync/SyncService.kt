@@ -834,7 +834,7 @@ class SyncService : Service() {
 
         override fun knownPeerIds(): MutableSet<String> { return this@SyncService.knownPeerIds() }
 
-        override fun sendClip(l: Link, c: Any) { this@SyncService.sendClip(l, c) }
+        override fun sendClip(l: Link, clip: Any) { this@SyncService.sendClip(l, clip) }
 
         override fun supersede(except: String) { files.supersede(except) }
 
@@ -1350,8 +1350,8 @@ class SyncService : Service() {
             return clip.pendingClip()
         }
 
-        override fun send(link: Link, c: Any) {
-            sendClip(link, c)
+        override fun send(link: Link, clip: Any) {
+            sendClip(link, clip)
         }
 
         override fun delivered(link: Link, hash: String) {

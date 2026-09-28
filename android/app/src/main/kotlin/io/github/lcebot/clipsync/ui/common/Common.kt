@@ -1,6 +1,8 @@
 package io.github.lcebot.clipsync.ui.common
 
 import androidx.compose.animation.AnimatedContentTransitionScope
+import androidx.compose.foundation.text.input.InputTransformation
+import androidx.compose.foundation.text.input.TextFieldBuffer
 import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.fadeIn
@@ -116,3 +118,16 @@ private const val SHARED_AXIS_TRAVEL = 5
 
 /** Convenience for `AnimatedContent(transitionSpec = ...)` call sites. */
 typealias TransitionSpec<S> = AnimatedContentTransitionScope<S>.() -> ContentTransform
+
+/**
+ * Keeps a wrapping text field to one logical value: a line break typed or pasted into it is
+ * dropped, so a field that shows several lines still stores a single line.
+ */
+object NoLineBreaks : InputTransformation {
+    override fun TextFieldBuffer.transformInput() {
+        val text = asCharSequence()
+        if (text.any { it == '\n' || it == '\r' }) {
+            replace(0, length, text.filterNot { it == '\n' || it == '\r' })
+        }
+    }
+}

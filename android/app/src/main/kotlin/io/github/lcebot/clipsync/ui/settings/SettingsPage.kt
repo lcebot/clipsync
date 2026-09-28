@@ -67,6 +67,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import io.github.lcebot.clipsync.Config
@@ -75,6 +76,7 @@ import io.github.lcebot.clipsync.R
 import io.github.lcebot.clipsync.ui.common.ContentItem
 import io.github.lcebot.clipsync.ui.common.Group
 import io.github.lcebot.clipsync.ui.common.Haptics
+import io.github.lcebot.clipsync.ui.common.NoLineBreaks
 import io.github.lcebot.clipsync.ui.common.SliderGrabHaptics
 import io.github.lcebot.clipsync.ui.common.SwitchItem
 import io.github.lcebot.clipsync.ui.common.rememberHaptics
@@ -163,19 +165,22 @@ fun SettingsPage(
             // the key's group: pairing is the one almost everyone wants, so it carries the tone.
             item {
                 ContentItem(it) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                        // Icons as well as labels: a label alone in a tinted pill reads as a toggle.
+                    // Stacked at full width rather than side by side: two labels of this length do not
+                    // fit half a phone, and a label wrapped onto two lines inside a pill no longer
+                    // reads as a button. Icons as well as labels, because a label alone in a tinted
+                    // pill reads as a toggle.
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                         FilledTonalButton(
                             onClick = haptics.ticking(onPair),
                             shapes = ButtonDefaults.shapes(),
                             contentPadding = ButtonDefaults.ButtonWithIconContentPadding,
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier.fillMaxWidth(),
                         ) { IconLabel(R.drawable.ic_pair, stringResource(R.string.pair_button)) }
                         OutlinedButton(
                             onClick = haptics.ticking(onSetup),
                             shapes = ButtonDefaults.shapes(),
                             contentPadding = ButtonDefaults.ButtonWithIconContentPadding,
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier.fillMaxWidth(),
                         ) { IconLabel(R.drawable.ic_setup, stringResource(R.string.setup_button)) }
                     }
                 }
@@ -288,6 +293,7 @@ fun SettingsPage(
                         error = validation.path ?: problem.on("files_dir"),
                         helper = stringResource(R.string.helper_path),
                         keyboardType = KeyboardType.Uri,
+                        wrap = true,
                     )
                 }
             }
@@ -421,6 +427,7 @@ private fun SettingsField(
     helper: String? = null,
     keyboardType: KeyboardType,
     modifier: Modifier = Modifier.fillMaxWidth(),
+    wrap: Boolean = false,
 ) {
     val supporting = error ?: helper
     TextField(
@@ -430,8 +437,11 @@ private fun SettingsField(
         // Absent when there is nothing to say, so a form that has just been fixed closes the gap
         // where the complaint was.
         supportingText = supporting?.let { { Text(it) } },
-        keyboardOptions = KeyboardOptions(keyboardType = keyboardType, autoCorrectEnabled = false),
-        lineLimits = TextFieldLineLimits.SingleLine,
+        keyboardOptions = KeyboardOptions(keyboardType = keyboardType, autoCorrectEnabled = false, imeAction = ImeAction.Next),
+        // A long value (a path) wraps instead of scrolling out of sight; it is still one value, so
+        // line breaks never get into it.
+        lineLimits = if (wrap) TextFieldLineLimits.MultiLine(maxHeightInLines = 3) else TextFieldLineLimits.SingleLine,
+        inputTransformation = if (wrap) NoLineBreaks else null,
         shape = TextFieldDefaults.roundedShape,
         colors = TextFieldDefaults.tonalColors(),
         modifier = modifier,

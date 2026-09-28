@@ -391,7 +391,9 @@ internal class ClipboardBridge internal constructor(
 
     internal fun onRemoteClip(l: Link, msg: JSONObject) {
         val cfg = host.config()
-        val text: String? = msg.optString("data", null)
+        // Null only when the key is absent, as optString(key, null) would give; opt() says that
+        // without passing null where org.json declares a non-null fallback.
+        val text: String? = if (msg.opt("data") == null) null else msg.optString("data")
         if (text == null || "text/plain" != msg.optString("mime", "text/plain")) return
         if (text.toByteArray(StandardCharsets.UTF_8).size > cfg.maxBytes) return
         val h = Crypto.sha256Hex(normalise(text) ?: throw NullPointerException("normalise"))
