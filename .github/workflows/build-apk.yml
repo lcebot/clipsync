@@ -59,13 +59,13 @@ jobs:
 
       # ubuntu-latest ships the Android SDK at $ANDROID_HOME with licenses accepted. The platform
       # must match compileSdk in app/build.gradle.kts: since API 36.1 platform packages carry a minor
-      # version, and AGP maps compileSdk 37 to android-37.0. android-actions/setup-android@v3 is not used
+      # version, and compileSdk 37.1 maps to android-37.1. android-actions/setup-android@v3 is not used
       # because it tries to install the 'tools' package, which current images do not have.
       - name: install SDK components
         run: |
           SDKMANAGER=$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager | tail -n1)
           yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
-          "$SDKMANAGER" "platforms;android-37.0" "build-tools;36.0.0" >/dev/null
+          "$SDKMANAGER" "platforms;android-37.1" "build-tools;36.0.0" >/dev/null
 
       - uses: gradle/actions/setup-gradle@v4
         with:

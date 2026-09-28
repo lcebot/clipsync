@@ -41,12 +41,15 @@ val keystoreAlias = signingValue("keyAlias", "KEY_ALIAS") ?: keystoreFile?.takeI
 
 android {
     namespace = "io.github.lcebot.clipsync"
-    // 37 because Compose Material 3 1.5.0 alphas and the Compose 1.12+ line they depend on refuse
-    // to build against anything lower: AGP's checkAarMetadata fails the build, it is never a
-    // runtime surprise. If that check asks for 37.1, the form is
-    // `release(37) { minorApiLevel = 1 }`. compileSdk only decides which APIs the compiler can see;
-    // it does not change behaviour on any device, which is targetSdk's job.
-    compileSdk { version = release(37) }
+    // 37.1 because the Compose 1.13 alphas that Material 3 1.5.0 alphas depend on declare it, and
+    // AGP's checkAarMetadata fails the build below it; it is never a runtime surprise. The CI
+    // installs the matching platforms;android-37.1 package. compileSdk only decides which APIs the
+    // compiler can see; it does not change behaviour on any device, which is targetSdk's job.
+    compileSdk {
+        version = release(37) {
+            minorApiLevel = 1
+        }
+    }
 
     defaultConfig {
         applicationId = "io.github.lcebot.clipsync"
