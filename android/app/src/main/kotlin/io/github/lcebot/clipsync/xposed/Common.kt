@@ -17,7 +17,7 @@ import java.lang.reflect.Method
 /**
  * Everything the system_server module does, independent of the Xposed API that loaded it. [Entry]
  * installs the hooks and calls into here. Nothing here references an Xposed type, which keeps the
- * logic readable and testable on its own.
+ * logic readable on its own and independent of the API version that loads it.
  *
  * - Clipboard: writes are allowed without focus on every release, so "writing works in the
  *   background" proves nothing about the hooks. Reads and listener dispatch require focus;

@@ -166,7 +166,7 @@ class SettingsState(initial: SettingsValues) {
         browseIndex = browseIndex,
     )
 
-    fun validate(checks: SettingsChecks = ConfigChecks): Validation = SettingsRules.validate(values(), checks)
+    fun validate(): Validation = SettingsRules.validate(values())
 
     /**
      * Opens or closes the own-addresses group. Closing is refused while the group holds an error:

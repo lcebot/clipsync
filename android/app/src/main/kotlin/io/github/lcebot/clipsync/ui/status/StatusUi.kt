@@ -10,7 +10,8 @@ import io.github.lcebot.clipsync.Status
  *
  * Immutable so Compose can skip everything that did not change between two reads of the status
  * file; the Java snapshot's lists are mutable, so nothing from it crosses this boundary as-is.
- * Strings stay resource ids here so this mapping is testable without Android resources.
+ * Strings stay resource ids here and are resolved when drawn, so a change of language needs no new
+ * mapping.
  */
 @Immutable
 data class StatusUi(
@@ -68,8 +69,8 @@ data class TargetUi(val target: String?, val reason: String?, val why: Status.Wh
 /**
  * The rules from one status snapshot to the screen.
  *
- * [alive] and [exemptFromBatteryOptimisation] are passed in, not read here, so the rules run in a
- * plain JVM test: liveness is a clock comparison and the exemption is a system service call.
+ * [alive] and [exemptFromBatteryOptimisation] are passed in, not read here, so the mapping itself
+ * touches no clock and no system service: the caller reads both once, alongside the snapshot.
  */
 object StatusRules {
     fun toUi(s: Status.Snapshot, alive: Boolean, exemptFromBatteryOptimisation: Boolean): StatusUi {

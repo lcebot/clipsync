@@ -5,28 +5,6 @@ import io.github.lcebot.clipsync.Config
 import java.util.Properties
 
 /**
- * The checks the settings form runs, behind a seam.
- *
- * The real ones live in [Config], because the file is the authority and Config.save refuses what
- * they refuse. Some of them call Android (InetAddresses, Environment), so tests supply their own.
- */
-interface SettingsChecks {
-    fun peer(s: String): String?
-    fun port(s: String): String?
-    fun psk(s: String): String?
-    fun path(s: String): String?
-    fun range(s: String, min: Long, max: Long, unit: String): String?
-}
-
-object ConfigChecks : SettingsChecks {
-    override fun peer(s: String): String? = Config.checkPeer(s)
-    override fun port(s: String): String? = Config.checkPort(s)
-    override fun psk(s: String): String? = Config.checkPsk(s)
-    override fun path(s: String): String? = Config.checkPath(s)
-    override fun range(s: String, min: Long, max: Long, unit: String): String? = Config.checkRange(s, min, max, unit)
-}
-
-/**
  * Everything the form holds, as plain values: what [SettingsRules] reads and writes. The two address
  * lists are the rows as shown, blanks included, because validation speaks about rows.
  */
@@ -161,21 +139,21 @@ object SettingsRules {
         return p
     }
 
-    fun validate(v: SettingsValues, checks: SettingsChecks): Validation {
+    fun validate(v: SettingsValues): Validation {
         // The own list first: the peer list is checked against it.
-        val own = AddressRules.validate(v.ownAddresses, allowEmpty = true, enabled = true, forbidden = emptySet(), checks)
+        val own = AddressRules.validate(v.ownAddresses, allowEmpty = true, enabled = true, forbidden = emptySet())
         val peers = AddressRules.validate(
-            v.peers, allowEmpty = false, enabled = v.direct, forbidden = AddressRules.normalised(v.ownAddresses), checks,
+            v.peers, allowEmpty = false, enabled = v.direct, forbidden = AddressRules.normalised(v.ownAddresses),
         )
         return Validation(
-            port = checks.port(v.port),
-            psk = checks.psk(v.psk),
-            textKb = checks.range(v.textKb, 1, 65_536, "KB"),
-            fileMb = checks.range(v.fileMb, 1, 4096, "MB"),
-            fileMbLocal = checks.range(v.fileMbLocal, 1, 4096, "MB"),
-            path = checks.path(v.path),
-            keepHours = checks.range(v.keepHours, 0, 8760, "h"),
-            keepMb = checks.range(v.keepMb, 0, 1024L * 1024L, "MB"),
+            port = Config.checkPort(v.port),
+            psk = Config.checkPsk(v.psk),
+            textKb = Config.checkRange(v.textKb, 1, 65_536, "KB"),
+            fileMb = Config.checkRange(v.fileMb, 1, 4096, "MB"),
+            fileMbLocal = Config.checkRange(v.fileMbLocal, 1, 4096, "MB"),
+            path = Config.checkPath(v.path),
+            keepHours = Config.checkRange(v.keepHours, 0, 8760, "h"),
+            keepMb = Config.checkRange(v.keepMb, 0, 1024L * 1024L, "MB"),
             peers = peers,
             ownAddresses = own,
             noPath = !v.discovery && !v.direct,
@@ -227,7 +205,6 @@ object AddressRules {
         allowEmpty: Boolean,
         enabled: Boolean,
         forbidden: Set<String>,
-        checks: SettingsChecks,
     ): List<RowProblem?> {
         if (!enabled) return rows.map { null }
         val seen = HashSet<String>()
@@ -236,7 +213,7 @@ object AddressRules {
             if (raw.isEmpty()) {
                 if (allowEmpty) null else RowProblem.Required(lastRow = rows.size == 1)
             } else {
-                val invalid = checks.peer(raw)
+                val invalid = Config.checkPeer(raw)
                 val normal = Config.normalisePeer(raw)
                 when {
                     invalid != null -> RowProblem.Invalid(invalid)

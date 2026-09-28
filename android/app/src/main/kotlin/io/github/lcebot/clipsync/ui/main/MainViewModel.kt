@@ -8,7 +8,6 @@ import io.github.lcebot.clipsync.Config
 import io.github.lcebot.clipsync.Logger
 import io.github.lcebot.clipsync.R
 import io.github.lcebot.clipsync.ui.log.LogState
-import io.github.lcebot.clipsync.ui.settings.ConfigChecks
 import io.github.lcebot.clipsync.ui.settings.SaveProblem
 import io.github.lcebot.clipsync.ui.settings.SettingsRules
 import io.github.lcebot.clipsync.ui.settings.SettingsState
@@ -77,7 +76,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun apply() {
         val values = settings.values()
-        if (!SettingsRules.validate(values, ConfigChecks).ok) return
+        if (!SettingsRules.validate(values).ok) return
         val app = getApplication<Application>()
         try {
             val stored = Config.raw(app).getProperty("psk", "")

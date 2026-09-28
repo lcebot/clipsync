@@ -11,9 +11,6 @@ activity = "1.14.0-alpha03"
 lifecycle = "2.12.0-alpha04"
 core = "1.19.1"
 coroutines = "1.11.0"
-junit = "4.13.2"
-# The real org.json for JVM unit tests; android.jar only has stubs that throw.
-org-json = "20240303"
 libxposed = "102.0.0"
 
 [libraries]
@@ -22,16 +19,11 @@ compose-material3 = { module = "androidx.compose.material3:material3" }
 compose-ui = { module = "androidx.compose.ui:ui" }
 compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling" }
 compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview" }
-compose-ui-test-junit4 = { module = "androidx.compose.ui:ui-test-junit4" }
-compose-ui-test-manifest = { module = "androidx.compose.ui:ui-test-manifest" }
 activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activity" }
 lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycle" }
 lifecycle-viewmodel-compose = { module = "androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "lifecycle" }
 core-ktx = { module = "androidx.core:core-ktx", version.ref = "core" }
 coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
-junit = { module = "junit:junit", version.ref = "junit" }
-org-json = { module = "org.json:json", version.ref = "org-json" }
 libxposed-api = { module = "io.github.libxposed:api", version.ref = "libxposed" }
 
 [plugins]

@@ -9,8 +9,9 @@ import io.github.lcebot.clipsync.Status
 import io.github.lcebot.clipsync.SyncService
 
 /**
- * Everything the screen does to the service, behind one seam, so the action logic around it can be
- * tested without a device.
+ * Everything the screen does to the service, in one place, so the view model says what should
+ * happen and this is the only code that knows how an Android service is started, stopped or told to
+ * reload.
  */
 interface ServiceControl {
     fun isAlive(): Boolean

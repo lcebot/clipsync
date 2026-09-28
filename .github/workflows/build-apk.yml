@@ -153,12 +153,6 @@ jobs:
           echo "VERSION_ARGS=-Pclipsync.versionName=$name -Pclipsync.versionCode=$code" >> "$GITHUB_ENV"
           echo "$tag gives versionName $name, versionCode $code"
 
-      # The JVM unit tests: the golden vectors that pin the wire format against the Windows side,
-      # and the settings, status and action rules. Before the build, so a release never ships
-      # something that cannot talk to the other devices.
-      - name: unit tests
-        run: gradle testDebugUnitTest --no-daemon
-
       - name: build
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}

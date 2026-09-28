@@ -12,7 +12,8 @@ import androidx.compose.runtime.Immutable
  * follow the service and not the buttons. If the service never arrives, [WAIT_TIMEOUT_MS] hands
  * control back rather than leaving the screen stuck.
  *
- * Pure and immutable so every transition is a JVM test. Time is always passed in.
+ * Pure and immutable, with time always passed in, so a transition depends on nothing but its inputs
+ * and the whole machine can be read in one place.
  */
 @Immutable
 data class ActionState(

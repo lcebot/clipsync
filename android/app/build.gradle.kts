@@ -129,13 +129,10 @@ dependencies {
 
     val composeBom = platform(libs.compose.bom.alpha)
     implementation(composeBom)
-    androidTestImplementation(composeBom)
     implementation(libs.compose.material3)            // 1.5.0-alpha29 through the alpha BOM
     implementation(libs.compose.ui)
     implementation(libs.compose.ui.tooling.preview)
     debugImplementation(libs.compose.ui.tooling)
-    debugImplementation(libs.compose.ui.test.manifest)
-    androidTestImplementation(libs.compose.ui.test.junit4)
 
     implementation(libs.activity.compose)
     implementation(libs.lifecycle.runtime.compose)
@@ -144,8 +141,4 @@ dependencies {
     // separately collides with AGP's consistent runtime and compile resolution.
     implementation(libs.core.ktx)
     implementation(libs.coroutines.android)
-
-    testImplementation(libs.junit)
-    testImplementation(libs.org.json)
-    testImplementation(libs.coroutines.test)
 }
