@@ -537,12 +537,13 @@ private fun StepSlider(
 ) {
     val interactions = remember { MutableInteractionSource() }
     SliderGrabHaptics(interactions, haptics)
-    val state = remember(positions) {
-        SliderState(value = index.toFloat(), steps = positions - 2, valueRange = 0f..(positions - 1).toFloat())
-    }
+    // The state runs over 0 to 1, with one detent per position between the ends; the index is the
+    // position scaled back to the table.
+    val last = (positions - 1).toFloat()
+    val state = remember(positions) { SliderState(value = index / last, steps = positions - 2) }
     // A reload from the file moves the thumb; a drag already has it there.
     LaunchedEffect(index) {
-        if (state.value.roundToInt() != index) state.value = index.toFloat()
+        if ((state.value * last).roundToInt() != index) state.value = index / last
     }
     val current by rememberUpdatedState(index)
     Column(modifier.fillMaxWidth()) {
@@ -551,7 +552,8 @@ private fun StepSlider(
             state = state,
             onValueChange = { v ->
                 state.value = v
-                val i = v.roundToInt()
+                // One tick per detent rather than per drag event, so the feedback matches the steps.
+                val i = (v * last).roundToInt()
                 if (i != current) {
                     haptics.detent()
                     onIndex(i)
