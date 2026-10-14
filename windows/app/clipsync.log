@@ -1,0 +1,8 @@
+2026-10-14 18:02:31,731 INFO sent local clip to remote (text 1 chars)
+2026-10-14 18:02:31,732 INFO sent local clip to remote (text 1 chars)
+2026-10-14 18:02:31,732 INFO sent local clip to remote (text 1 chars)
+2026-10-14 18:02:31,732 INFO sent local clip to remote (text 1 chars)
+2026-10-14 18:02:31,733 INFO sent local clip to remote (image/png shot.png 9 bytes)
+2026-10-14 18:02:31,733 INFO offered shot.png to phone
+2026-10-14 18:02:31,733 INFO offered shot.png to phone
+2026-10-14 18:02:31,733 INFO applied remote(phone) clip locally (image/png r.png 10 bytes)

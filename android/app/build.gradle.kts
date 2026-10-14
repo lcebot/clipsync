@@ -41,7 +41,7 @@ val keystoreAlias = signingValue("keyAlias", "KEY_ALIAS") ?: keystoreFile?.takeI
 
 android {
     namespace = "io.github.lcebot.clipsync"
-    // 37.1 because the Compose 1.13 alphas that Material 3 1.5.0 alphas depend on declare it, and
+    // 37.1 because the Compose 1.13 pre-releases that Material 3 1.5.0 depends on declare it, and
     // AGP's checkAarMetadata fails the build below it; it is never a runtime surprise. The CI
     // installs the matching platforms;android-37.1 package. compileSdk only decides which APIs the
     // compiler can see; it does not change behaviour on any device, which is targetSdk's job.
@@ -127,9 +127,9 @@ android {
 dependencies {
     compileOnly(libs.libxposed.api)                  // libxposed API 102, the only entry (xposed.Entry)
 
-    val composeBom = platform(libs.compose.bom.alpha)
+    val composeBom = platform(libs.compose.bom.beta)
     implementation(composeBom)
-    implementation(libs.compose.material3)            // 1.5.0-alpha29 through the alpha BOM
+    implementation(libs.compose.material3)            // 1.5.0-beta01 through the beta BOM
     implementation(libs.compose.ui)
     implementation(libs.compose.ui.tooling.preview)
     debugImplementation(libs.compose.ui.tooling)
@@ -138,7 +138,8 @@ dependencies {
     implementation(libs.lifecycle.runtime.compose)
     implementation(libs.lifecycle.viewmodel.compose)
     // Also the source of androidx.annotation (@Keep on Pairing.ScryptSpec). Pinning annotation
-    // separately collides with AGP's consistent runtime and compile resolution.
-    implementation(libs.core.ktx)
+    // separately collides with AGP's consistent runtime and compile resolution. The Kotlin
+    // extensions live in core itself; core-ktx is an empty artifact kept for compatibility.
+    implementation(libs.core)
     implementation(libs.coroutines.android)
 }

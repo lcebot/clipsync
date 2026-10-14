@@ -119,13 +119,15 @@ class Entry : XposedModule() {
                 // never guessed from the argument VALUES. See Common.sourceArg.
                 val clipAt = Common.clipArg(setter)
                 val sourceAt = Common.sourceArg(setter)
+                val uidAt = Common.uidArg(setter)
+                val granter = Common.itemGranter(svc)
                 hook(setter).setId("push").setExceptionMode(ExceptionMode.PROTECTIVE)
                     .intercept { chain ->
                         val r = chain.proceed()
                         try {
                             val args = arrayOfNulls<Any>(argc)
                             for (k in 0 until argc) args[k] = chain.getArg(k)
-                            Common.onClipSet(args, clipAt, sourceAt)
+                            Common.onClipSet(chain.getThisObject(), args, clipAt, sourceAt, uidAt, granter)
                         } catch (ignored: Throwable) {
                         }
                         r

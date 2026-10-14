@@ -1,12 +1,14 @@
 # One place for every version, because most of them are pre-releases that move together: the
-# material3 alpha decides the Compose alpha, which decides compileSdk, which decides the AGP.
-# Bump them as a set and read each library's "API changes" first.
+# material3 pre-release decides the Compose pre-release, which decides compileSdk, which decides the
+# AGP. Bump them as a set and read each library's "API changes" first.
 
 [versions]
-agp = "9.5.0-alpha06"
+agp = "9.5.0-alpha09"
 # The Kotlin compiler and the Compose compiler plugin ship as one version and must stay equal.
 kotlin = "2.5.0-Beta1"
-compose-bom-alpha = "2026.09.01"
+# The beta BOM: 2026.10.00 maps material3 to 1.5.0-beta01 and every other Compose artifact,
+# transitive ones included, to 1.13.0-beta01.
+compose-bom-beta = "2026.10.00"
 activity = "1.14.0-alpha03"
 lifecycle = "2.12.0-alpha04"
 core = "1.19.1"
@@ -14,7 +16,7 @@ coroutines = "1.11.0"
 libxposed = "102.0.0"
 
 [libraries]
-compose-bom-alpha = { module = "androidx.compose:compose-bom-alpha", version.ref = "compose-bom-alpha" }
+compose-bom-beta = { module = "androidx.compose:compose-bom-beta", version.ref = "compose-bom-beta" }
 compose-material3 = { module = "androidx.compose.material3:material3" }
 compose-ui = { module = "androidx.compose.ui:ui" }
 compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling" }
@@ -22,7 +24,7 @@ compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview"
 activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activity" }
 lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycle" }
 lifecycle-viewmodel-compose = { module = "androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "lifecycle" }
-core-ktx = { module = "androidx.core:core-ktx", version.ref = "core" }
+core = { module = "androidx.core:core", version.ref = "core" }
 coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
 libxposed-api = { module = "io.github.libxposed:api", version.ref = "libxposed" }
 

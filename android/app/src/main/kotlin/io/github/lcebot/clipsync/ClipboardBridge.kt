@@ -286,7 +286,9 @@ internal class ClipboardBridge internal constructor(
             if (cd.itemCount == 0) return
             // In the foreground both the listener and the hook deliver the same clip. The system
             // stamps every clip; dropping the second delivery here saves a full re-read (and
-            // re-hash) of a possibly 100 MB file.
+            // re-hash) of a possibly 100 MB file. The stamp is recorded only once a delivery has
+            // yielded something usable, below, so a delivery that cannot read the clip (one whose
+            // URI grant is missing, say) leaves the other free to try.
             val desc = cd.description
             val stamp: Long = if (desc != null) desc.timestamp else 0
             synchronized(lock) {
@@ -294,7 +296,6 @@ internal class ClipboardBridge internal constructor(
                     Logger.i("clip ($source): same clip already handled, skipped")   // proves the path is alive
                     return
                 }
-                lastClipStamp = stamp
             }
             // A clip can carry several items and each item text and/or a URI. Prefer the first
             // item that is a readable file (image copied from gallery/browser, file from a file
@@ -335,6 +336,7 @@ internal class ClipboardBridge internal constructor(
             val found: Any = out
             val h = hashOf(found)
             synchronized(lock) {
+                lastClipStamp = stamp
                 if (h == lastRemoteHash || wasSentByUs(h)) return   // echo / duplicate
                 pendingLocal = found
                 // Unconditionally, even for content that was in the slot before: the user copying

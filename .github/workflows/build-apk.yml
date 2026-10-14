@@ -69,7 +69,7 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "9.8.0"          # the same as gradle-wrapper.properties
+          gradle-version: "9.8.1"          # the same as gradle-wrapper.properties
 
       # Decoded into RUNNER_TEMP, never into the workspace: nothing here can end up in an artifact.
       - name: decode keystore

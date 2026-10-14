@@ -519,6 +519,7 @@ for fn, res, args in [
     (user32.SetClipboardData, wt.HANDLE, [wt.UINT, wt.HANDLE]),
     (user32.IsClipboardFormatAvailable, wt.BOOL, [wt.UINT]),
     (user32.RegisterClipboardFormatW, wt.UINT, [wt.LPCWSTR]),
+    (user32.GetClipboardSequenceNumber, wt.DWORD, []),
     (shell32.DragQueryFileW, wt.UINT, [wt.HANDLE, wt.UINT, wt.LPWSTR, wt.UINT]),
     (kernel32.GlobalAlloc, wt.HGLOBAL, [wt.UINT, ctypes.c_size_t]),
     (kernel32.GlobalLock, wt.LPVOID, [wt.HGLOBAL]),
@@ -611,10 +612,9 @@ def dib_to_bmp(dib: bytes) -> bytes:
     return b"BM" + struct.pack("<IHHI", 14 + len(dib), 0, 0, offset) + dib
 
 
-def clipboard_read(cfg: Cfg, skip_path=None):
+def clipboard_read(cfg: Cfg):
     """
     Highest-value content on the clipboard: file > image > text. None if nothing usable.
-    skip_path: the file we ourselves put there last (don't hash it just to echo-drop it).
     Images that only exist in memory are written to files_dir so they can be served later.
     """
     if not _open_clipboard():
@@ -629,8 +629,6 @@ def clipboard_read(cfg: Cfg, skip_path=None):
                     buf = ctypes.create_unicode_buffer(32768)
                     shell32.DragQueryFileW(h, i, buf, 32768)
                     path = buf.value
-                    if path == skip_path:
-                        return None
                     if not os.path.isfile(path):
                         continue
                     size = os.path.getsize(path)
@@ -681,63 +679,74 @@ def clipboard_read(cfg: Cfg, skip_path=None):
         user32.CloseClipboard()
 
 
-def clipboard_set_text(text: str) -> bool:
-    data = text.replace("\r\n", "\n").replace("\n", "\r\n")
-    buf = ctypes.create_unicode_buffer(data)
-    raw = ctypes.string_at(ctypes.addressof(buf), ctypes.sizeof(buf))
+def _clipboard_write(required: tuple, *optional: tuple) -> int:
+    """Replace the clipboard with `required` and any `optional` renditions, each (format, bytes).
+
+    Every payload is prepared before the clipboard is opened, so it is held only for the copies
+    into global memory and other applications are never kept waiting on an image conversion.
+
+    Returns the clipboard sequence number of this write, or 0 when it failed. That number is how
+    the listener recognises the WM_CLIPBOARDUPDATE our own write raises, without reading the
+    clipboard back. It is taken after CloseClipboard because the write is complete only then.
+    """
     if not _open_clipboard():
-        return False
+        return 0
     try:
         user32.EmptyClipboard()
-        h = _global_from_bytes(raw)
-        if not h or not user32.SetClipboardData(CF_UNICODETEXT, h):
-            if h:
-                kernel32.GlobalFree(h)
-            return False
-        return True
+        ok = _set_clipboard_data(*required)
+        for rendition in optional:
+            _set_clipboard_data(*rendition)
     finally:
         user32.CloseClipboard()
+    return user32.GetClipboardSequenceNumber() if ok else 0
 
 
-def clipboard_set_file(path: str, mime: str) -> bool:
+def _set_clipboard_data(fmt: int, data: bytes) -> bool:
+    """SetClipboardData from bytes. The clipboard owns the memory only on success, so a failed
+    call frees it here."""
+    h = _global_from_bytes(data)
+    if not h:
+        return False
+    if user32.SetClipboardData(fmt, h):
+        return True
+    kernel32.GlobalFree(h)
+    return False
+
+
+def clipboard_set_text(text: str) -> int:
+    """Put text on the clipboard; returns the write's sequence number, or 0 (see _clipboard_write)."""
+    data = text.replace("\r\n", "\n").replace("\n", "\r\n")
+    return _clipboard_write((CF_UNICODETEXT, (data + "\0").encode("utf-16-le")))
+
+
+def clipboard_set_file(path: str, mime: str) -> int:
     """
     Put a saved file on the clipboard.  Always CF_HDROP (pastes as a file in Explorer and in
     apps that accept dropped files).  For images also "PNG" and CF_DIB so image-aware apps
-    paste the picture itself.
+    paste the picture itself.  Returns the write's sequence number, or 0 (see _clipboard_write).
     """
-    if not _open_clipboard():
-        return False
-    try:
-        user32.EmptyClipboard()
-        # DROPFILES { pFiles=20, pt=(0,0), fNC=0, fWide=1 } + UTF-16 path + \0 + \0
-        wide = (path + "\0\0").encode("utf-16-le")
-        h = _global_from_bytes(struct.pack("<IiiII", 20, 0, 0, 0, 1) + wide)
-        ok = bool(h and user32.SetClipboardData(CF_HDROP, h))
-        if mime.startswith("image/"):
-            with open(path, "rb") as f:
-                data = f.read()
-            png = data if mime == "image/png" else None
-            if Image is not None:
-                try:
-                    im = Image.open(io.BytesIO(data))
-                    if png is None:
-                        out = io.BytesIO()
-                        im.save(out, "PNG")
-                        png = out.getvalue()
-                    bmp = io.BytesIO()
-                    im.convert("RGBA" if im.mode in ("RGBA", "LA", "P") else "RGB").save(bmp, "BMP")
-                    hd = _global_from_bytes(bmp.getvalue()[14:])
-                    if hd:
-                        user32.SetClipboardData(CF_DIB, hd)
-                except Exception as e:
-                    log.info("image conversion skipped: %s", e)
-            if png:
-                hp = _global_from_bytes(png)
-                if hp:
-                    user32.SetClipboardData(CF_PNG, hp)
-        return ok
-    finally:
-        user32.CloseClipboard()
+    # DROPFILES { pFiles=20, pt=(0,0), fNC=0, fWide=1 } + UTF-16 path + \0 + \0
+    drop = struct.pack("<IiiII", 20, 0, 0, 0, 1) + (path + "\0\0").encode("utf-16-le")
+    images = []
+    if mime.startswith("image/"):
+        with open(path, "rb") as f:
+            data = f.read()
+        png = data if mime == "image/png" else None
+        if Image is not None:
+            try:
+                im = Image.open(io.BytesIO(data))
+                if png is None:
+                    out = io.BytesIO()
+                    im.save(out, "PNG")
+                    png = out.getvalue()
+                bmp = io.BytesIO()
+                im.convert("RGBA" if im.mode in ("RGBA", "LA", "P") else "RGB").save(bmp, "BMP")
+                images.append((CF_DIB, bmp.getvalue()[14:]))
+            except Exception as e:
+                log.info("image conversion skipped: %s", e)
+        if png:
+            images.append((CF_PNG, png))
+    return _clipboard_write((CF_HDROP, drop), *images)
 
 
 _MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp",
@@ -1043,11 +1052,17 @@ class SyncState:
         # because two different clips can share a millisecond and a sender, and because files join
         # this set too, keyed on the OFFER's `seq`, where the digest is the whole identity.
         self.seen_set = {}
-        # Echo suppression, 16 entries each (see _Bounded): what we wrote into the local clipboard,
-        # and what we sent out. A hash in either is ours coming back and must not be applied.
+        # Echo suppression for what peers send us, 16 entries each (see _Bounded): what we wrote
+        # into the local clipboard, and what we sent out. A hash in either is ours coming back and
+        # must not be applied.
         self.remote_hashes = _Bounded()
         self.sent_hashes = _Bounded()
-        self.last_set_path = None    # file we last put on the clipboard (cheap loop check)
+        # Our own writes to the local clipboard are recognised by sequence number, not by content:
+        # the WM_CLIPBOARDUPDATE a write raises is skipped unread, while the user copying the same
+        # content again is a new sequence number and goes out as a new clip. See write_clipboard.
+        self.own_clip_seq = 0
+        self.clip_write_lock = threading.Lock()
+        self.last_set_path = None    # file we last put on the clipboard, which prune must keep
         self.last_announce = 0.0     # monotonic time of the last T_KEYS broadcast (rate limit)
         self.last_announced_keys = None   # (psk, since, next) of it; only exact repeats are damped
         self.aborted = {}            # maps a sha to the time of its last ABORT (pull loops check it)
@@ -1356,22 +1371,43 @@ class SyncState:
         self.announce(item, [ch])
 
     # -- local clipboard changed --
+    def write_clipboard(self, setter, *args) -> bool:
+        """Write the local clipboard with a clipboard_set_* function and remember the write.
+
+        The lock spans the write and the bookkeeping because the update the write raises can reach
+        clipboard_worker before the setter has returned; is_own_write waits for it instead of
+        mistaking our write for a copy.
+        """
+        with self.clip_write_lock:
+            written = setter(*args)
+            if written:
+                self.own_clip_seq = written
+        return bool(written)
+
+    def is_own_write(self) -> bool:
+        """Does the clipboard still hold what write_clipboard last put there?"""
+        with self.clip_write_lock:
+            return user32.GetClipboardSequenceNumber() == self.own_clip_seq
+
     def on_local_change(self, item: Item):
+        """The user copied something: it becomes the newest clip and goes to every peer.
+
+        Even when it is content we sent or received before. Only a copy reaches here (our own
+        writes are filtered by sequence number in clipboard_worker), so a repeat is the user asking
+        for it again, typically because a peer that was asleep never got it.
+        """
         if item.kind == "text" and (not item.text or len(item.text.encode("utf-8")) > self.cfg.max_bytes):
             return
-        if item.kind == "file" and item.path == self.last_set_path:
-            return                                   # our own CF_HDROP
         h = item.sha256
         with self.lock:
-            if h in self.remote_hashes or h in self.sent_hashes:
-                return
             previous = self.latest_item
             self.sent_hashes.add(h)
             self.latest_item = item
-            if item.kind == "text":
-                self.clip_ts = int(time.time() * 1000)
-                self.clip_from = node_id()
-                self.clip_sha = h
+            # Files are versioned exactly like text, so HELLO states what this node really holds
+            # and catch_up can tell a peer that missed a file apart from one that has it.
+            self.clip_ts = int(time.time() * 1000)
+            self.clip_from = node_id()
+            self.clip_sha = h
             targets = list(self.clients)
         # a newer clip supersedes whatever is still in flight, in either direction
         if previous is not None and previous.kind == "file" and previous.sha256 != h:
@@ -1938,7 +1974,7 @@ class SyncState:
 
         log.info("applied remote(%s) clip locally (%s%s)", origin.device, item,
                  ", forwarded" if forwarded else "")
-        if not clipboard_set_text(item.text):
+        if not self.write_clipboard(clipboard_set_text, item.text):
             log.warning("failed to set clipboard")
 
         # Forward to exactly `my peers ∖ to`: the ones the origin could not reach itself. One hop
@@ -1972,11 +2008,17 @@ class SyncState:
                 return
             self.remote_hashes.add(h)
             self.latest_item = item
+            # Versioned like a text clip, with the originator's `seq` in our clock domain as the
+            # timestamp, the same stand-in Android's adoptFile uses.
+            if seq > 0:
+                self.clip_ts = seq - getattr(origin, "clock_offset", 0)
+                self.clip_from = from_id or (origin.node_id or "")
+            self.clip_sha = h
             others = [c for c in self.clients if c is not origin]
         log.info("applied remote(%s) clip locally (%s%s)", origin.device, item,
                  ", forwarded" if forwarded else "")
         self.last_set_path = item.path
-        if not clipboard_set_file(item.path, item.mime):
+        if not self.write_clipboard(clipboard_set_file, item.path, item.mime):
             log.warning("failed to set clipboard")
         self.cache.prune(item.path)
         if forwarded or not others:
@@ -3411,8 +3453,11 @@ def main():
                     changed.get_nowait()
                 except queue.Empty:
                     break
+            # Our own write, recognised without opening the clipboard or writing a screenshot file.
+            if state.is_own_write():
+                continue
             try:
-                item = clipboard_read(cfg, state.last_set_path)
+                item = clipboard_read(cfg)
                 if item is not None:
                     state.on_local_change(item)
             except Exception as e:

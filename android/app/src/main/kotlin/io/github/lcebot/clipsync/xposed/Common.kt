@@ -22,8 +22,9 @@ import java.lang.reflect.Method
  * - Clipboard: writes are allowed without focus on every release, so "writing works in the
  *   background" proves nothing about the hooks. Reads and listener dispatch require focus;
  *   clipboardAccessAllowed is forced to true for our package, and on top of that every clipboard
- *   change is pushed straight into SyncService with the ClipData attached to the intent (read grants
- *   for content:// URIs included).
+ *   change is pushed straight into SyncService with the ClipData attached to the intent. Read
+ *   access to its content:// URIs is granted by ClipboardService itself on behalf of the copying
+ *   app, see [onClipSet].
  * - Keep-alive: our ProcessRecord is flagged shouldNotFreeze when created; as a safety net
  *   Process.setProcessFrozen is a no-op for our uid.
  * - Watchdog: the process-death path schedules a restart check; a slow poll is the net.
@@ -43,6 +44,9 @@ internal object Common {
     /** Enabled means auto-start is wanted. */
     const val AUTOSTART = "$PKG.BootReceiver"
     const val ACTION_CLIP = "$PKG.CLIP"
+
+    /** Apps of one user occupy one range of this size; a uid divided by it is its user id. */
+    private const val PER_USER_RANGE = 100_000
 
     /** Prompt reaction to a kill. */
     const val WATCHDOG_AFTER_DEATH_MS = 3_000L
@@ -102,6 +106,10 @@ internal object Common {
      * Hand a freshly set clip to SyncService. Plain startService from system uid: never subject to
      * background limits, and a running service just gets onStartCommand. Off the binder thread
      * (outside ClipboardService's lock, system identity rather than the copying app's).
+     *
+     * No FLAG_GRANT_READ_URI_PERMISSION: UriGrantsManagerService refuses every grant whose caller is
+     * the system uid, so the flag would only log a warning per copy. [grantReads] has already
+     * issued the grant that matters.
      */
     fun pushClip(clip: ClipData?) {
         if (clip == null) return
@@ -111,7 +119,6 @@ internal object Common {
                     val ctx = systemContext() ?: return@post
                     val i = Intent(ACTION_CLIP).setClassName(PKG, SERVICE)
                     i.clipData = clip
-                    i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                     try {
                         ctx.startService(i)
                     } catch (e: Throwable) {
@@ -368,18 +375,77 @@ internal object Common {
     }
 
     /**
+     * Where the copying app's `uid` sits in the clip setter's parameter list, or -1.
+     *
+     * The first int. In both shapes listed at [clipSetter] that is `uid`, ahead of `deviceId` in
+     * the first one and the only int in the second, on Android 15 through 17 alike.
+     */
+    fun uidArg(m: Method): Int {
+        val p = m.parameterTypes
+        for (i in p.indices) if (p[i] == java.lang.Integer.TYPE) return i
+        return -1
+    }
+
+    /**
+     * ClipboardService's `grantItemPermission(ClipData.Item, int sourceUid, String targetPkg,
+     * int targetUserId)`, made accessible, or null when this ROM lacks it.
+     *
+     * It is the helper `getPrimaryClip()` grants through, so a grant issued with it is held by the
+     * clipboard's own permission owner and revoked by `revokeUris` at the next copy, exactly like
+     * the one an ordinary foreground reader receives. Same signature on Android 15 through 17.
+     */
+    fun itemGranter(svc: Class<*>): Method? {
+        return try {
+            svc.getDeclaredMethod(
+                "grantItemPermission", ClipData.Item::class.java, java.lang.Integer.TYPE, String::class.java,
+                java.lang.Integer.TYPE,
+            ).apply { isAccessible = true }
+        } catch (t: Throwable) {
+            null
+        }
+    }
+
+    /**
      * Pull the ClipData out of a clip-setter call and push it unless we wrote it ourselves.
      *
+     * Runs synchronously inside the setter, under ClipboardService's lock, so the grant is issued
+     * while this clip is still the primary one: a later copy revokes it, and a grant issued after
+     * that would never be revoked.
+     *
+     * @param svc the ClipboardService the setter was called on
      * @param clipAt [clipArg]'s answer for the hooked method
      * @param sourceAt [sourceArg]'s answer, or -1 when the overload carries no source package
+     * @param uidAt [uidArg]'s answer, or -1
+     * @param granter [itemGranter]'s answer, or null
      */
-    fun onClipSet(args: Array<Any?>, clipAt: Int, sourceAt: Int) {
+    fun onClipSet(svc: Any?, args: Array<Any?>, clipAt: Int, sourceAt: Int, uidAt: Int, granter: Method?) {
         try {
-            if (clipAt < 0 || clipAt >= args.size) return
-            val clip = args[clipAt] as? ClipData ?: return
-            val ours = sourceAt >= 0 && sourceAt < args.size && PKG == args[sourceAt]
-            if (!ours) pushClip(clip)
+            val clip = args.getOrNull(clipAt) as? ClipData ?: return
+            if (PKG == args.getOrNull(sourceAt)) return
+            val uid = args.getOrNull(uidAt) as? Int
+            if (svc != null && granter != null && uid != null) grantReads(svc, granter, clip, uid)
+            pushClip(clip)
         } catch (ignored: Throwable) {
+        }
+    }
+
+    /**
+     * Grant this app read access to every URI in [clip], with the copying app as the grantor.
+     *
+     * The grantor has to be the copying app: a grant from the system uid is refused outright, which
+     * leaves a pushed image unreadable. Per item, so one URI the source cannot grant (a
+     * SecurityException) still leaves the others readable. Never clears the clip on failure, unlike
+     * `getPrimaryClip()`, because that is the copying app's clipboard, not ours.
+     */
+    private fun grantReads(svc: Any, granter: Method, clip: ClipData, uid: Int) {
+        val user = uid / PER_USER_RANGE
+        for (i in 0 until clip.itemCount) {
+            val item = clip.getItemAt(i) ?: continue
+            if (item.uri == null && item.intent?.data == null) continue
+            try {
+                granter.invoke(svc, item, uid, PKG, user)
+            } catch (ignored: Throwable) {
+            }
         }
     }
 }
