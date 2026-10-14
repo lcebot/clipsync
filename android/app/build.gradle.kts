@@ -71,6 +71,13 @@ android {
         // Stays 35 through the Compose migration: moving it opts into new platform behaviour and is
         // reviewed on its own.
         targetSdk = 35
+        // The only native code in the APK is Compose's dependency androidx.graphics:graphics-path,
+        // which loads its library on every API level, so it cannot be dropped. Only arm64-v8a is
+        // packaged, since the phones this app is for (Android 15 and up, rooted, with LSPosed) are
+        // 64-bit ARM; a 32-bit or x86 device would fail as soon as Compose iterates a path.
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
         // Both come from a git tag, which the workflow parses and passes in as -P: a release uses
         // its own tag, any other build uses the newest one plus the short commit in versionName
         // (1.0.3+a1b2c3d) while keeping that tag's versionCode. The values below are only the

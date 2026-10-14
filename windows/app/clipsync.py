@@ -98,6 +98,11 @@ from clipsync_proto import *   # noqa: E402,F403
 MAP_SAVE_EVERY = 8         # persist the received-chunk bitmap every N chunks
 WANT_RETRIES = 3           # how often the receiver re-asks for missing chunks in one session
 LOG_MAX_BYTES = 128 * 1024  # roll clipsync.log over at this size; see RotatingLog
+# Workaround for the Windows screenshot tool (Snipping Tool, Win+Shift+S), which writes each capture
+# to the clipboard in two separate sessions about a tenth of a second apart. Identical copies closer
+# together than this count as one, so a capture goes out once; a person copying something again
+# because a peer missed it does so seconds later and is unaffected. See SyncState.on_local_change.
+REPEAT_COPY_WINDOW_S = 1.0
 # One step of the relay fallback walk, not the walk as a whole, and it only ever has to cover one
 # case. "Will not do it" is answered immediately by RELAY_NO; "died mid-transfer" shows up as a
 # closed TCP connection, because the waiter is on the same LAN as the relay. Only "alive but stuck"
@@ -1062,6 +1067,7 @@ class SyncState:
         # content again is a new sequence number and goes out as a new clip. See write_clipboard.
         self.own_clip_seq = 0
         self.clip_write_lock = threading.Lock()
+        self.last_copy_at = 0.0      # monotonic time of the last local copy that went out
         self.last_set_path = None    # file we last put on the clipboard, which prune must keep
         self.last_announce = 0.0     # monotonic time of the last T_KEYS broadcast (rate limit)
         self.last_announced_keys = None   # (psk, since, next) of it; only exact repeats are damped
@@ -1394,12 +1400,17 @@ class SyncState:
 
         Even when it is content we sent or received before. Only a copy reaches here (our own
         writes are filtered by sequence number in clipboard_worker), so a repeat is the user asking
-        for it again, typically because a peer that was asleep never got it.
+        for it again, typically because a peer that was asleep never got it. The one exception is
+        the Windows screenshot tool's double write, see REPEAT_COPY_WINDOW_S.
         """
         if item.kind == "text" and (not item.text or len(item.text.encode("utf-8")) > self.cfg.max_bytes):
             return
         h = item.sha256
+        now = time.monotonic()
         with self.lock:
+            if h == self.clip_sha and now - self.last_copy_at < REPEAT_COPY_WINDOW_S:
+                return                               # the screenshot tool's second write
+            self.last_copy_at = now
             previous = self.latest_item
             self.sent_hashes.add(h)
             self.latest_item = item
