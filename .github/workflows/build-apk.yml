@@ -40,6 +40,7 @@ on:
 
 permissions:
   contents: write
+  actions: write          # deleting superseded artifacts, see the last step
 
 jobs:
   build:
@@ -200,10 +201,14 @@ jobs:
           cp "$RUNNER_TEMP/windows.zip" "$GITHUB_WORKSPACE/dist/"
           ls -l "$GITHUB_WORKSPACE/dist"
 
+      # Short-lived, because a free account's artifact storage is billed in GB-hours: a CI build is
+      # for downloading right away, and a release keeps its files on the release page instead.
       - uses: actions/upload-artifact@v4
+        id: upload
         with:
           name: clipsync
           path: dist/           # a directory: its contents land at the root of the artifact
+          retention-days: 1
 
       # On a release event this attaches to the release that was just published.
       - name: attach to the release
@@ -211,3 +216,22 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
+
+      # Only the newest build is worth keeping, so every other "clipsync" artifact in the repository
+      # is deleted once this one is safely uploaded. Deleting an artifact leaves its workflow run and
+      # logs in place. Without an id from the upload nothing is deleted, rather than everything.
+      - name: delete older artifacts
+        continue-on-error: true    # housekeeping; a failure here must not fail the build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEEP: ${{ steps.upload.outputs.artifact-id }}
+        run: |
+          if [ -z "$KEEP" ]; then
+            echo "no artifact id from the upload; keeping every artifact"
+            exit 0
+          fi
+          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/artifacts?name=clipsync&per_page=100" \
+            --jq ".artifacts[] | select(.id != $KEEP) | .id" |
+          while read -r id; do
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$id" && echo "deleted artifact $id"
+          done
