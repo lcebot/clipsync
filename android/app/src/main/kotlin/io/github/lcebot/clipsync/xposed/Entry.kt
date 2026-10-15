@@ -120,7 +120,10 @@ class Entry : XposedModule() {
                 val clipAt = Common.clipArg(setter)
                 val sourceAt = Common.sourceArg(setter)
                 val uidAt = Common.uidArg(setter)
-                val granter = Common.itemGranter(svc)
+                val granter = Common.uriGranter(svc)
+                if (granter == null) {
+                    both(Log.WARN, "no way to grant URI reads on this ROM; images and files copied in other apps will not sync", null)
+                }
                 hook(setter).setId("push").setExceptionMode(ExceptionMode.PROTECTIVE)
                     .intercept { chain ->
                         val r = chain.proceed()
@@ -132,9 +135,13 @@ class Entry : XposedModule() {
                         }
                         r
                     }
-                // The indices are in the log on purpose: a ROM with a reshaped setter shows up as
-                // "clip -1" or "src -1" in one line, rather than as a clipboard that quietly echoes.
-                hooked.add(setter.name + " hooked to push (clip " + clipAt + ", src " + sourceAt + ")")
+                // The indices and the grant path are in the log on purpose: a ROM with a reshaped setter
+                // or without any grant helper shows up as "-1" or "grant none" in one line, rather than
+                // as a clipboard that quietly echoes or images that quietly never arrive.
+                hooked.add(
+                    setter.name + " hooked to push (clip " + clipAt + ", src " + sourceAt + ", uid " + uidAt +
+                        ", grant " + (granter?.path ?: "none") + ")",
+                )
             }
         } catch (t: Throwable) {
             both(Log.ERROR, "clipboard hook failed", t)

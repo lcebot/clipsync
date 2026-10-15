@@ -3,15 +3,20 @@ package io.github.lcebot.clipsync.xposed
 import android.app.ActivityManager
 import android.content.ClipData
 import android.content.ComponentName
+import android.content.ContentResolver
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Binder
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.IBinder
 import android.os.SystemClock
 import android.os.UserManager
 import android.util.Log
 import java.io.FileInputStream
+import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Method
 
 /**
@@ -23,8 +28,8 @@ import java.lang.reflect.Method
  *   background" proves nothing about the hooks. Reads and listener dispatch require focus;
  *   clipboardAccessAllowed is forced to true for our package, and on top of that every clipboard
  *   change is pushed straight into SyncService with the ClipData attached to the intent. Read
- *   access to its content:// URIs is granted by ClipboardService itself on behalf of the copying
- *   app, see [onClipSet].
+ *   access to its content:// URIs is granted on behalf of the copying app and held by
+ *   ClipboardService's own permission owner, see [uriGranter].
  * - Keep-alive: our ProcessRecord is flagged shouldNotFreeze when created; as a safety net
  *   Process.setProcessFrozen is a no-op for our uid.
  * - Watchdog: the process-death path schedules a restart check; a slow poll is the net.
@@ -108,8 +113,8 @@ internal object Common {
      * (outside ClipboardService's lock, system identity rather than the copying app's).
      *
      * No FLAG_GRANT_READ_URI_PERMISSION: UriGrantsManagerService refuses every grant whose caller is
-     * the system uid, so the flag would only log a warning per copy. [grantReads] has already
-     * issued the grant that matters.
+     * the system uid, so the flag would only log a warning per copy. [grantReads] issues the grant
+     * that matters, with the copying app as the grantor.
      */
     fun pushClip(clip: ClipData?) {
         if (clip == null) return
@@ -387,22 +392,143 @@ internal object Common {
     }
 
     /**
-     * ClipboardService's `grantItemPermission(ClipData.Item, int sourceUid, String targetPkg,
-     * int targetUserId)`, made accessible, or null when this ROM lacks it.
+     * Grants this app read access to the URIs of one clip item on behalf of the copying app.
      *
-     * It is the helper `getPrimaryClip()` grants through, so a grant issued with it is held by the
-     * clipboard's own permission owner and revoked by `revokeUris` at the next copy, exactly like
-     * the one an ordinary foreground reader receives. Same signature on Android 15 through 17.
+     * @property path which of [uriGranter]'s ways was resolved, for the hook log line
      */
-    fun itemGranter(svc: Class<*>): Method? {
+    class UriGranter(
+        val path: String,
+        private val grantItem: (svc: Any, item: ClipData.Item, sourceUid: Int, targetUser: Int) -> Unit,
+    ) {
+        fun grant(svc: Any, item: ClipData.Item, sourceUid: Int, targetUser: Int) =
+            grantItem(svc, item, sourceUid, targetUser)
+    }
+
+    /**
+     * The way to grant read access to a clip's URIs on this ROM, or null when none resolves.
+     *
+     * Each way issues the same grant: the copying app is the grantor, because UriGrantsManagerService
+     * refuses one from the system uid, and ClipboardService's own permission owner holds it, so that
+     * `revokeUris` withdraws it at the next copy exactly as it does for an ordinary foreground reader.
+     * They are tried from the most faithful to the most robust:
+     *
+     * 1. `grantItemPermission(ClipData.Item, int, String, int)`, the helper `getPrimaryClip()`
+     *    grants through.
+     * 2. `grantUriPermission(Uri, int, String, int)`, the per-URI helper underneath it. The item
+     *    helper has a single caller, so an optimizing build may inline it there and keep only this
+     *    one, which a One UI build for Android 16 was reported to do.
+     * 3. `IUriGrantsManager.grantUriPermissionFromOwner` with the service's `mPermissionOwner`,
+     *    the call both helpers end in. An interface method cannot be inlined away, but this way
+     *    reproduces the helpers' logic here and misses anything a ROM adds to them, which is why
+     *    it comes last.
+     *
+     * The helpers' signatures are the same on Android 15 through 17.
+     */
+    fun uriGranter(svc: Class<*>): UriGranter? {
+        val intType = java.lang.Integer.TYPE
+        declared(svc, "grantItemPermission", ClipData.Item::class.java, intType, String::class.java, intType)
+            ?.let { m ->
+                return UriGranter("grantItemPermission") { s, item, uid, user -> call(m, s, item, uid, PKG, user) }
+            }
+        declared(svc, "grantUriPermission", Uri::class.java, intType, String::class.java, intType)
+            ?.let { m ->
+                return UriGranter("grantUriPermission") { s, item, uid, user ->
+                    eachContentUri(item) { uri -> call(m, s, uri, uid, PKG, user) }
+                }
+            }
+        return ownerGranter(svc)
+    }
+
+    /**
+     * The third way of [uriGranter]. The grants service is looked up on first use rather than here,
+     * because the hooks are installed before system_server has registered it.
+     */
+    private fun ownerGranter(svc: Class<*>): UriGranter? {
         return try {
-            svc.getDeclaredMethod(
-                "grantItemPermission", ClipData.Item::class.java, java.lang.Integer.TYPE, String::class.java,
-                java.lang.Integer.TYPE,
-            ).apply { isAccessible = true }
+            val ownerField = svc.getDeclaredField("mPermissionOwner").apply { isAccessible = true }
+            val getService = Class.forName("android.app.UriGrantsManager").getDeclaredMethod("getService")
+                .apply { isAccessible = true }
+            val grant = Class.forName("android.app.IUriGrantsManager").getMethod(
+                "grantUriPermissionFromOwner", IBinder::class.java, java.lang.Integer.TYPE, String::class.java,
+                Uri::class.java, java.lang.Integer.TYPE, java.lang.Integer.TYPE, java.lang.Integer.TYPE,
+            )
+            UriGranter("IUriGrantsManager") { s, item, uid, user ->
+                val owner = ownerField.get(s) as? IBinder
+                val ugm = getService.invoke(null)
+                if (owner == null || ugm == null) throw IllegalStateException("permission owner or grants service missing")
+                eachContentUri(item) { uri ->
+                    // The helpers clear the identity too. The binder thread still carries the copying
+                    // app's, and the grants service would otherwise judge the call by it.
+                    val ident = Binder.clearCallingIdentity()
+                    try {
+                        call(
+                            grant, ugm, owner, uid, PKG, uriWithoutUser(uri), Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                            userOfUri(uri, uid / PER_USER_RANGE), user,
+                        )
+                    } finally {
+                        Binder.restoreCallingIdentity(ident)
+                    }
+                }
+            }
         } catch (t: Throwable) {
             null
         }
+    }
+
+    /** A declared method made accessible, or null when the class has no such method. */
+    private fun declared(c: Class<*>, name: String, vararg params: Class<*>): Method? {
+        return try {
+            c.getDeclaredMethod(name, *params).apply { isAccessible = true }
+        } catch (t: Throwable) {
+            null
+        }
+    }
+
+    /** Invoke, rethrowing what the method itself threw rather than the reflection wrapper around it. */
+    private fun call(m: Method, target: Any?, vararg args: Any?): Any? {
+        try {
+            return m.invoke(target, *args)
+        } catch (e: InvocationTargetException) {
+            throw e.cause ?: e
+        }
+    }
+
+    /**
+     * Run [grant] for the item's URI and its intent's data, the two places a clip item carries one,
+     * skipping anything but content:// as ClipboardService does. One URI the copying app cannot grant
+     * still leaves the other readable.
+     */
+    private fun eachContentUri(item: ClipData.Item, grant: (Uri) -> Unit) {
+        for (uri in arrayOf(item.uri, item.intent?.data)) {
+            if (uri == null || ContentResolver.SCHEME_CONTENT != uri.scheme) continue
+            try {
+                grant(uri)
+            } catch (t: Throwable) {
+                Log.w(TAG, "uri grant refused for $uri: $t")
+            }
+        }
+    }
+
+    /** A user id outside every real range, so a malformed authority makes the grant fail. */
+    private const val USER_NULL = -10_000
+
+    /**
+     * The user a content URI points into: the number before '@' in its authority, or [default] when
+     * there is none. Written out rather than reached through ContentProvider's hidden helpers so that
+     * this way depends on one less framework internal.
+     */
+    private fun userOfUri(uri: Uri, default: Int): Int {
+        val auth = uri.authority ?: return default
+        val at = auth.lastIndexOf('@')
+        if (at < 0) return default
+        return auth.substring(0, at).toIntOrNull() ?: USER_NULL
+    }
+
+    /** The URI with the user prefix removed from its authority, as the grants service expects it. */
+    private fun uriWithoutUser(uri: Uri): Uri {
+        val auth = uri.authority ?: return uri
+        val at = auth.lastIndexOf('@')
+        return if (at < 0) uri else uri.buildUpon().authority(auth.substring(at + 1)).build()
     }
 
     /**
@@ -416,9 +542,9 @@ internal object Common {
      * @param clipAt [clipArg]'s answer for the hooked method
      * @param sourceAt [sourceArg]'s answer, or -1 when the overload carries no source package
      * @param uidAt [uidArg]'s answer, or -1
-     * @param granter [itemGranter]'s answer, or null
+     * @param granter [uriGranter]'s answer, or null
      */
-    fun onClipSet(svc: Any?, args: Array<Any?>, clipAt: Int, sourceAt: Int, uidAt: Int, granter: Method?) {
+    fun onClipSet(svc: Any?, args: Array<Any?>, clipAt: Int, sourceAt: Int, uidAt: Int, granter: UriGranter?) {
         try {
             val clip = args.getOrNull(clipAt) as? ClipData ?: return
             if (PKG == args.getOrNull(sourceAt)) return
@@ -434,17 +560,19 @@ internal object Common {
      *
      * The grantor has to be the copying app: a grant from the system uid is refused outright, which
      * leaves a pushed image unreadable. Per item, so one URI the source cannot grant (a
-     * SecurityException) still leaves the others readable. Never clears the clip on failure, unlike
+     * SecurityException) still leaves the others readable. A failure is logged, because a silent one
+     * looks exactly like a missing grant path. Never clears the clip on failure, unlike
      * `getPrimaryClip()`, because that is the copying app's clipboard, not ours.
      */
-    private fun grantReads(svc: Any, granter: Method, clip: ClipData, uid: Int) {
+    private fun grantReads(svc: Any, granter: UriGranter, clip: ClipData, uid: Int) {
         val user = uid / PER_USER_RANGE
         for (i in 0 until clip.itemCount) {
             val item = clip.getItemAt(i) ?: continue
             if (item.uri == null && item.intent?.data == null) continue
             try {
-                granter.invoke(svc, item, uid, PKG, user)
-            } catch (ignored: Throwable) {
+                granter.grant(svc, item, uid, user)
+            } catch (t: Throwable) {
+                Log.w(TAG, "uri grant via ${granter.path} failed: $t")
             }
         }
     }
