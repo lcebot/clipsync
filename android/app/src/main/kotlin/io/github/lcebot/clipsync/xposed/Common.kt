@@ -440,21 +440,23 @@ internal object Common {
     }
 
     /**
-     * The third way of [uriGranter]. The grants service is looked up on first use rather than here,
-     * because the hooks are installed before system_server has registered it.
+     * The third way of [uriGranter], built on the two fields both helpers use: `mUgm`, the service's
+     * own IUriGrantsManager, and `mPermissionOwner`. Taking the grants service from the field rather
+     * than from `UriGrantsManager.getService()` reuses the exact instance the helpers call, and keeps
+     * clear of a static framework method that lint blocks for apps targeting API 35 and above, even
+     * though this code runs in system_server where that restriction does not apply.
      */
     private fun ownerGranter(svc: Class<*>): UriGranter? {
         return try {
             val ownerField = svc.getDeclaredField("mPermissionOwner").apply { isAccessible = true }
-            val getService = Class.forName("android.app.UriGrantsManager").getDeclaredMethod("getService")
-                .apply { isAccessible = true }
+            val ugmField = svc.getDeclaredField("mUgm").apply { isAccessible = true }
             val grant = Class.forName("android.app.IUriGrantsManager").getMethod(
                 "grantUriPermissionFromOwner", IBinder::class.java, java.lang.Integer.TYPE, String::class.java,
                 Uri::class.java, java.lang.Integer.TYPE, java.lang.Integer.TYPE, java.lang.Integer.TYPE,
             )
             UriGranter("IUriGrantsManager") { s, item, uid, user ->
                 val owner = ownerField.get(s) as? IBinder
-                val ugm = getService.invoke(null)
+                val ugm = ugmField.get(s)
                 if (owner == null || ugm == null) throw IllegalStateException("permission owner or grants service missing")
                 eachContentUri(item) { uri ->
                     // The helpers clear the identity too. The binder thread still carries the copying
